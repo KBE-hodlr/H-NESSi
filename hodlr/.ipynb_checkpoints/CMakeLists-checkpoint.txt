@@ -1,0 +1,35 @@
+include_directories(
+  SYSTEM
+  )
+
+add_library(hodlr SHARED
+  herm_matrix_hodlr.cpp
+  herm_matrix_h.cpp
+  utils.cpp
+  block.cpp
+  blocks_keldysh.cpp
+  dyson.cpp
+  mol_gf2.cpp
+  hubb_gf2.cpp
+  hubb_gf2_ext.cpp
+  hubb_gf2_2leg.cpp
+  SC_gf2.cpp
+  integration.cpp
+  distributed_array.cpp
+  distributed_single_timeslice.cpp
+  distributed_single_timeslice_FT.cpp
+  nband_nsite_SRSU_gf2.cpp
+  nband_nsite_Hubbard_gf2.cpp
+  )
+
+#target_link_libraries(hodlr cntr cpsitop HighFive ${COMMON_LIBS})
+#target_link_libraries(hodlr cntr cntr_hdf5 HighFive dlr_c ${COMMON_LIBS})
+target_link_libraries(hodlr cntr cntr_hdf5 HighFive ${HDF5_LIBRARIES} dlr_c ${COMMON_LIBS} fftw3)
+
+file(GLOB hodlr_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/*.hpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
+set_target_properties(hodlr PROPERTIES PUBLIC_HEADER "${hodlr_HEADERS}")
+
+install(TARGETS hodlr LIBRARY DESTINATION lib PUBLIC_HEADER DESTINATION include/hodlr )
+
+

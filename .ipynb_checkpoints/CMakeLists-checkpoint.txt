@@ -1,0 +1,87 @@
+cmake_minimum_required(VERSION 3.13)
+project("hodlr")
+
+set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
+set(COMMON_LIBS "")
+
+
+# ~~ Add Eigen ~~
+find_package(Eigen3 REQUIRED)
+include_directories(${EIGEN3_INCLUDE_DIR})
+#include_directories(SYSTEM "/global/homes/t/tblommel/Libraries/eigen-3.4.0/")
+add_compile_definitions(EIGEN_DONT_PARALLELIZE)
+#message(${EIGEN3_INCLUDE_DIR})
+
+#find_package(FFTW REQUIRED)
+
+# ~~ Paths and Subdirs ~~
+include_directories(${CMAKE_INCLUDE_PATH})
+include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+include_directories(${INCLUDE_DIR})
+#include_directories(${FFTW_INC})
+include_directories(${LIBDLR_HEADER})
+
+# ~~ Libraries ~~
+#link_directories(${FFTW_DIR})
+link_directories(${CMAKE_LIBRARY_PATH})
+link_directories(${LINK_DIR})
+link_directories(${LIBDLR_LIB})
+
+option(BUILD_TEST "Build test suite" ON)
+if(BUILD_TEST)
+    add_subdirectory(tests)
+endif(BUILD_TEST)
+
+# ~~ Add HDF5 ~~
+if (hdf5)
+  #find_library(HDF5_LIB hdf5)
+  find_package(HDF5 REQUIRED)
+#  set(HDF5_LIB ${LIBS} ${HDF5_LIBRARIES})
+#  include_directories(${HDF5_INCLUDE_DIR})
+#  link_directories(${HDF5_LIBRARIES})
+  add_definitions("-DCNTR_USE_HDF5")
+  message(STATUS "HDF5 dir: ${HDF5_INCLUDE_DIR}")
+  message(STATUS "HDF5 lib: ${HDF5_LIBRARIES}")
+  message(STATUS "HDF5 lib: ${LIBS}")
+  #fetch HighFive from GitHub
+  include(CPM)
+  CPMAddPackage(
+    NAME HighFive
+    GITHUB_REPOSITORY BlueBrain/HighFive
+    GIT_TAG master
+    OPTIONS
+    "HIGHFIVE_USE_BOOST OFF"
+    "HIGHFIVE_USE_EIGEN ON"
+    "HIGHFIVE_UNIT_TESTS OFF"
+    "HIGHFIVE_EXAMPLES OFF"
+  )
+endif (hdf5)
+
+# ~~ OpenMP and MPI flags ~~
+option(omp "Build with OpenMP support" ON)
+if (omp)
+    message(STATUS "Building with OpenMP")
+    find_package(OpenMP REQUIRED)
+    add_definitions("-DCNTR_USE_OMP")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
+endif ()
+
+option(mpi "Build with OpenMPI support" OFF)
+if (mpi)
+    message(STATUS "Building with OpenMPI")
+    find_package(MPI REQUIRED)
+    add_definitions("-DCNTR_USE_MPI")
+    set(CMAKE_C_COMPILE_FLAGS "${CMAKE_C_COMPILE_FLAGS} ${MPI_COMPILE_FLAGS}")
+    set(CMAKE_CXX_COMPILE_FLAGS
+        "${CMAKE_CXX_COMPILE_FLAGS} ${MPI_COMPILE_FLAGS}")
+    set(CMAKE_C_LINK_FLAGS "${CMAKE_C_LINK_FLAGS} ${MPI_LINK_FLAGS}")
+    set(CMAKE_CXX_LINK_FLAGS
+        "${CMAKE_CXX_LINK_FLAGS} ${MPI_LINK_FLAGS}")
+    include_directories(${MPI_INCLUDE_PATH})
+    list(APPEND COMMON_LIBS ${MPI_LIBRARIES})
+endif ()
+
+
+add_subdirectory(hodlr)
+add_subdirectory(programs)
