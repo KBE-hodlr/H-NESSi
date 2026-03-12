@@ -4,7 +4,7 @@ agree on name \
 propagate name through code (namespaces and filenames) \
 propagate name through documentation \
 agree on license (currently set to MIT) \
-citation.cff
+citation.cff \
 polish README \
 put link to paper in the README \
 
