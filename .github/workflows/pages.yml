@@ -24,7 +24,7 @@ jobs:
 
       - name: Build Doxygen
         # Note: If your Doxyfile is inside the docs/ folder, change this to: doxygen docs/Doxyfile
-        run: doxygen Doxyfile 
+        run: doxygen docs/Doxyfile 
 
       - name: Setup GitHub Pages
         uses: actions/configure-pages@v4
