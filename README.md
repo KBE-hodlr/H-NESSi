@@ -1,18 +1,18 @@
 # TODO:
-finalize paper
-agree on name
-propagate name through code (namespaces and filenames)
-propagate name through documentation
-agree on license (currently set to MIT)
-Zenodo
+finalize paper \
+agree on name \
+propagate name through code (namespaces and filenames) \
+propagate name through documentation \
+agree on license (currently set to MIT) \
 citation.cff
-polish README
-put link to paper in the README
+polish README \
+put link to paper in the README \
 
 
 
 # HODLR [hierarchical off-diagonal low-rank structure] implementation for the Greens function
 [![DOI](https://zenodo.org/badge/1180109148.svg)](https://doi.org/10.5281/zenodo.18990387)
+
 The set of classes implementing the basic hodlr extension 
 of the nessi library with example programs and test.
 
