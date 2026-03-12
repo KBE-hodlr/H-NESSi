@@ -22,9 +22,9 @@ jobs:
       - name: Install Doxygen
         run: sudo apt-get update && sudo apt-get install -y doxygen
 
-      - name: Build Doxygen
-        # Note: If your Doxyfile is inside the docs/ folder, change this to: doxygen docs/Doxyfile
-        run: doxygen docs/Doxyfile 
+      - name: Build Doxygen        
+        working-directory: ./docs
+        run: doxygen Doxyfile
 
       - name: Setup GitHub Pages
         uses: actions/configure-pages@v4
