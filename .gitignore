@@ -7,6 +7,8 @@ cmake.sh
 *.eps
 *.out
 build.sh
+docs/html/
+docs/latex/
 
 inputs/
 PauliSubs/
