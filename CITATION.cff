@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+- family-names: "Blommel"
+  given-names: "Thomas"
+  orcid: "https://orcid.org/0009-0008-7101-3534"
+- family-names: "Kovačević"
+  given-names: "Jeremija"
+  orcid: "https://orcid.org/0009-0000-7670-1370"
+- family-names: "Kaye"
+  given-names: "Jason"
+  orcid: "https://orcid.org/0000-0001-8045-6179"
+- family-names: "Gull"
+  given-names: "Emanuel"
+  orcid: "https://orcid.org/0000-0002-6082-1260"
+- family-names: "Vučičević"
+  given-names: "Jakša"
+  orcid: "https://orcid.org/0000-0002-7325-6280"
+- family-names: "Golež"
+  given-names: "Denis"
+  orcid: "https://orcid.org/0000-0002-6054-2552"
+title: "trident"
+version: 1.0.0
+doi: 10.5281/zenodo.18990387
+date-released: 2026-03-12
+url: "https://github.com/KBE-hodlr/trident"
