@@ -8,7 +8,7 @@ citation.cff - change trident to h-nessi\
 polish README \
 put link to paper in the README \
 REDO Zenodo for new name \
-Polish documentation
+Polish documentation, change "my project"
 
 
 
