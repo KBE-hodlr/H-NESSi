@@ -1,12 +1,14 @@
 # TODO:
 finalize paper \
-agree on name \
-propagate name through code (namespaces and filenames) \
-propagate name through documentation \
-agree on license (currently set to MIT) \
-citation.cff \
+agree on name - H-nessi\
+propagate name through code (namespaces and filenames) - okay with hodlr namespace\
+propagate name through documentation - okay with hodlr namespace\
+agree on license (currently set to MIT) - MIT okay\
+citation.cff - change trident to h-nessi\
 polish README \
 put link to paper in the README \
+REDO Zenodo for new name \
+Polish documentation
 
 
 
