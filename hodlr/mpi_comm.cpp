@@ -73,7 +73,7 @@ mpi_comm::mpi_comm
   my_Nk = Nk_per_rank[mpi_rank];
   my_global_k_list = std::vector<int>(my_Nk);
   for(int k = 0; k < my_Nk; k++) {
-    my_global_k_list = init_k_per_rank[mpi_rank] + k;
+    my_global_k_list[k] = init_k_per_rank[mpi_rank] + k;
   }
 
   int max_Ntp = 0;

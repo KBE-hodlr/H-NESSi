@@ -1,10 +1,8 @@
 set (mpi_EXECUTABLES
    Main.x
-   test_Main.x
 )
 
-set( EXE_Main.x_SOURCES Main.cpp lattice.cpp kpoint.cpp selfene.cpp observables.cpp )
-set( EXE_test_Main.x_SOURCES test_Main.cpp lattice.cpp kpoint.cpp selfene.cpp observables.cpp )
+set( EXE_Main.x_SOURCES Main.cpp lattice.cpp kpoint.cpp observables.cpp Hubb_2B.cpp)
 
 
 # ~~ Paths and Subdirs ~~

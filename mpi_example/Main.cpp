@@ -4,7 +4,7 @@
 #include "hodlr/mpi_comm_utils.hpp"
 #include "lattice.hpp"
 #include "kpoint.hpp"
-#include "selfene.hpp"
+#include "Hubb_2B.hpp"
 #include "observables.hpp"
 
 #include "hodlr/read_inputfile.hpp"
@@ -176,7 +176,7 @@ int main(int argc, char *argv[]) {
   if(mpi_rank==mpi_root) std::cout << "Total number of k-points Nk = " << Nk << "\n";
 
   // self-energy evaluator
-  born_approx_se se_eval(U,L,Nk,size,nthreads);
+  Hubb_2B se_eval(U,L,nthreads);
 
   // observables
   std::vector<double> density_k(Nk), jxt_local(Nt), jyt_local(Nt), Ekint_local(Nt), Navgt_local(Nt);
@@ -357,11 +357,11 @@ int main(int argc, char *argv[]) {
       double err=0.0;
       double tot_err = 0.0;
 
-      // Evaluate Self-Energy
+      // Evaluate self-energy
       if(iter!=0){
-        se_eval.Sigma_spawn(-1, comm, getsMat, getstv, getsLG, setsMat, setstv, setsLR);
+        se_eval.Sigma_spawn(-1, comm, Grefs, Srefs, dlr);
       }
-      
+
       // Solve Dyson
       for(int k=0; k<Nk_rank; k++){
         errk[k] = corrK_rank[k]->step_dyson(-1, SolverOrder, lattice, I, dyson_sol, dlr);
@@ -401,34 +401,34 @@ int main(int argc, char *argv[]) {
       
       double err=0.0;
       double tot_err = 0.0;
-      for (int tstp = 0;tstp <= SolverOrder;tstp ++){
 
-        if(mpi_rank==mpi_root) std::cout << "---- Time step ti = " << tstp << "\n";
+      if(mpi_rank==mpi_root) std::cout << "---- Time step ti = " << tstp << "\n";
 
-        // Evaluate Self-Energy
-        if(iter != 0){
-          se_eval.Sigma_spawn(tstp, comm, getsMat, getstv, getsLG, setsMat, setstv, setsLR);
+      // Evaluate self-energy
+      if(iter!=0){
+        for(int tstp = 0; tstp <= SolverOrder; tstp ++){
+          se_eval.Sigma_spawn(tstp, comm, Grefs, Srefs, dlr);
         }
+      }
 
-        // Solve Dyson
-        for(int k=0;k<Nk_rank;k++){
-          errk[k] = corrK_rank[k]->step_dyson(tstp, SolverOrder, lattice, I, dyson_sol, dlr);
-        }
-          
-        // Error estimation
-        err = std::reduce(errk.begin(),errk.end());
+      // Solve Dyson
+      for(int k=0;k<Nk_rank;k++){
+        errk[k] = corrK_rank[k]->step_dyson(SolverOrder, SolverOrder, lattice, I, dyson_sol, dlr);
+      }
+        
+      // Error estimation
+      err = std::reduce(errk.begin(),errk.end());
 
-        // observables calculation
+      // observables calculation
+      for(int tstp = 0; tstp <= SolverOrder; tstp++){
         std::array<double, 4> obs = observables::get_obs_local(tstp, Nk_rank, lattice, comm.kindex_rank, corrK_rank);
-  
         jxt_local[tstp]=obs[0]/Amax;
         jyt_local[tstp]=obs[1]/Amax;
         Ekint_local[tstp]=obs[2];
         Navgt_local[tstp]=obs[3];
 
         jxt_iter_local[iter][tstp]=obs[0]/Amax;
-
-      } // Bootstrap time loop
+      }
 
       MPI_Allreduce(&err, &tot_err, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);  
 
@@ -445,9 +445,10 @@ int main(int argc, char *argv[]) {
     }
 
   } //checkpoint if
-    // ============================================================================
-    //             TIME PROPAGATION
-    // ============================================================================
+
+  // ============================================================================
+  //             TIME PROPAGATION
+  // ============================================================================
 
   if(mpi_rank==mpi_root){std::cout << "----- TIME PROPAGATION PHASE \n";}
 
@@ -472,12 +473,11 @@ int main(int argc, char *argv[]) {
   int tot_mem_stop_mess = 0; // global memory limit reached
   int err_mess_tstp = 0; // convergance reached at time step
 
-  #pragma omp parallel shared(comm, se_eval, time_stop_mess, tot_mem_stop_mess, mem_stop_mess, err_mess_tstp)
-  { 
-
+#pragma omp parallel shared(comm, se_eval, time_stop_mess, tot_mem_stop_mess, mem_stop_mess, err_mess_tstp)
+  {
     int thread_id = omp_get_thread_num();
 
-    std::array<int,3> th_Nks_mpi_indxs = get_my_index(thread_id,nthreads,Nk_rank,0);      
+    std::array<int,3> th_Nks_mpi_indxs = get_my_index(thread_id,nthreads,Nk_rank,0);
     int th_my_init_k = th_Nks_mpi_indxs[0];
     int th_my_end_k = th_Nks_mpi_indxs[1];
     int th_my_Nk = th_Nks_mpi_indxs[2];
@@ -490,7 +490,7 @@ int main(int argc, char *argv[]) {
 
       //reset error message for time step
       err_mess_tstp = 0;
-      if(mpi_rank==mpi_root && thread_id==0) std::cout << "---- Time step ti = " << tstp << "\n";
+      if(mpi_rank==mpi_root && thread_id==0) std::cout << "---- Time step ti = " << tstp << std::endl;
 
       //update blocks of G and Sigma
       double start_upBlocks = MPI_Wtime();
@@ -502,7 +502,7 @@ int main(int argc, char *argv[]) {
       }
       double end_upBlocks = MPI_Wtime();
       if(thread_id==0) timing_upBlocks[tstp] = end_upBlocks-start_upBlocks;
-      
+
       #pragma omp barrier
 
       //Extrapolation
@@ -517,8 +517,8 @@ int main(int argc, char *argv[]) {
 
       #pragma omp barrier
 
-      for(int iter=0;iter<=StepMaxIter;iter++){
-        
+      for(int iter=0; iter<=StepMaxIter; iter++){
+
         //check convergance from previous iteration
         if(err_mess_tstp == 1) continue;
 
@@ -526,18 +526,20 @@ int main(int argc, char *argv[]) {
         double err=0.0;
         double tot_err = 0.0;
 
-        double start_Sigma_tstp, end_Sigma_tstp; 
+        double start_Sigma_tstp, end_Sigma_tstp;
 
         // Evaluate Self-Energy
         start_Sigma_tstp = MPI_Wtime();
-        se_eval.Sigma_nospawn(tstp, comm, getsMat, getstv, getsLG, setsMat, setstv, setsLR);
-        #pragma omp barrier
-        end_Sigma_tstp = MPI_Wtime();
 
-        timing_SE[tstp] = end_Sigma_tstp-start_Sigma_tstp;
-        #pragma omp barrier
+        // Evaluate new version of self-energy
+        se_eval.Sigma_nospawn(tstp, comm, Grefs, Srefs, dlr);
 
-        if(thread_id==0 && mpi_rank==mpi_root) std::cout << "Sigma took " << end_Sigma_tstp - start_Sigma_tstp << " seconds\n";
+        if (thread_id == 0) {
+            end_Sigma_tstp = MPI_Wtime();
+            timing_SE[tstp] = end_Sigma_tstp-start_Sigma_tstp;
+        }
+
+        if(thread_id==0 && mpi_rank==mpi_root) std::cout << "Sigma took " << end_Sigma_tstp - start_Sigma_tstp << " seconds" << std::endl;
 
         #pragma omp barrier
 
@@ -552,18 +554,16 @@ int main(int argc, char *argv[]) {
           timing_dyson[tstp] = end_dyson_tstp-start_dyson_tstp;
         }
 
-        #pragma omp barrier
-
         if(thread_id==0){
-          if(mpi_rank==mpi_root) std::cout << "Dyson took " << end_dyson_tstp - start_dyson_tstp << " seconds\n";
-        } 
+          if(mpi_rank==mpi_root) std::cout << "Dyson took " << end_dyson_tstp - start_dyson_tstp << " seconds" << std::endl;
+        }
 
         #pragma omp barrier
 
         // Error estimation and observables calculation
         if(thread_id==0){
-          err = std::reduce(errk.begin(),errk.end()); 
-          MPI_Allreduce(&err, &tot_err, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);  
+          err = std::reduce(errk.begin(),errk.end());
+          MPI_Allreduce(&err, &tot_err, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
 
           std::array<double,4> obs = observables::get_obs_local(tstp,Nk_rank,lattice,comm.kindex_rank,corrK_rank);
           jxt_local[tstp]=obs[0]/Amax;
@@ -571,8 +571,8 @@ int main(int argc, char *argv[]) {
           Ekint_local[tstp]=obs[2];
           Navgt_local[tstp]=obs[3];
           jxt_iter_local[iter][tstp]=obs[0]/Amax;
-          
-          if(mpi_rank==mpi_root) std::cout << "------ Time Stepping Iteration: "  << iter << ", tot err: " << tot_err << "\n";
+
+          if(mpi_rank==mpi_root) std::cout << "------ Time Stepping Iteration: "  << iter << ", tot err: " << tot_err << std::endl;
 
           if((tot_err <= StepMaxErr) && (iter!=0)){
             err_mess_tstp = 1;
@@ -596,14 +596,25 @@ int main(int argc, char *argv[]) {
           mem_stop_mess = 1;
         }
 
-        MPI_Allreduce(&mem_stop_mess, &tot_mem_stop_mess, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);  
+        MPI_Allreduce(&mem_stop_mess, &tot_mem_stop_mess, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
         if(time_stop_mess==1 || tot_mem_stop_mess>=1){
 
-          // write top output for each rank for memory usage monitoring
-          if(!std::filesystem::exists(output_dir + "tops")){
-            std::filesystem::create_directories(output_dir + "tops");
-            std::cout << "Created " << output_dir << "tops/ directory\n";
+          // 1. SAFELY CREATE DIRECTORIES (tops, output, checkpoint)
+          if(mpi_rank == mpi_root) {
+              if(!std::filesystem::exists(output_dir + "tops")){
+                std::filesystem::create_directories(output_dir + "tops");
+              }
+              if(!std::filesystem::exists(checkpoint_dir)){
+                std::filesystem::create_directories(checkpoint_dir);
+              }
+              if(!std::filesystem::exists(output_dir)){
+                std::filesystem::create_directories(output_dir);
+              }
           }
+          // Ensure directories are created before other ranks proceed
+          MPI_Barrier(MPI_COMM_WORLD); 
+
+          // 2. WRITE TOP OUTPUT
           std::ostringstream filename;
           filename << output_dir << "tops/checkpoint_top_rank" << mpi_rank << ".txt";
           std::ofstream file(filename.str());
@@ -619,16 +630,20 @@ int main(int argc, char *argv[]) {
             if(time_stop_mess) std::cout << "REACHED THE TIME LIMIT\n";
           }
 
-          if(mem_stop_mess && (mem.available<mem_limit)) std::cout << "REACHED THE MEMORY LIMIT AT MPI RANK " << mpi_rank <<  " WITH AVAILABLE MEMORY = " << mem.available << "\n";
-
-          for(int k = 0; k < Nk_rank; k++) {
-            {
-              h5e::File checkpoint_file(checkpoint_dir + "GSigma" + std::to_string(comm.kindex_rank[k]) + ".h5", h5e::File::Overwrite | h5e::File::ReadWrite | h5e::File::Create);
-              corrK_rank[k]->G_.write_checkpoint_hdf5(checkpoint_file, "G/");
-              corrK_rank[k]->Sigma_.write_checkpoint_hdf5(checkpoint_file, "S/");
-            }
+          if(mem_stop_mess && (mem.available<mem_limit)) {
+              std::cout << "REACHED THE MEMORY LIMIT AT MPI RANK " << mpi_rank 
+                        <<  " WITH AVAILABLE MEMORY = " << mem.available << "\n";
           }
 
+          // 3. WRITE G AND SIGMA CHECKPOINTS
+          for(int k = 0; k < Nk_rank; k++) {
+              h5e::File checkpoint_file(checkpoint_dir + "GSigma" + std::to_string(comm.kindex_rank[k]) + ".h5", 
+                                        h5e::File::Overwrite | h5e::File::ReadWrite | h5e::File::Create);
+              corrK_rank[k]->G_.write_checkpoint_hdf5(checkpoint_file, "G/");
+              corrK_rank[k]->Sigma_.write_checkpoint_hdf5(checkpoint_file, "S/");
+          }
+
+          // 4. REDUCE OBSERVABLES
           MPI_Reduce(jxt_local.data(), jxt_total.data(), jxt_total.size(), MPI_DOUBLE, MPI_SUM, mpi_root, MPI_COMM_WORLD);
           MPI_Reduce(jyt_local.data(), jyt_total.data(), jyt_total.size(), MPI_DOUBLE, MPI_SUM, mpi_root, MPI_COMM_WORLD);
           MPI_Reduce(Ekint_local.data(), Ekint_total.data(), Ekint_total.size(), MPI_DOUBLE, MPI_SUM, mpi_root, MPI_COMM_WORLD);
@@ -638,24 +653,28 @@ int main(int argc, char *argv[]) {
             MPI_Reduce(jxt_iter_local[iter].data(), jxt_iter_total[iter].data(), jxt_iter_total[iter].size(), MPI_DOUBLE, MPI_SUM, mpi_root, MPI_COMM_WORLD);
           }
 
+          // 5. ROOT PROCESS HANDLES THE MASTER OBSERVABLES FILE
           if(mpi_rank==mpi_root){
             if(checkpoint_exists){
-              //update observables from previous checkpoint
-              h5e::File jcheckpoint_file(output_dir + "obs_checkpoint.h5", h5e::File::ReadOnly);
-              std::vector<double> jxtcheckpoint = jcheckpoint_file.getDataSet("jxtnorm").read<std::vector<double>>();
-              std::vector<double> jytcheckpoint = jcheckpoint_file.getDataSet("jytnorm").read<std::vector<double>>();
-              std::vector<double> Ekintcheckpoint = jcheckpoint_file.getDataSet("Ekint").read<std::vector<double>>();
-              std::vector<double> Navgtcheckpoint = jcheckpoint_file.getDataSet("Navgt").read<std::vector<double>>();
+              // Read and update observables from previous checkpoint
+              // The brackets ensure jcheckpoint_file closes before out_file opens
+              {
+                  h5e::File jcheckpoint_file(output_dir + "obs_checkpoint.h5", h5e::File::ReadOnly);
+                  std::vector<double> jxtcheckpoint = jcheckpoint_file.getDataSet("jxtnorm").read<std::vector<double>>();
+                  std::vector<double> jytcheckpoint = jcheckpoint_file.getDataSet("jytnorm").read<std::vector<double>>();
+                  std::vector<double> Ekintcheckpoint = jcheckpoint_file.getDataSet("Ekint").read<std::vector<double>>();
+                  std::vector<double> Navgtcheckpoint = jcheckpoint_file.getDataSet("Navgt").read<std::vector<double>>();
 
-              for(int ti=0; ti<t0; ti++){
-                jxt_total[ti] = jxtcheckpoint[ti];
-                jyt_total[ti] = jytcheckpoint[ti];
-                Ekint_total[ti] = Ekintcheckpoint[ti];
-                Navgt_total[ti] = Navgtcheckpoint[ti];
+                  for(int ti=0; ti<t0; ti++){
+                    jxt_total[ti] = jxtcheckpoint[ti];
+                    jyt_total[ti] = jytcheckpoint[ti];
+                    Ekint_total[ti] = Ekintcheckpoint[ti];
+                    Navgt_total[ti] = Navgtcheckpoint[ti];
+                  }
               }
             }
 
-            //write new checkpoint observables
+            // Write new checkpoint observables
             h5e::File out_file(output_dir + "obs_checkpoint.h5", h5e::File::Overwrite | h5e::File::ReadWrite | h5e::File::Create);
             h5e::dump<std::vector<double>>(out_file, "jxtnorm", jxt_total);
             h5e::dump<std::vector<double>>(out_file, "jytnorm", jyt_total);
@@ -663,12 +682,11 @@ int main(int argc, char *argv[]) {
             h5e::dump<std::vector<double>>(out_file, "Navgt", Navgt_total);
             h5e::dump<std::vector<std::vector<double>>>(out_file, "jxt_iter", jxt_iter_total);
           }
-        }// checkpoint 
+        }// checkpoint
       }// thread_id==0
       #pragma omp barrier
     } // time propagation loop  
   }//omp
-
   // gather observables from all ranks
   MPI_Reduce(jxt_local.data(), jxt_total.data(), jxt_total.size(), MPI_DOUBLE, MPI_SUM, mpi_root, MPI_COMM_WORLD);
   MPI_Reduce(jyt_local.data(), jyt_total.data(), jyt_total.size(), MPI_DOUBLE, MPI_SUM, mpi_root, MPI_COMM_WORLD);
