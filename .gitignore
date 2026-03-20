@@ -9,6 +9,7 @@ cmake.sh
 build.sh
 docs/html/
 docs/latex/
+.ipynb_checkpoints/
 
 inputs/
 PauliSubs/
