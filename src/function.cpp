@@ -1,7 +1,7 @@
 #include "h_nessi/function.hpp"
 #include <algorithm>
 
-using namespace hodlr;
+using namespace h_nessi;
 
 function::function() {
   data_.resize(1);

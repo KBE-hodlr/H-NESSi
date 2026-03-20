@@ -1,7 +1,7 @@
 #include "h_nessi/mpi_comm.hpp"
 #include "h_nessi/utils.hpp"
 
-namespace hodlr {
+namespace h_nessi {
 
 mpi_comm::mpi_comm(){};
 

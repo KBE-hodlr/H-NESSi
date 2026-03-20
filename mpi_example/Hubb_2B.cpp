@@ -43,9 +43,9 @@ Hubb_2B::~Hubb_2B() {
 // Orchestrator
 void Hubb_2B::Sigma_spawn(int tstp, 
                           mpi_comm &comm, 
-                          std::vector<std::reference_wrapper<hodlr::herm_matrix_hodlr>> &Grefs, 
-                          std::vector<std::reference_wrapper<hodlr::herm_matrix_hodlr>> &Srefs, 
-                          hodlr::dlr_info &dlr) 
+                          std::vector<std::reference_wrapper<h_nessi::herm_matrix_hodlr>> &Grefs, 
+                          std::vector<std::reference_wrapper<h_nessi::herm_matrix_hodlr>> &Srefs, 
+                          h_nessi::dlr_info &dlr) 
 {
     // 1. Fetch remote G data into comm buffers
     comm.mpi_get_and_comm_spawn(tstp, Grefs, dlr);
@@ -332,9 +332,9 @@ void Hubb_2B::Sigma_Real_tv_spawn(int tstp, mpi_comm &comm) {
 // Orchestrator
 void Hubb_2B::Sigma_nospawn(int tstp, 
                           mpi_comm &comm, 
-                          std::vector<std::reference_wrapper<hodlr::herm_matrix_hodlr>> &Grefs, 
-                          std::vector<std::reference_wrapper<hodlr::herm_matrix_hodlr>> &Srefs, 
-                          hodlr::dlr_info &dlr) 
+                          std::vector<std::reference_wrapper<h_nessi::herm_matrix_hodlr>> &Grefs, 
+                          std::vector<std::reference_wrapper<h_nessi::herm_matrix_hodlr>> &Srefs, 
+                          h_nessi::dlr_info &dlr) 
 {
 
     #pragma omp barrier

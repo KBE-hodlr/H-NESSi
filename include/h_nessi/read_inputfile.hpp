@@ -19,6 +19,8 @@
 
 #include "utils.hpp"
 
+using namespace h_nessi;
+
 /////////////////////////////////////////////////////////////////////////////////////////////
 // ROUTINES FOR INTERPRETING THE INPUT FILE (LIKE F0R LAYER)
 // ... interpreting input file: 
@@ -223,7 +225,7 @@ void read_param(std::vector<char*> &words,int m,bool &data){
 	}
 }
 
-void read_param(std::vector<char*> &words,int m,hodlr::cplx &data){
+void read_param(std::vector<char*> &words,int m,cplx &data){
   double real, imag;
       try{
 		if((int)words.size()<m+2) throw("read_param: too few words in line");			
@@ -235,15 +237,15 @@ void read_param(std::vector<char*> &words,int m,hodlr::cplx &data){
 			throw("read_param_tvector: cannot interpret arg");
 	}
 	catch(...){
-		std::cerr << "error in read_param(hodlr::cplx) " << std::endl;
+		std::cerr << "error in read_param(cplx) " << std::endl;
 		throw;
 	}
       data.real(real);
       data.imag(imag);
 }
-void read_param(std::vector<char*> &words,int m,hodlr::DColVector &data,int dim){
+void read_param(std::vector<char*> &words,int m,DColVector &data,int dim){
 	try{
-	    data=hodlr::DColVector(dim);
+	    data=DColVector(dim);
 		if((int)words.size()<m+dim) throw("read_param: too few words in line");			
 		for(int i1=0;i1<dim;i1++){
 			if(!(std::stringstream(words[m+i1]) >> data(i1))) 
@@ -251,7 +253,7 @@ void read_param(std::vector<char*> &words,int m,hodlr::DColVector &data,int dim)
 		}
 	}
 	catch(...){
-		std::cerr << "error in read_param(hodlr::DColVector) " << std::endl;
+		std::cerr << "error in read_param(DColVector) " << std::endl;
 		throw;
 	}
 }
@@ -266,7 +268,7 @@ void read_param(std::vector<char*> &words,int m,std::vector<double> &data,int di
 		}
 	}
 	catch(...){
-		std::cerr << "error in read_param(hodlr::DColVector) " << std::endl;
+		std::cerr << "error in read_param(DColVector) " << std::endl;
 		throw;
 	}
 }
@@ -287,7 +289,7 @@ template<typename T> void find_param(char *file,const char *flag,T &x){
 	}
 }
 
-void find_param(char *file,const char *flag,hodlr::DColVector &x,int dim){
+void find_param(char *file,const char *flag,DColVector &x,int dim){
 	try{
 
 		char line[INPUT_LINELEN],*pch;
@@ -322,12 +324,12 @@ void find_param(char *file,const char *flag,std::vector<double> &x,int dim){
 // READ a time-dependent function A SEQUENCE OF WORDS words[m],words[m+1],...
 // if words[m] is of the form --FILENAME, read funtion from file
 // otherwise, a time-independent value is read from words[m], words[m+1], ...
-void read_param_tvector(std::vector<char*> &words,int m,std::vector<hodlr::DColVector> &data,int dim,int nt){
+void read_param_tvector(std::vector<char*> &words,int m,std::vector<DColVector> &data,int dim,int nt){
 	char *pch;
 	int i1,tstp;
 	try{
 	    data.resize(nt+2);
-		for(tstp=-1;tstp<=nt;tstp++) data[tstp+1]=hodlr::DColVector(dim);
+		for(tstp=-1;tstp<=nt;tstp++) data[tstp+1]=DColVector(dim);
 		// test whether the first word is a file
 		if((int)words.size()<=m) throw("read_param_tvector: too few words in line");
 		if((pch=strstr(words[m],"--"))){
@@ -339,17 +341,17 @@ void read_param_tvector(std::vector<char*> &words,int m,std::vector<hodlr::DColV
 				}
 			}
 		}else{
-			hodlr::DColVector tmp(dim);
+			DColVector tmp(dim);
 			read_param(words,m,tmp,dim);
 			for(tstp=-1;tstp<=nt;tstp++) data[tstp+1]=tmp;
 		}
 	}
 	catch(...){
-		std::cerr << "error in read_param_tvector(hodlr::DColVector) " << std::endl;
+		std::cerr << "error in read_param_tvector(DColVector) " << std::endl;
 		throw;
 	}
 }
-void read_param_tvector(std::vector<char*> &words,int m,std::vector<hodlr::cplx> &data,int nt){
+void read_param_tvector(std::vector<char*> &words,int m,std::vector<cplx> &data,int nt){
 	char *pch;
 	int tstp;
 	try{
@@ -360,16 +362,16 @@ void read_param_tvector(std::vector<char*> &words,int m,std::vector<hodlr::cplx>
 			std::vector<double> tmp;
 			read_vector_from_file(pch+2,tmp,(nt+2)*2); // read as many numbers
 			for(tstp=-1;tstp<=nt;tstp++){ 
-				data[tstp+1]=hodlr::cplx(tmp[(tstp+1)*2],tmp[(tstp+1)*2+1]);
+				data[tstp+1]=cplx(tmp[(tstp+1)*2],tmp[(tstp+1)*2+1]);
 			}
 		}else{
-			hodlr::cplx tmp;
+			cplx tmp;
 			read_param(words,m,tmp);
 			for(tstp=-1;tstp<=nt;tstp++) data[tstp+1]=tmp;
 		}
 	}
 	catch(...){
-		std::cerr << "error in read_param_tvector(hodlr::cplx) " << std::endl;
+		std::cerr << "error in read_param_tvector(cplx) " << std::endl;
 		throw;
 	}
 }
@@ -398,12 +400,12 @@ void read_param_tvector(std::vector<char*> &words,int m,std::vector<double> &dat
 	}
 }
 ///
-void read_param_tvector(char *line,std::vector<hodlr::DColVector> &data,int dim,int nt){
+void read_param_tvector(char *line,std::vector<DColVector> &data,int dim,int nt){
 	std::vector<char*> words;
     strtok(line,words," \t");
 	read_param_tvector(words,0,data,dim,nt);
 }
-void read_param_tvector(char *line,std::vector<hodlr::cplx> &data,int nt){
+void read_param_tvector(char *line,std::vector<cplx> &data,int nt){
 	std::vector<char*> words;
     strtok(line,words," \t");
 	read_param_tvector(words,0,data,nt);
@@ -415,7 +417,7 @@ void read_param_tvector(char *line,std::vector<double> &data,int nt){
 }
 
 
-void find_param_tvector(char *file,const char *flag,std::vector<hodlr::DColVector> &data,int dim,int nt){
+void find_param_tvector(char *file,const char *flag,std::vector<DColVector> &data,int dim,int nt){
 	try{
 		char line[INPUT_LINELEN],*pch;
 		find_line_with_flag(file,flag,line);
@@ -427,7 +429,7 @@ void find_param_tvector(char *file,const char *flag,std::vector<hodlr::DColVecto
 		throw;
 	}
 }
-void find_param_tvector(char *file,const char *flag,std::vector<hodlr::cplx> &data,int nt){
+void find_param_tvector(char *file,const char *flag,std::vector<cplx> &data,int nt){
 	try{
 		char line[INPUT_LINELEN],*pch;
 		find_line_with_flag(file,flag,line);

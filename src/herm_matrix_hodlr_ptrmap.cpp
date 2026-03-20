@@ -5,7 +5,7 @@
 #include "h_nessi/herm_matrix_hodlr.hpp"
 
 
-namespace hodlr {
+namespace h_nessi {
 
 DMatrixMap herm_matrix_hodlr::map_mat(int i){
     return DMatrixMap(mat_.data()+i*size1_*size2_, size1_, size2_);

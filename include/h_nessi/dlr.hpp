@@ -18,10 +18,10 @@ extern "C"
 
 
 /**
- * @namespace hodlr
+ * @namespace h_nessi
  * @brief Namespace for hierarchical matrix algorithms and quantum many-body data structures.
  */
-namespace hodlr {
+namespace h_nessi {
 
 /**
  * @class dlr_info

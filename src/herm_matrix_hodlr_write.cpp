@@ -4,7 +4,7 @@
 
 #include "h_nessi/herm_matrix_hodlr.hpp"
 
-namespace hodlr {
+namespace h_nessi {
 
 herm_matrix_hodlr::herm_matrix_hodlr(h5e::File &in, std::string label) :
   r_(in.getDataSet(label + std::string("/r")).read<int>())
@@ -38,9 +38,9 @@ herm_matrix_hodlr::herm_matrix_hodlr(h5e::File &in, std::string label) :
   }
 
   // real time
-  ret_=hodlr::ret_blocks(nbox_,ndir_,nrows,ncols,svdtol_,size1_,size2_);
-  les_=hodlr::les_blocks(nbox_,nrows,ncols,svdtol_,size1_,size2_);
-  tv_ =hodlr::tv_blocks(size1_, size2_, nt_, r_, svdtol_);
+  ret_=ret_blocks(nbox_,ndir_,nrows,ncols,svdtol_,size1_,size2_);
+  les_=les_blocks(nbox_,nrows,ncols,svdtol_,size1_,size2_);
+  tv_ =tv_blocks(size1_, size2_, nt_, r_, svdtol_);
 
   // Retarded block data
   for(int b = 0; b < built_blocks_; b++) {

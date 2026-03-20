@@ -10,10 +10,10 @@
 
 
 /**
- * @namespace hodlr
+ * @namespace h_nessi
  * @brief Namespace for hierarchical matrix algorithms and data structures.
  */
-namespace hodlr {
+namespace h_nessi {
 
 /**
  * @class block
@@ -117,4 +117,4 @@ class block {
 };
 
 
-}  // namespace hodlr
+}  // namespace

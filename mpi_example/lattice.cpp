@@ -12,7 +12,7 @@ lattice_2d_ysymm::lattice_2d_ysymm(int L, int Nt, double dt, double J, double Am
     dt_=dt;
     J_=J;
     Nk_ = L*(L/2+1);
-    hodlr::ZMatrix tmp(size,size);
+    h_nessi::ZMatrix tmp(size,size);
     A_.resize(Nt+2);
     efield_to_afield(Nt, dt, Amax);
 
@@ -48,7 +48,7 @@ void lattice_2d_ysymm::init_kk(int L)
 }
 
 //define single-particle hamiltonian
-void lattice_2d_ysymm::hk(hodlr::ZMatrix &hkmatrix, int tstp, Vector2D& kk, double Ainitx) 
+void lattice_2d_ysymm::hk(h_nessi::ZMatrix &hkmatrix, int tstp, Vector2D& kk, double Ainitx) 
 {
     Vector2D Atstp(0, 0);
     Vector2D Ainit(Ainitx,0);
@@ -80,7 +80,7 @@ std::array<int,2> lattice_2d_ysymm::kxikyi(int index)
 
 
 //define velocity
-void lattice_2d_ysymm::vk(hodlr::ZMatrix &vxkmatrix,hodlr::ZMatrix &vykmatrix,int tstp, Vector2D& kk)
+void lattice_2d_ysymm::vk(h_nessi::ZMatrix &vxkmatrix,h_nessi::ZMatrix &vykmatrix,int tstp, Vector2D& kk)
 {
   const Vector2D&  Atstp=A_[tstp];
   

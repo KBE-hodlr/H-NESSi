@@ -11,7 +11,7 @@
 namespace h5 = HighFive;
 namespace h5e= H5Easy;
 
-namespace hodlr {
+namespace h_nessi {
   extern const bool RHO_DIAGONAL;
   extern const bool RHO_HORIZONTAL;
 
@@ -80,7 +80,7 @@ namespace hodlr {
   int  tsvd(ZMatrix &M, ZMatrix &U, ZMatrix &V, DColVector &S,double svdtol);
   void svd(ZMatrix &M, DColVector &S);
 
-} // namespace hodlr
+} // namespace
 
 #endif // header guard
 

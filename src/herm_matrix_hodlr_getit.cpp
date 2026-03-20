@@ -4,7 +4,7 @@
 
 #include "h_nessi/herm_matrix_hodlr.hpp"
 
-namespace hodlr {
+namespace h_nessi {
 
 
 void herm_matrix_hodlr::get_mat_tau(double tau, dlr_info &dlr, DMatrix &M){

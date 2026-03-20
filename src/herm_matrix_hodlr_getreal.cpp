@@ -4,7 +4,7 @@
 
 #include "h_nessi/herm_matrix_hodlr.hpp"
 
-namespace hodlr {
+namespace h_nessi {
 
 void herm_matrix_hodlr::density_matrix(int tstp, dlr_info &dlr, DMatrix &M){
   assert(M.rows() == size1_ && M.cols() == size2_);

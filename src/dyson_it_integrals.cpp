@@ -3,7 +3,7 @@
 
 using namespace std::chrono;
 
-namespace hodlr {
+namespace h_nessi {
 
 void dyson::gamma_integral(int tstp, herm_matrix_hodlr &G, herm_matrix_hodlr &Delta, double h, Integration::Integrator &I, cplx *res) {
   memset(res, 0, nao_*nao_*sizeof(cplx));

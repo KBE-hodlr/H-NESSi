@@ -2,7 +2,7 @@
 #include <Eigen/SVD>
 
 
-namespace hodlr {
+namespace h_nessi {
 	const bool RHO_DIAGONAL=true;
 	const bool RHO_HORIZONTAL=false;
 

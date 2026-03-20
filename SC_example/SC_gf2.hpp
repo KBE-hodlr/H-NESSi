@@ -6,7 +6,7 @@
 #include "h_nessi/function.hpp"
 #include "h_nessi/dlr.hpp"
 
-namespace hodlr {
+namespace h_nessi {
 
 class SC_gf2 {
 private:

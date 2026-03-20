@@ -18,7 +18,7 @@ extern "C"
   #include "dlr_c/dlr_c.h"
 }
 
-namespace hodlr {
+namespace h_nessi {
 
 /**
  * @file herm_matrix_hodlr.hpp
@@ -151,7 +151,7 @@ class herm_matrix_hodlr{
    * rank truncation based on the instance's svdtol_. If `print` is true,
    * the routine outputs diagnostic information.
    */
-  void updatetsvd(hodlr::block &B,const ZRowVector &row,int row_cur, bool print = false);
+  void updatetsvd(block &B,const ZRowVector &row,int row_cur, bool print = false);
 
   /** Update all blocks that depend on the current state. The Integrator
    * `I` provides quadrature/weight tables potentially needed during
@@ -471,7 +471,7 @@ class herm_matrix_hodlr{
     /** \brief <b> Maximum number of directly-stored entries in a row.</b> */
     int maxdir_;
     /// @private
-    /** \brief <b> Number of levels in hodlr.</b> */
+    /** \brief <b> Number of levels in partitioning.</b> */
     int nlvl_; 
     /// @private
     /** \brief <b> Number of boxes.</b> */
@@ -532,4 +532,4 @@ double distance_norm2_tv(int tstp, herm_matrix_hodlr &g1, cntr::herm_matrix &g2,
 #endif
 
 
-}  // namespace hodlr
+}  // namespace

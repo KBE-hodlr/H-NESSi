@@ -1,6 +1,6 @@
 #include "SC_gf2.hpp"
 
-using namespace hodlr;
+using namespace h_nessi;
 
 SC_gf2::SC_gf2(dlr_info &dlr) :
 dlr_(dlr)

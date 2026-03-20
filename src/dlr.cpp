@@ -3,7 +3,7 @@
 
 #include "h_nessi/dlr.hpp"
 
-namespace hodlr {
+namespace h_nessi {
 
 void rel2abs_times_beta(int n, double beta, double *trel, double *tabs) {
   for( int i = 0; i < n; i++) {

@@ -1,7 +1,7 @@
 #include <iostream>
 #include "h_nessi/blocks_keldysh.hpp"
 
-namespace hodlr {
+namespace h_nessi {
 
 /* #######################################################################################
 #
@@ -19,15 +19,15 @@ blocks_list::blocks_list() : blocks_() {
 blocks_list::blocks_list(int nbox, std::vector<int>& nrows, std::vector<int>& ncols,
                          double svdtol, int size1, int size2)
     : nbox_(nbox), size1_(size1), size2_(size2),
-      blocks_(nbox, std::vector<std::vector<hodlr::block>>(size1, std::vector<hodlr::block>(size2)))
+      blocks_(nbox, std::vector<std::vector<block>>(size1, std::vector<block>(size2)))
 {
     assert(nrows.size() == nbox && ncols.size() == nbox);
 
-    // Initialize each hodlr::block
+    // Initialize each block
     for (int n = 0; n < nbox_; ++n) {
         for (int i = 0; i < size1_; ++i) {
             for (int j = 0; j < size2_; ++j) {
-                blocks_[n][i][j] = hodlr::block(nrows[n], ncols[n], 0, svdtol); 
+                blocks_[n][i][j] = block(nrows[n], ncols[n], 0, svdtol); 
             }
         }
     }
@@ -141,4 +141,4 @@ tv_blocks::tv_blocks(int size1,int size2,int nt,int ntau,double svdtol) :
       data_trans_(nt*ntau*size1*size2,std::complex<double>(0.,0.)) {
 }
 
-} // namespace hodlr
+} // namespace

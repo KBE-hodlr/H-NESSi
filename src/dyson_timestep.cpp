@@ -3,7 +3,7 @@
 
 using namespace std::chrono;
 
-namespace hodlr {
+namespace h_nessi {
 
 double dyson::dyson_timestep_ret(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma,
                                Integration::Integrator &I, double h){
@@ -67,7 +67,7 @@ double dyson::dyson_timestep_ret(int tstp, herm_matrix_hodlr &G, double mu, cplx
 
       // Delta Energy term
       if(l == n) {
-// DEBUG
+// CHECK FOR DISSIPATIVE DYNAMICS
 //        MMapBlock.noalias() += mu * IMap - ZMatrixMap(H + (tstp-n)*es_, nao_, nao_).conjugate();
         MMapBlock.noalias() += mu * IMap - ZMatrixMap(H + (tstp-n)*es_, nao_, nao_).transpose();
       }
@@ -127,7 +127,7 @@ double dyson::dyson_timestep_ret(int tstp, herm_matrix_hodlr &G, double mu, cplx
     }
 
     // M contains four parts: H, mu, unknown derivative term, and unknown integral term
-// DEBUG
+// CHECK FOR DISSIPATIVE DYNAMICS
     MMapSmall.noalias() = -ZMatrixMap(H + (tstp-n)*es_, nao_, nao_).conjugate();
 //    MMapSmall.noalias() = -ZMatrixMap(H + (tstp-n)*es_, nao_, nao_).transpose();
     MMapSmall.noalias() -= h * I.omega(0) * ZMatrixMap(Sigma.retptr_col(tstp-n,tstp-n), nao_, nao_).transpose();
@@ -270,7 +270,7 @@ double dyson::dyson_timestep_les_nobc(int tstp, herm_matrix_hodlr &G, double mu,
   ZMatrixMap(Q_.data(), nao_, nao_) -= cplxi/h * I.bd_weights(k_+1) * ZMatrixMap(X_.data(), nao_, nao_).transpose();
   
   // M 
-// DEBUG
+// CHECK FOR DISSIPATIVE DYNAMICS
 //  ZMatrixMap(M_.data(), nao_, nao_) = (cplxi/h * I.bd_weights(0) * IMap 
 //                              + ZMatrixMap(H + tstp*nao_*nao_, nao_, nao_).adjoint()
 //                              - mu * IMap
@@ -583,7 +583,7 @@ double dyson::dyson_timestep_les_2leg(int tstp, herm_matrix_hodlr &G, double mu,
   ZMatrixMap(Q_.data(), nao_, nao_) -= cplxi/h * I.bd_weights(k_+1) * ZMatrixMap(X_.data(), nao_, nao_).transpose();
 
   // M 
-// DEBUG
+// CHECK FOR DISSIPATIVE DYNAMICS
 //  ZMatrixMap(M_.data(), nao_, nao_) = (cplxi/h * I.bd_weights(0) * IMap 
 //                              + ZMatrixMap(H + tstp*nao_*nao_, nao_, nao_).adjoint()
 //                              - mu * IMap
@@ -1165,4 +1165,4 @@ double dyson::dyson_timestep_tv(int tstp, herm_matrix_hodlr &G, double mu, cplx 
   return err;
 }
 
-} // hodlr
+} // namespace

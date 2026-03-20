@@ -10,13 +10,13 @@ namespace observables {
    )
    {
       int kindex;
-      hodlr::ZMatrix rtmp(1,1),etmp(1,1),vkxtmp, vkytmp;
+      h_nessi::ZMatrix rtmp(1,1),etmp(1,1),vkxtmp, vkytmp;
       double jx=0.0,jy=0.0,Ekin=0.0,Num=0.0;
 
       double my_density_k;
       
       for(int kindex=0; kindex<Nk_rank; kindex++){
-         hodlr::DMatrix dtmp(1,1);
+         h_nessi::DMatrix dtmp(1,1);
          dtmp = corrK_rank[kindex]->rho_[tstp];
          my_density_k = std::real(dtmp(0,0));
          
@@ -55,13 +55,13 @@ namespace observables {
                         std::vector<std::unique_ptr<kpoint>> &corrK_rank
                        )
    {
-      hodlr::ZMatrix rtmp(1,1),etmp(1,1),vkxtmp, vkytmp;
+      h_nessi::ZMatrix rtmp(1,1),etmp(1,1),vkxtmp, vkytmp;
       double jx=0.0,jy=0.0,Ekin=0.0,Num=0.0;
 
       double my_density_k;
       
       for(int ki=0; ki<lattice.Nk_; ki++){
-         hodlr::DMatrix dtmp(1,1);
+         h_nessi::DMatrix dtmp(1,1);
          dtmp = corrK_rank[ki]->rho_[tstp];
          my_density_k = std::real(dtmp(0,0));
          

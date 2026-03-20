@@ -12,10 +12,10 @@
 
 
 /**
- * @namespace hodlr
+ * @namespace h_nessi
  * @brief Namespace for hierarchical matrix algorithms and quantum many-body data structures.
  */
-namespace hodlr {
+namespace h_nessi {
 
 
 /**
@@ -52,7 +52,7 @@ class blocks_list{
     /** @brief Returns the row dimension in orbital space. */
     int size2(void) const {return size2_;};
     /** @brief Returns block objects. */
-    std::vector<std::vector<std::vector<hodlr::block>>> &blocks() { return blocks_; }
+    std::vector<std::vector<std::vector<block>>> &blocks() { return blocks_; }
 
 
     /**
@@ -74,7 +74,7 @@ class blocks_list{
 
 
   private:
-    std::vector<std::vector<std::vector<hodlr::block>>> blocks_;/**< Set of blocks stored in compressed form. Order: Nbox*size2_*size1_ */
+    std::vector<std::vector<std::vector<block>>> blocks_;/**< Set of blocks stored in compressed form. Order: Nbox*size2_*size1_ */
     int nbox_;                /**< Number of block boxes. */
     int size1_;               /**< Column dimension in orbital space. */
     int size2_;               /**< Row dimension in orbital space. */
@@ -236,4 +236,4 @@ class tv_blocks{
 };
 
 
-}  // namespace hodlr
+}  // namespace

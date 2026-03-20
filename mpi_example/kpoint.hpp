@@ -99,7 +99,7 @@ public:
      * @param tstp Time step index
      * @param dlr Reference to the DLR information object
      */
-    void get_Density_matrix(int tstp, hodlr::dlr_info &dlr);
+    void get_Density_matrix(int tstp, h_nessi::dlr_info &dlr);
 
     /**
      * @brief Solves the Dyson equation for a given time step.
@@ -111,7 +111,7 @@ public:
      * @param dlr Reference to the DLR information object
      * @return Squared error of the Dyson solution
      */
-    double step_dyson(int tstp, int SolverOrder, lattice_2d_ysymm &latt, Integration::Integrator &I, hodlr::dyson &dyson_sol, hodlr::dlr_info &dlr);
+    double step_dyson(int tstp, int SolverOrder, lattice_2d_ysymm &latt, Integration::Integrator &I, h_nessi::dyson &dyson_sol, h_nessi::dlr_info &dlr);
 
     double beta_; ///< Inverse temperature
     double dt_; ///< Time step size
@@ -121,9 +121,9 @@ public:
     int nlvl_; ///< Number of hierarchical levels
     int size_; ///< Matrix size
 
-    hodlr::function hk_; ///< Single-particle Hamiltonian as a function of time
-    std::vector<hodlr::DMatrix> rho_; ///< Density matrices for each time step
-    hodlr::herm_matrix_hodlr G_, Sigma_; ///< Green's function and self-energy matrices
+    h_nessi::function hk_; ///< Single-particle Hamiltonian as a function of time
+    std::vector<h_nessi::DMatrix> rho_; ///< Density matrices for each time step
+    h_nessi::herm_matrix_hodlr G_, Sigma_; ///< Green's function and self-energy matrices
 
     double mu_; ///< Chemical potential
     Vector2D kk_; ///< k-point vector

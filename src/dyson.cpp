@@ -3,7 +3,7 @@
 
 using namespace std::chrono;
 
-namespace hodlr {
+namespace h_nessi {
 
 void dyson::write_timing(h5e::File &file, std::string label) {
   if(profile_) {
@@ -435,4 +435,4 @@ void dyson::dipole_step(int tstp, function &dfield, herm_matrix_hodlr &Gu, herm_
 }
 */
 
-} // namespace hodlr
+} // namespace

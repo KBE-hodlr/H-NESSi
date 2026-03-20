@@ -28,10 +28,10 @@ extern "C"
 
 
 /**
- * @namespace hodlr
+ * @namespace h_nessi
  * @brief Namespace for hierarchical matrix algorithms and quantum many-body data structures.
  */
-namespace hodlr {
+namespace h_nessi {
 
 /**
  * @class dyson
@@ -721,6 +721,6 @@ public:
   void gamma_integral_mat(herm_matrix_hodlr &G, herm_matrix_hodlr &Delta, double h, Integration::Integrator &I, cplx *res);
 };
 
-} // namespace hodlr
+} // namespace
 
 #endif // header guard

@@ -3,7 +3,7 @@
 
 using namespace std::chrono;
 
-namespace hodlr {
+namespace h_nessi {
 
 double dyson::dyson_mat(herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, bool fixHam, double alpha){
     assert(xi_==G.sig() && nao_==G.size1() && nao_==G.size2());

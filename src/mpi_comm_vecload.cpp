@@ -1,7 +1,7 @@
 #include "h_nessi/mpi_comm.hpp"
 #include "h_nessi/utils.hpp"
 
-namespace hodlr {
+namespace h_nessi {
 
 ZMatrixMap mpi_comm::map_ret(int k_global, int t_global) {
   int t_local = t_global - my_first_t;
@@ -46,7 +46,7 @@ ZMatrixMap mpi_comm::map_mat_rev(int k_global, int tau_global) {
 void mpi_comm::mpi_get_and_comm_spawn
 (int ti,
  std::vector<herm_matrix_hodlr> &hmh_vec,
- hodlr::dlr_info &dlr
+ dlr_info &dlr
 )
 {
   int mpi_rank, mpi_size;
@@ -145,7 +145,7 @@ void mpi_comm::mpi_get_and_comm_spawn
 void mpi_comm::mpi_get_and_comm_spawn
 (int ti,
  std::vector<std::reference_wrapper<herm_matrix_hodlr>> &hmh_vec,
- hodlr::dlr_info &dlr
+ dlr_info &dlr
 )
 {
   int mpi_rank, mpi_size;
@@ -245,7 +245,7 @@ void mpi_comm::mpi_get_and_comm_spawn
 void mpi_comm::mpi_get_and_comm_nospawn
 (int ti,
  std::vector<herm_matrix_hodlr> &hmh_vec,
- hodlr::dlr_info &dlr
+ dlr_info &dlr
 )
 {
   int mpi_rank, mpi_size;
@@ -371,7 +371,7 @@ void mpi_comm::mpi_get_and_comm_nospawn
 void mpi_comm::mpi_get_and_comm_nospawn
 (int ti,
  std::vector<std::reference_wrapper<herm_matrix_hodlr>> &hmh_vec,
- hodlr::dlr_info &dlr
+ dlr_info &dlr
 )
 {
   int mpi_rank, mpi_size;

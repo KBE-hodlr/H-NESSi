@@ -9,7 +9,7 @@
 #include "observables.hpp"
 
 
-using namespace hodlr;
+using namespace h_nessi;
 
 int main(int argc, char *argv[]) {
 

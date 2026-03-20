@@ -5,7 +5,7 @@
 #include "h_nessi/herm_matrix_hodlr.hpp"
 
 
-namespace hodlr {
+namespace h_nessi {
 
 void herm_matrix_hodlr::set_tstp_zero(int tstp) {
     assert( tstp == -1 || (tstp >= tstpmk_ && tstp <= tstpmk_+k_));

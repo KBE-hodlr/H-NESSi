@@ -10,7 +10,7 @@
 #include "h_nessi/dlr.hpp"
 #include "h_nessi/herm_matrix_hodlr.hpp"
 
-using namespace hodlr;
+using namespace h_nessi;
 
 /**
  * @class Hubb_2B

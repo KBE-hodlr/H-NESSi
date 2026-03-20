@@ -5,7 +5,7 @@
 #include "h_nessi/herm_matrix_hodlr.hpp"
 
 
-namespace hodlr {
+namespace h_nessi {
 
 /* #######################################################################################
 #
@@ -25,9 +25,9 @@ herm_matrix_hodlr::herm_matrix_hodlr() {
     built_blocks_ = 0;
     can_extrap_ = false;
 
-    ret_=hodlr::ret_blocks();
-    les_=hodlr::les_blocks();
-    tv_=hodlr::tv_blocks();
+    ret_=ret_blocks();
+    les_=les_blocks();
+    tv_=tv_blocks();
     mat_.clear();
     GMConvTensMatrix_ = DMatrix();
 
@@ -94,9 +94,9 @@ herm_matrix_hodlr::herm_matrix_hodlr(int nt,int r,int nlvl,double svdtol,int siz
     }
 
     // real time
-    ret_=hodlr::ret_blocks(nbox_,ndir_,nrows,ncols,svdtol,size1_,size2_);
-    les_=hodlr::les_blocks(nbox_,nrows,ncols,svdtol,size1_,size2_);
-    tv_ =hodlr::tv_blocks(size1_, size2_, nt_, r_, svdtol);
+    ret_=ret_blocks(nbox_,ndir_,nrows,ncols,svdtol,size1_,size2_);
+    les_=les_blocks(nbox_,nrows,ncols,svdtol,size1_,size2_);
+    tv_ =tv_blocks(size1_, size2_, nt_, r_, svdtol);
 
     // timing
     timing = DMatrix::Zero(nt_, 22);
@@ -561,4 +561,4 @@ double herm_matrix_hodlr::get_memory_usage(bool print_memory_usage) {
     return total;
 }
 
-} // namespace hodlr
+} // namespace

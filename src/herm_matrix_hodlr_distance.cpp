@@ -4,7 +4,7 @@
 
 #include "h_nessi/herm_matrix_hodlr.hpp"
 
-namespace hodlr {
+namespace h_nessi {
 
 
 double distance_norm2_curr_les(int tstp, herm_matrix_hodlr &g1, herm_matrix_hodlr &g2) {

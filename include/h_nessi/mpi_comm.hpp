@@ -15,16 +15,16 @@
 #include "mpi_comm_utils.hpp"
 #include "herm_matrix_hodlr.hpp"
 
-namespace hodlr {
+namespace h_nessi {
 
 /**
  * @class mpi_comm
- * @brief Facilitates distributed communication and data exchange for herm_hodlr_matrix objects using MPI and OpenMP.
+ * @brief Facilitates distributed communication and data exchange for herm_matrix_hodlr objects using MPI and OpenMP.
  *
- * The class is designed for flexible data movement between distributed herm_hodlr_matrix objects and internal buffers.
+ * The class is designed for flexible data movement between distributed herm_matrix_hodlr objects and internal buffers.
  * Users provide custom get and set functions:
- *   - Get functions: Copy data from herm_hodlr_matrix objects to the class buffers.
- *   - Set functions: Copy data from the class buffers back to herm_hodlr_matrix objects.
+ *   - Get functions: Copy data from herm_matrix_hodlr objects to the class buffers.
+ *   - Set functions: Copy data from the class buffers back to herm_matrix_hodlr objects.
  * This allows the class to be agnostic to the actual data layout and storage of the matrices.
  *
  * The class manages different buffers, using them as needed depending on the type of data required at each step of the calculation.
@@ -101,22 +101,22 @@ public:
     void mpi_get_and_comm_spawn
     (int ti,
      std::vector<herm_matrix_hodlr> &hmh_vec,
-     hodlr::dlr_info &dlr
+     dlr_info &dlr
     );
     void mpi_get_and_comm_spawn
     (int ti,
      std::vector<std::reference_wrapper<herm_matrix_hodlr>> &hmh_vec,
-     hodlr::dlr_info &dlr
+     dlr_info &dlr
     );
     void mpi_get_and_comm_nospawn
     (int ti,
      std::vector<herm_matrix_hodlr> &hmh_vec,
-     hodlr::dlr_info &dlr
+     dlr_info &dlr
     );
     void mpi_get_and_comm_nospawn
     (int ti,
      std::vector<std::reference_wrapper<herm_matrix_hodlr>> &hmh_vec,
-     hodlr::dlr_info &dlr
+     dlr_info &dlr
     );
 
 
@@ -241,7 +241,7 @@ public:
   int Nt_;
   /// Number of representative tau points in the DLR representation
   int r_;
-  /// Maximum number of components of herm_hodlr_matrix objects to be communicated, can also be orbital components
+  /// Maximum number of components of herm_matrix_hodlr objects to be communicated, can also be orbital components
   int max_component_size_;
   /// Number of orbitals, max_component_size_ = 2*nao*nao
   int nao_;

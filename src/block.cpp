@@ -5,7 +5,7 @@
 #include <Eigen/Core>
 
 
-namespace hodlr {
+namespace h_nessi {
 
 block::block(){
     rows_=0;
@@ -29,10 +29,6 @@ block::block(int rows,int cols,int epsrank,double svdtol) {
 
 void block::set_rank(int epsrank){
         epsrank_=epsrank;
-// eigen handles resizing already
-//        U_.conservativeResize(rows_,epsrank_);
-//        V_.conservativeResize(cols_,epsrank_);
-//        S_.conservativeResize(epsrank_);   
 }
 
-} // namespace hodlr
+} // namespace 

@@ -12,9 +12,9 @@
 #include "h_nessi/integration.hpp"
 #include "SC_gf2.hpp"
 
-void fill_t0_mat(hodlr::function &phi_func, hodlr::function &t0_func) {
+void fill_t0_mat(h_nessi::function &phi_func, h_nessi::function &t0_func) {
   t0_func.set_zero();
-  hodlr::cplx I = hodlr::cplx(0.,1.);
+  h_nessi::cplx I = h_nessi::cplx(0.,1.);
   for(int tstp = -1; tstp < t0_func.nt(); tstp++) {
     t0_func(tstp,0,0) = std::exp( I * phi_func(tstp,0,0));
     t0_func(tstp,1,1) = std::exp(-I * phi_func(tstp,0,0));
@@ -65,38 +65,38 @@ int main(int argc, char *argv[]){
   find_param(flin,"__phi0=",phi0);
   find_param(flin,"__U=",U);
 
-  hodlr::cplx cplxi = hodlr::cplx(0.,1.);
+  h_nessi::cplx cplxi = h_nessi::cplx(0.,1.);
 
   // Dyson
   int rho_version = 1;
-  hodlr::dlr_info dlr(r, lambda, epsdlr, beta, size, xi);
+  h_nessi::dlr_info dlr(r, lambda, epsdlr, beta, size, xi);
   Integration::Integrator I(SolverOrder);
-  hodlr::dyson dyson_sol(nt, size, SolverOrder, dlr, rho_version);
+  h_nessi::dyson dyson_sol(nt, size, SolverOrder, dlr, rho_version);
 
 
   // Initialize Green's function storage
-  hodlr::herm_matrix_hodlr G(nt, r, nlvl, svdtol, size, size, xi, SolverOrder);
-  hodlr::herm_matrix_hodlr DeltaPlusSigma(nt, r, nlvl, svdtol, size, size, xi, SolverOrder);
+  h_nessi::herm_matrix_hodlr G(nt, r, nlvl, svdtol, size, size, xi, SolverOrder);
+  h_nessi::herm_matrix_hodlr DeltaPlusSigma(nt, r, nlvl, svdtol, size, size, xi, SolverOrder);
   G.set_tstp_zero(-1);
   DeltaPlusSigma.set_tstp_zero(-1);
 
   // Self Energy evaluator
-  hodlr::SC_gf2 SC_gf2_solver(dlr);
+  h_nessi::SC_gf2 SC_gf2_solver(dlr);
 
   // Time dependent hamiltonian storage
   double mu = 0;
-  hodlr::function Hmf(nt, size, size);
-  hodlr::function phi(nt, 1, 1);
-  hodlr::function U_func(nt, 1, 1);
-  hodlr::function t0_func(nt, size, size);
-  hodlr::function current(nt, 1, 1);
-  hodlr::function energy_kin(nt, 1, 1);
-  hodlr::function energy_pot(nt, 1, 1);
-  hodlr::ZMatrix Jintres(2,2);
+  h_nessi::function Hmf(nt, size, size);
+  h_nessi::function phi(nt, 1, 1);
+  h_nessi::function U_func(nt, 1, 1);
+  h_nessi::function t0_func(nt, size, size);
+  h_nessi::function current(nt, 1, 1);
+  h_nessi::function energy_kin(nt, 1, 1);
+  h_nessi::function energy_pot(nt, 1, 1);
+  h_nessi::ZMatrix Jintres(2,2);
 
   // Read in phi, U, t0
   h5e::File phi_file(argv[3]);
-  hodlr::DColVector phi_vec = h5e::load<hodlr::DColVector>(phi_file, "phi");
+  h_nessi::DColVector phi_vec = h5e::load<h_nessi::DColVector>(phi_file, "phi");
   for(int t = 0; t < nt; t++) phi(t,0,0) = phi0 * phi_vec(t);
   phi(-1,0,0) = phi(0,0,0);
   fill_t0_mat(phi, t0_func);
@@ -148,7 +148,7 @@ int main(int argc, char *argv[]){
   }
 
   // Use hmf to calculate HF GF
-  hodlr::ZMatrix rhoIC(size, size);
+  h_nessi::ZMatrix rhoIC(size, size);
   G.density_matrix(-1, dlr, rhoIC);
   dyson_sol.green_from_H_dm(G, mu, Hmf.get_map(-1), rhoIC, h, SolverOrder);
 

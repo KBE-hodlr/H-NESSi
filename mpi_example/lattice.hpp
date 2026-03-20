@@ -81,7 +81,7 @@ public:
    * @param kk k-point vector
    * @param Ainitx Initial vector potential in x direction
    */
-  void hk(hodlr::ZMatrix &hkmatrix,int tstp, Vector2D& kk, double Ainitx);
+  void hk(h_nessi::ZMatrix &hkmatrix,int tstp, Vector2D& kk, double Ainitx);
 
   /**
    * @brief Converts a constant electric field to a vector potential for all time steps.
@@ -98,7 +98,7 @@ public:
    * @param tstp Time step index
    * @param kk k-point vector
    */
-  void vk(hodlr::ZMatrix &vxkmatrix, hodlr::ZMatrix &vykmatrix, int tstp, Vector2D& kk);
+  void vk(h_nessi::ZMatrix &vxkmatrix, h_nessi::ZMatrix &vykmatrix, int tstp, Vector2D& kk);
 
 };
 

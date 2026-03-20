@@ -4,7 +4,7 @@
 
 #include "h_nessi/herm_matrix_hodlr.hpp"
 
-namespace hodlr {
+namespace h_nessi {
 
 void herm_matrix_hodlr::update_blocks(Integration::Integrator &I) {
   std::chrono::time_point<std::chrono::system_clock> start, end;
@@ -248,7 +248,7 @@ double herm_matrix_hodlr::mgs(const ZMatrix &V, const ZRowVector &b, const ZRowV
 }
 
 
-void herm_matrix_hodlr::updatetsvd(hodlr::block &B,const ZRowVector &row,int row_cur, bool print){
+void herm_matrix_hodlr::updatetsvd(block &B,const ZRowVector &row,int row_cur, bool print){
   std::chrono::time_point<std::chrono::system_clock> start, end;
   std::chrono::duration<double, std::micro> dur;
 
@@ -300,7 +300,7 @@ void herm_matrix_hodlr::updatetsvd(hodlr::block &B,const ZRowVector &row,int row
   // Compute SVD [TODO: can be done faster as in Ref. 65]
   start = std::chrono::system_clock::now();
   ZMatrix unew,vnew;
-  hodlr::svd(uu,unew,vnew,su);
+  svd(uu,unew,vnew,su);
   end = std::chrono::system_clock::now();
   dur = end-start;
   timing(tstpmk_, 12) += dur.count();
