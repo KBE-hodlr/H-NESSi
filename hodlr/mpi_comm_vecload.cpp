@@ -1,3 +1,7 @@
+#include "mpi_comm.hpp"
+
+namespace hodlr {
+
 ZMatrixMap mpi_comm::map_ret(int k_global, int t_global) {
   int t_local = t_global - my_first_t;
   int mpi_index = k_rank_map[k_global];
@@ -890,3 +894,5 @@ void mpi_comm::mpi_comm_and_set_nospawn
     }
   }
 };
+
+} // namespace 

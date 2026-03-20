@@ -1,3 +1,10 @@
+#include "dyson.hpp"
+#include <iomanip>
+
+using namespace std::chrono;
+
+namespace hodlr {
+
 void dyson::gamma_integral(int tstp, herm_matrix_hodlr &G, herm_matrix_hodlr &Delta, double h, Integration::Integrator &I, cplx *res) {
   memset(res, 0, nao_*nao_*sizeof(cplx));
   ZMatrixMap resMap(res, nao_, nao_);
@@ -327,4 +334,4 @@ void dyson::les_lesadv_int_0_tstp(int tstp, herm_matrix_hodlr &Sigma, herm_matri
   if(profile_) timing(tstp, 20) = currhor.count();
 
 }
-
+} // namespace

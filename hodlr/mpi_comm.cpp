@@ -1,5 +1,6 @@
 #include "mpi_comm.hpp"
-#include "mpi_comm_vecload.hpp"
+
+namespace hodlr {
 
 mpi_comm::mpi_comm(){};
 
@@ -499,3 +500,5 @@ void mpi_comm::mpi_comm_and_set_nospawn
     }
   }
 };
+
+} // namespace

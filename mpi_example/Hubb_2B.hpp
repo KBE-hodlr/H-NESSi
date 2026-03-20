@@ -10,6 +10,8 @@
 #include "hodlr/dlr.hpp"
 #include "hodlr/herm_matrix_hodlr.hpp"
 
+using namespace hodlr;
+
 /**
  * @class Hubb_2B
  * @brief Implements the Second Born (2B) self-energy for the Hubbard model
@@ -37,9 +39,9 @@ public:
      */
     void Sigma_spawn(int tstp, 
                      mpi_comm &comm, 
-                     std::vector<std::reference_wrapper<hodlr::herm_matrix_hodlr>> &Grefs, 
-                     std::vector<std::reference_wrapper<hodlr::herm_matrix_hodlr>> &Srefs, 
-                     hodlr::dlr_info &dlr);
+                     std::vector<std::reference_wrapper<herm_matrix_hodlr>> &Grefs, 
+                     std::vector<std::reference_wrapper<herm_matrix_hodlr>> &Srefs, 
+                     dlr_info &dlr);
 
     /**
      * @brief High-level dispatcher for self-energy calculation.
@@ -47,9 +49,9 @@ public:
      */
     void Sigma_nospawn(int tstp, 
                      mpi_comm &comm, 
-                     std::vector<std::reference_wrapper<hodlr::herm_matrix_hodlr>> &Grefs, 
-                     std::vector<std::reference_wrapper<hodlr::herm_matrix_hodlr>> &Srefs, 
-                     hodlr::dlr_info &dlr);
+                     std::vector<std::reference_wrapper<herm_matrix_hodlr>> &Grefs, 
+                     std::vector<std::reference_wrapper<herm_matrix_hodlr>> &Srefs, 
+                     dlr_info &dlr);
 private:
     // Constants
     double U_; 

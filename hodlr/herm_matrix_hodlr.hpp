@@ -267,16 +267,6 @@ class herm_matrix_hodlr{
   std::vector<cplx> &les_dir_square() { return les_dir_square_; }
   std::vector<cplx> &les_left_edge() { return les_left_edge_; }
   std::vector<cplx> &ret_left_edge() { return ret_left_edge_; } 
-    cplx *curr_timestep_ret_ptr(int t, int tp) {
-      assert(t <= tstpmk_+k_);
-      int index = t%(k_+1);
-      return curr_timestep_ret_.data() + index * (nt_+1) * size1_ * size2_ + tp * size1_ * size2_;
-    }
-    cplx *curr_timestep_les_ptr(int t, int tp) {
-      assert(tp <= tstpmk_+k_);
-      int index = tp%(k_+1);
-      return curr_timestep_les_.data() + index * (nt_ +1) * size1_ * size2_ + t * size1_ * size2_;
-    }
 
   // Mutators (Set)
   /** Store matsubara matrix at dlr index i from an Eigen matrix. */
@@ -312,6 +302,12 @@ class herm_matrix_hodlr{
 
   /** Pointer to transposed tv buffer for timestep `t` and DLR index `tau`. */
   cplx *tvptr_trans(int t, int tau);
+
+  /** Pointer to current les timestep buffer */
+  cplx *curr_timestep_les_ptr(int t, int tp);
+
+  /** Pointer to current ret timestep buffer */
+  cplx *curr_timestep_ret_ptr(int t, int tp);
 
   /** Compute internal linear offset for tv storage. */
   int tv_offset(int t, int tau) {assert(t <= nt_ && tau < r_); return t*r_*size1_*size2_ + tau*size1_*size2_;}

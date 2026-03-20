@@ -1,3 +1,10 @@
+#include "dyson.hpp"
+#include <iomanip>
+
+using namespace std::chrono;
+
+namespace hodlr {
+
 #define EXPMAX 100
 
 // 1/(1+exp(omega*beta))
@@ -399,3 +406,4 @@ void dyson::extrapolate(herm_matrix_hodlr &G, Integration::Integrator &I) {
 
   G.can_extrap() = false;
 }
+} // namespace

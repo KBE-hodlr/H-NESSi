@@ -1,3 +1,11 @@
+#include <vector>
+#include <iostream>
+#include <string>
+
+#include "herm_matrix_hodlr.hpp"
+
+namespace hodlr {
+
 void herm_matrix_hodlr::update_blocks(Integration::Integrator &I) {
   std::chrono::time_point<std::chrono::system_clock> start, end;
   std::chrono::duration<double, std::micro> dur;
@@ -470,4 +478,4 @@ void herm_matrix_hodlr::updatetsvd(hodlr::block &B,const ZRowVector &row,int row
 
   }
 }
-
+} // namespace

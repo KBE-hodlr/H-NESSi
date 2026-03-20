@@ -9,6 +9,8 @@
 
 #include "hodlr/read_inputfile.hpp"
 
+using namespace hodlr;
+
 int main(int argc, char *argv[]) {
 
   std::string output_dir;
@@ -195,8 +197,8 @@ int main(int argc, char *argv[]) {
   int rho_version = 1;
   xi = -1;
   bool profile = true;
-  hodlr::dlr_info dlr(r, dlrlambda, epsdlr, beta, size, xi);
-  hodlr::dyson dyson_sol(Nt, size, SolverOrder, dlr, rho_version); 
+  dlr_info dlr(r, dlrlambda, epsdlr, beta, size, xi);
+  dyson dyson_sol(Nt, size, SolverOrder, dlr, rho_version); 
   Integration::Integrator I(SolverOrder);
   
   if(mpi_rank==mpi_root){
@@ -204,11 +206,11 @@ int main(int argc, char *argv[]) {
     dyson_sol.print_memory_usage();
   }
 
-  std::vector<hodlr::dlr_info> dlr_vec;
+  std::vector<dlr_info> dlr_vec;
   dlr_vec.reserve(nthreads);
   for(int i = 0; i < nthreads; i++) dlr_vec.emplace_back(r, dlrlambda, epsdlr, beta, size, xi);
 
-  std::vector<hodlr::dyson> dyson_sol_vec;
+  std::vector<dyson> dyson_sol_vec;
   dyson_sol_vec.reserve(nthreads);
   for(int i=0; i<nthreads; i++){
     dyson_sol_vec.emplace_back(Nt, size, SolverOrder, dlr_vec[i], rho_version, profile);
@@ -240,105 +242,12 @@ int main(int argc, char *argv[]) {
   }
 
   //create reference vector of G and Sigma - for passing between communicator
-  std::vector<std::reference_wrapper<hodlr::herm_matrix_hodlr>> Grefs;
-  std::vector<std::reference_wrapper<hodlr::herm_matrix_hodlr>> Srefs;
+  std::vector<std::reference_wrapper<herm_matrix_hodlr>> Grefs;
+  std::vector<std::reference_wrapper<herm_matrix_hodlr>> Srefs;
   for(int i=0;i<Nk_rank;i++){
     Grefs.push_back(corrK_rank[i]->G_);
     Srefs.push_back(corrK_rank[i]->Sigma_);
   }
-
-
-  // ============================================================================
-  //                       INITIALIZE GETS AND SETS
-  // ============================================================================
-
-  //Returns G^M(tau) at local k index and imaginary time tau
-  auto getMat = [&corrK_rank, &size](int k, int t, int taui){
-    hodlr::DMatrix tmp(size,size);
-    corrK_rank[k]->G_.get_mat(taui,tmp);
-    return tmp(0,0);
-  };
-
-  //Returns G^M(beta-tau) at local k index and imaginary time tau
-  auto getMatbeta = [&corrK_rank, &size, &dlr](int k, int t, int taui){
-    hodlr::DMatrix tmp(size,size);
-    int rtmp = corrK_rank[k]->r_;
-    int sizetmp = corrK_rank[k]->size_;
-    double dest[rtmp*sizetmp*sizetmp];
-    corrK_rank[k]->G_.get_mat_reversed(dlr,dest);
-    tmp(0,0) = dest[taui];
-    return tmp(0,0);
-  };
-
-  //vector of functions for Matsubara components
-  std::vector<std::function<std::complex<double>(int, int, int)>> getsMat = {getMat,getMatbeta};
-
-  //retruns G^<(t,t') at local k index and real times t,t'
-  auto getLess = [&corrK_rank, &size, &mpi_rank](int k, int ti, int tpi){
-    hodlr::ZMatrix tmp(size,size);
-    corrK_rank[k]->G_.get_les(ti,tpi,tmp);
-    return tmp(0,0);
-  };
-
-  //retruns G^>(t,t') at local k index and real times t,t'
-  auto getGreat = [&corrK_rank, &size](int k, int ti, int tpi){
-    hodlr::ZMatrix tmpRet(size,size),tmpLess(size,size),tmpGreat(size,size);
-    corrK_rank[k]->G_.get_les(ti,tpi,tmpLess);
-    corrK_rank[k]->G_.get_ret(ti,tpi,tmpRet);
-    tmpGreat(0,0) = tmpRet(0,0)+tmpLess(0,0);
-    return tmpGreat(0,0);
-  };
-
-  //vector of functions for Lesser and Greater components
-  std::vector<std::function<std::complex<double>(int, int, int)>> getsLG = {getLess,getGreat};
-
-  //returns G^tv(t,tau) at local k index and real time t and imaginary time tau
-  auto gettv = [&corrK_rank, &size](int k, int ti, int taui){
-    hodlr::ZMatrix tmp(size,size);
-    corrK_rank[k]->G_.get_tv(ti,taui,tmp);
-    return tmp(0,0);
-  };
-
-  //returns G^tv(t,beta-tau) at local k index and real time t and imaginary time tau
-  auto gettvbeta = [&corrK_rank, &size, &dlr](int k, int ti, int taui){
-    int rtmp = corrK_rank[k]->r_;
-    int sizetmp = corrK_rank[k]->size_;
-    hodlr::cplx dest[rtmp*sizetmp*sizetmp];
-    corrK_rank[k]->G_.get_tv_reversed(ti,dlr,dest);
-    return dest[taui];
-  };
-
-  //vector of functions for tv components
-  std::vector<std::function<std::complex<double>(int, int, int)>> getstv = {gettv,gettvbeta};
-
-  //sets Sigma^M(tau) at local k index and all representative imaginary times
-  auto setMat = [&corrK_rank, &size, &r, &mpi_rank](int k, int t, std::vector<std::complex<double>> &Sigma){
-    hodlr::DMatrixMap(corrK_rank[k]->Sigma_.matptr(0), r * size, size).noalias() = hodlr::ZMatrixMap(Sigma.data(), r * size, size).real();
-  };
-
-  //sets Sigma^<(t,t') at local k index and real time t for all t'<=t
-  auto setLess = [&corrK_rank, &size](int k, int ti, std::vector<std::complex<double>> &Sigma){
-    std::vector<std::complex<double>> Sigmac(ti+1);
-    for(int j = 0; j<=ti; j++){
-      Sigmac[j] = -std::conj(Sigma[j]);
-    }
-    hodlr::ZMatrixMap(corrK_rank[k]->Sigma_.curr_timestep_les_ptr(0,ti), (ti + 1) * size, size).noalias() = hodlr::ZMatrixMap(Sigmac.data(), (ti + 1) * size, size);
-  };
-
-  //sets Sigma^>(t,t') at local k index and real time t for all t'>=t
-  auto setRet = [&corrK_rank, &size, &mpi_rank](int k, int ti, std::vector<std::complex<double>> &Sigma){
-    hodlr::ZMatrixMap(corrK_rank[k]->Sigma_.curr_timestep_ret_ptr(ti,0), (ti + 1) * size, size).noalias() = hodlr::ZMatrixMap(Sigma.data(), (ti + 1) * size, size);
-  };
-
-  //sets Sigma^tv(t,tau) at local k index and real time t for all representative imaginary times
-  auto settv = [&corrK_rank, &size,&r](int k, int ti, std::vector<std::complex<double>> &Sigma){
-    hodlr::ZMatrixMap(corrK_rank[k]->Sigma_.tvptr(ti,0), r * size, size).noalias() = hodlr::ZMatrixMap(Sigma.data(), r * size, size);
-  };
-
-  //vectors of set functions
-  std::vector<std::function<void(int, int, std::vector<std::complex<double>>&)>> setsMat = {setMat};
-  std::vector<std::function<void(int, int, std::vector<std::complex<double>>&)>> setsLR = {setLess,setRet};   
-  std::vector<std::function<void(int, int, std::vector<std::complex<double>>&)>> setstv = {settv};
 
   int t0;
 

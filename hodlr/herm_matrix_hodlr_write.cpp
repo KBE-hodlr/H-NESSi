@@ -1,3 +1,11 @@
+#include <vector>
+#include <iostream>
+#include <string>
+
+#include "herm_matrix_hodlr.hpp"
+
+namespace hodlr {
+
 herm_matrix_hodlr::herm_matrix_hodlr(h5e::File &in, std::string label) :
   r_(in.getDataSet(label + std::string("/r")).read<int>())
 {
@@ -344,3 +352,4 @@ void herm_matrix_hodlr::write_GL0_to_hdf5(h5e::File &out, std::string label) {
   auto dset = out.createDataSet<cplx>(label + "/L0", HighFive::DataSpace(shape));
   dset.write_raw(GL_t.data());
 }
+} // namespace

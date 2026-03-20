@@ -1,3 +1,12 @@
+#include <vector>
+#include <iostream>
+#include <string>
+
+#include "herm_matrix_hodlr.hpp"
+
+namespace hodlr {
+
+
 double distance_norm2_curr_les(int tstp, herm_matrix_hodlr &g1, herm_matrix_hodlr &g2) {
   assert(g1.size1() == g2.size1());
   assert(tstp >= g1.tstpmk() && tstp >= g2.tstpmk());
@@ -118,4 +127,4 @@ double distance_norm2_tv(int tstp, herm_matrix_hodlr &g1, cntr::herm_matrix &g2,
 
 #endif
 
-
+} // namespace

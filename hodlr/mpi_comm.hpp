@@ -15,7 +15,7 @@
 #include "mpi_comm_utils.hpp"
 #include "herm_matrix_hodlr.hpp"
 
-using namespace hodlr;
+namespace hodlr {
 
 /**
  * @class mpi_comm
@@ -246,3 +246,5 @@ public:
   /// Number of orbitals, max_component_size_ = 2*nao*nao
   int nao_;
 };
+
+} // namespace
