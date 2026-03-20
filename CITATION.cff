@@ -19,8 +19,8 @@ authors:
 - family-names: "Golež"
   given-names: "Denis"
   orcid: "https://orcid.org/0000-0002-6054-2552"
-title: "trident"
+title: "H-NESSi"
 version: 1.0.0
 doi: 10.5281/zenodo.18990387
 date-released: 2026-03-12
-url: "https://github.com/KBE-hodlr/trident"
+url: "https://github.com/KBE-hodlr/H-NESSi"
