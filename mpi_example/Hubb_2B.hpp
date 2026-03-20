@@ -6,9 +6,9 @@
 #include <fftw3.h>
 #include <omp.h>
 
-#include "hodlr/mpi_comm.hpp"
-#include "hodlr/dlr.hpp"
-#include "hodlr/herm_matrix_hodlr.hpp"
+#include "h_nessi/mpi_comm.hpp"
+#include "h_nessi/dlr.hpp"
+#include "h_nessi/herm_matrix_hodlr.hpp"
 
 using namespace hodlr;
 

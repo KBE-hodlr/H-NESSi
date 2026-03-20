@@ -1,10 +1,10 @@
 #ifndef SC_GF2
 #define SC_GF2
 
-#include "hodlr/utils.hpp"
-#include "hodlr/herm_matrix_hodlr.hpp"
-#include "hodlr/function.hpp"
-#include "hodlr/dlr.hpp"
+#include "h_nessi/utils.hpp"
+#include "h_nessi/herm_matrix_hodlr.hpp"
+#include "h_nessi/function.hpp"
+#include "h_nessi/dlr.hpp"
 
 namespace hodlr {
 

@@ -5,7 +5,7 @@
  */
 
 #include "lattice.hpp"
-#include "hodlr/dyson.hpp"
+#include "h_nessi/dyson.hpp"
 /**
  * @class kpoint
  * @brief Represents a k-space point and provides methods for solving Dyson equations and managing Green's functions and Self-energy.

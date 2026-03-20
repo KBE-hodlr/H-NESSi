@@ -7,7 +7,7 @@
 
 #include <complex>
 
-#include "hodlr/herm_matrix_hodlr.hpp"
+#include "h_nessi/herm_matrix_hodlr.hpp"
 
 using Vector2D = Eigen::Vector2d;
 

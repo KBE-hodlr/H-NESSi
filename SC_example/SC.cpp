@@ -6,11 +6,11 @@
 
 
 // contour library headers
-#include "hodlr/read_inputfile.hpp"
-#include "hodlr/herm_matrix_hodlr.hpp"
-#include "hodlr/dyson.hpp"
-#include "SC_example/SC_gf2.hpp"
-#include "hodlr/integration.hpp"
+#include "h_nessi/read_inputfile.hpp"
+#include "h_nessi/herm_matrix_hodlr.hpp"
+#include "h_nessi/dyson.hpp"
+#include "h_nessi/integration.hpp"
+#include "SC_gf2.hpp"
 
 void fill_t0_mat(hodlr::function &phi_func, hodlr::function &t0_func) {
   t0_func.set_zero();

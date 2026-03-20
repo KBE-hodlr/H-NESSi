@@ -1,13 +1,13 @@
 #include <filesystem>
 
-#include "hodlr/mpi_comm.hpp"
-#include "hodlr/mpi_comm_utils.hpp"
+#include "h_nessi/mpi_comm.hpp"
+#include "h_nessi/mpi_comm_utils.hpp"
+#include "h_nessi/read_inputfile.hpp"
 #include "lattice.hpp"
 #include "kpoint.hpp"
 #include "Hubb_2B.hpp"
 #include "observables.hpp"
 
-#include "hodlr/read_inputfile.hpp"
 
 using namespace hodlr;
 

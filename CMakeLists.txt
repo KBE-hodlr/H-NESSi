@@ -67,7 +67,8 @@ CPMAddPackage(
 set(CMAKE_MESSAGE_LOG_LEVEL ${_old_log_level})
 
 # ~~ Paths and Subdirs ~~
-include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+# UPDATED: We point this to your new include directory
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 # ~~ Option to compile with Nessi ~~
 option(INCLUDE_NESSI "Compile functions that use nessi objects" OFF)
@@ -94,6 +95,8 @@ if(BUILD_TEST)
     add_subdirectory(tests)
 endif(BUILD_TEST)
 
-add_subdirectory(hodlr)
+# UPDATED: We build the library from the new src/ directory
+add_subdirectory(src)
+
 add_subdirectory(SC_example)
 add_subdirectory(mpi_example)

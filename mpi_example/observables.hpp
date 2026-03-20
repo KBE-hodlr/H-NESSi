@@ -6,7 +6,7 @@
 #pragma once
 
 #include "kpoint.hpp"
-#include "hodlr/mpi_comm_utils.hpp"
+#include "h_nessi/mpi_comm_utils.hpp"
 
 namespace observables {
 
