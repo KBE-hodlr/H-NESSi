@@ -1,9 +1,7 @@
 # TODO:
 finalize paper \
 polish README include link to paper when on arxiv \
-REDO Zenodo for new name on final release \
-Polish documentation, change "my project"
-
+REDO Zenodo for new name on final release 
 
 
 # HODLR [hierarchical off-diagonal low-rank structure] implementation for the Greens function
