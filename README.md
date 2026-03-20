@@ -1,8 +1,7 @@
 # TODO:
 finalize paper \
-polish README \
-put link to paper in the README \
-REDO Zenodo for new name \
+polish README include link to paper when on arxiv \
+REDO Zenodo for new name on final release \
 Polish documentation, change "my project"
 
 
