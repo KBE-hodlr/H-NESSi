@@ -1,4 +1,4 @@
-add_library(hodlr SHARED
+add_library(h_nessi SHARED
   herm_matrix_hodlr.cpp
   herm_matrix_hodlr_distance.cpp
   herm_matrix_hodlr_getit.cpp
@@ -25,21 +25,21 @@ add_library(hodlr SHARED
   mpi_comm_vecload.cpp
 )
 
-# Tell the hodlr target where to find its headers, both during build and after installation
-target_include_directories(hodlr PUBLIC 
+# Tell the h_nessi target where to find its headers, both during build and after installation
+target_include_directories(h_nessi PUBLIC 
     $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
 
 # Link your dependencies
-target_link_libraries(hodlr ${HDF5_LIBRARIES} HighFive dlr_c ${COMMON_LIBS} fftw3_omp)
+target_link_libraries(h_nessi ${HDF5_LIBRARIES} HighFive dlr_c ${COMMON_LIBS} fftw3_omp)
 
 if(INCLUDE_NESSI)
-  target_link_libraries(hodlr cntr)
+  target_link_libraries(h_nessi cntr)
 endif()
 
 # Grab the headers from the new directory structure (pointing to the project root -> include -> h_nessi)
-file(GLOB hodlr_HEADERS 
+file(GLOB h_nessi_HEADERS 
     "${CMAKE_SOURCE_DIR}/include/h_nessi/*.hpp"
     "${CMAKE_SOURCE_DIR}/include/h_nessi/*.h"
 )

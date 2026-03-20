@@ -6,7 +6,7 @@ foreach(exe ${programs})
     add_executable(${exe} ${EXE_${exe}_SOURCES})
     
     # Link the target. This automatically pulls in the include/h_nessi paths!
-    target_link_libraries(${exe} hodlr ${COMMON_LIBS} fftw3_omp)
+    target_link_libraries(${exe} h_nessi ${COMMON_LIBS} fftw3_omp)
 
 endforeach()
 

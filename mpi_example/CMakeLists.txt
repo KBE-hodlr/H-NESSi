@@ -9,8 +9,8 @@ foreach(exe ${mpi_EXECUTABLES})
     # declare the target...
     add_executable(${exe} ${EXE_${exe}_SOURCES})
     
-    # Linking hodlr automatically gives this executable access to include/h_nessi/
-    target_link_libraries(${exe} openblas hodlr ${COMMON_LIBS} fftw3)
+    # Linking h_nessi automatically gives this executable access to include/h_nessi/
+    target_link_libraries(${exe} openblas h_nessi ${COMMON_LIBS} fftw3)
 
 endforeach()
 

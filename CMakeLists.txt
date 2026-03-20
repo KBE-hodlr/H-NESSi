@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.13)
 set(CMAKE_CXX_STANDARD 20) 
-project("hodlr")
+project("h_nessi")
 
 set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 set(COMMON_LIBS "")
