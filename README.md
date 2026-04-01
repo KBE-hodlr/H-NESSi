@@ -1,6 +1,7 @@
 # TODO:
 finalize paper \
 polish README include link to paper when on arxiv \
+documentation can be found at https://kbe-hodlr.github.io/H-NESSi/ \
 
 # HODLR [hierarchical off-diagonal low-rank structure] implementation for the Greens function
 [![DOI](https://zenodo.org/badge/1180109148.svg)](https://doi.org/10.5281/zenodo.18990387)
