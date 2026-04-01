@@ -10,7 +10,7 @@ foreach(exe ${mpi_EXECUTABLES})
     add_executable(${exe} ${EXE_${exe}_SOURCES})
     
     # Linking h_nessi automatically gives this executable access to include/h_nessi/
-    target_link_libraries(${exe} openblas h_nessi ${COMMON_LIBS} fftw3)
+    target_link_libraries(${exe} h_nessi ${COMMON_LIBS} fftw3)
 
 endforeach()
 
