@@ -36,7 +36,7 @@ int main(int argc, char *argv[]) {
 
   //============================================================================
   //                             MPI INITIALIZATION
-  //============================================================================
+  //=================================/check===========================================
 
   MPI_Init(&argc,&argv);
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
@@ -75,9 +75,6 @@ int main(int argc, char *argv[]) {
   if (argc<4) {
     // Tell the user how to run the program
     std::cerr << " Please provide a prefix for the input and output files. Exiting ..." << "\n";
-    /* "Usage messages" are a conventional way of telling the user
-      * how to run a program if they enter the command incorrectly.
-      */
     return 1;
   }
 
@@ -310,8 +307,6 @@ int main(int argc, char *argv[]) {
       
       double err=0.0;
       double tot_err = 0.0;
-
-      if(mpi_rank==mpi_root) std::cout << "---- Time step ti = " << tstp << "\n";
 
       // Evaluate self-energy
       if(iter!=0){

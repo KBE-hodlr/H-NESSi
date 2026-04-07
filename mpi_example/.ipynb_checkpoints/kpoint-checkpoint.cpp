@@ -30,10 +30,10 @@ kpoint::kpoint(int nt,
     mu_=mu;
     kk_=kk;
 
-    hk_ = hodlr::function(nt_,size_,size_);
+    hk_ = h_nessi::function(nt_,size_,size_);
 
     rho_.resize(nt_);
-    for (auto& mat : rho_) mat = hodlr::DMatrix::Zero(size, size);
+    for (auto& mat : rho_) mat = h_nessi::DMatrix::Zero(size, size);
   
     for (int tstp=-1; tstp<nt_; tstp++) set_hk(tstp,latt,Ainitx);
   }
@@ -65,10 +65,10 @@ kpoint::kpoint(int nt,
     mu_=mu;
     kk_=kk;
 
-    hk_ = hodlr::function(nt_,size_,size_);
+    hk_ = h_nessi::function(nt_,size_,size_);
 
     rho_.resize(nt_);
-    for (auto& mat : rho_) mat = hodlr::DMatrix::Zero(size, size);
+    for (auto& mat : rho_) mat = h_nessi::DMatrix::Zero(size, size);
   
     for (int tstp=-1; tstp<nt_; tstp++) set_hk(tstp,latt,Ainitx);
   }
@@ -76,19 +76,19 @@ kpoint::kpoint(int nt,
 void kpoint::set_hk(int tstp,lattice_2d_ysymm &latt,double Ainitx)
 {
   assert(-1<=tstp && tstp<nt_);
-  hodlr::ZMatrix hktmp(1,1);
+  h_nessi::ZMatrix hktmp(1,1);
   latt.hk(hktmp,tstp,kk_,Ainitx);
   hk_.set_value(tstp, hktmp);
 }
 
-void kpoint::get_Density_matrix(int tstp, hodlr::dlr_info &dlr)
+void kpoint::get_Density_matrix(int tstp, h_nessi::dlr_info &dlr)
 {
-  hodlr::DMatrix tmp(size_,size_);
+  h_nessi::DMatrix tmp(size_,size_);
   G_.density_matrix(tstp,dlr,tmp);
   rho_[tstp] = tmp;
 }
 
-double kpoint::step_dyson(int tstp, int SolverOrder, lattice_2d_ysymm &latt, Integration::Integrator &I, hodlr::dyson &dyson_sol, hodlr::dlr_info &dlr)
+double kpoint::step_dyson(int tstp, int SolverOrder, lattice_2d_ysymm &latt, Integration::Integrator &I, h_nessi::dyson &dyson_sol, h_nessi::dlr_info &dlr)
 {
   // Solve Dyson
   if(tstp==-1){
@@ -100,7 +100,7 @@ double kpoint::step_dyson(int tstp, int SolverOrder, lattice_2d_ysymm &latt, Int
   } else if(tstp<=SolverOrder){
     double mu_temp = 0.0;
     double err = dyson_sol.dyson_start_ntti(G_,mu_temp,hk_,Sigma_,I,dt_,false);
-    get_Density_matrix(tstp,dlr);
+    for(int i = 0; i <= SolverOrder; i++) get_Density_matrix(i,dlr);
     return std::pow(err,2);
     
   } else{
