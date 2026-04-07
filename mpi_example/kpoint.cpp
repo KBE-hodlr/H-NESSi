@@ -100,7 +100,7 @@ double kpoint::step_dyson(int tstp, int SolverOrder, lattice_2d_ysymm &latt, Int
   } else if(tstp<=SolverOrder){
     double mu_temp = 0.0;
     double err = dyson_sol.dyson_start_ntti(G_,mu_temp,hk_,Sigma_,I,dt_,false);
-    get_Density_matrix(tstp,dlr);
+    for(int i = 0; i <= SolverOrder; i++) get_Density_matrix(i,dlr);
     return std::pow(err,2);
     
   } else{

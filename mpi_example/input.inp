@@ -1,7 +1,7 @@
 __checkpoint=  false
 __time_limit=  3600
 __memory_limit=  15000
-__write_GS=  false
+__write_GS=  true
 __write_tops=  true
 __L=  6
 __HoppingJ=  0.25
