@@ -81,28 +81,28 @@ std::array<int, 3> get_my_tauindex(int tid, int ntasks, int r){
 
 }
   
-int iflatten2(int kxi, int kyi, int Nk){
-  int i = kxi*Nk+kyi;
+int iflatten2(int kxi, int kyi, int Num_k){
+  int i = kxi*Num_k+kyi;
   return i;
   }
 
-int iflatten3(int kxi, int kyi, int taui, int Nk, int Ntau){
-  int i = kxi*(Nk*Ntau)+kyi*Ntau+taui;
+int iflatten3(int kxi, int kyi, int taui, int Num_k, int Ntau){
+  int i = kxi*(Num_k*Ntau)+kyi*Ntau+taui;
   return i;
   }
 
-int minus_xi(int x, int Nk){
+int minus_xi(int x, int Num_k){
   int i;
   if(x == 0){
     i = x;
   } else{
-    i = Nk-x;
+    i = Num_k-x;
   }
   return i;
 }
 
-int inverse_xi(int x, int Nk){
-  int i = Nk-1-x;
+int inverse_xi(int x, int Num_k){
+  int i = Num_k-1-x;
   return i;
 }
 

@@ -296,6 +296,19 @@ public:
   double dyson_timestep_2leg(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
 
   /**
+   * @brief Dissipative wrappers for dyson_timestep (function and pointer overloads).
+   */
+  double dyson_timestep_diss(int tstp, herm_matrix_hodlr &G, double mu, function &H, function &ellL, function &ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+  double dyson_timestep_diss(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, cplx *ellL, cplx *ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+  std::vector<double> dyson_timestep_errinfo_diss(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, cplx *ellL, cplx *ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+
+  double dyson_timestep_nobc_diss(int tstp, herm_matrix_hodlr &G, double mu, function &H, function &ellL, function &ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+  double dyson_timestep_nobc_diss(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, cplx *ellL, cplx *ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+
+  double dyson_timestep_2leg_diss(int tstp, herm_matrix_hodlr &G, double mu, function &H, function &ellL, function &ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+  double dyson_timestep_2leg_diss(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, cplx *ellL, cplx *ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+
+  /**
    * @brief Performs a Matsubara axis Dyson equation step (function Hamiltonian).
    * @param G Green's function object.
    * @param mu Chemical potential.
@@ -330,6 +343,10 @@ public:
    * @return Error estimate.
    */
   double dyson_timestep_ret(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+  /**
+   * @brief Dissipative variant of retarded Dyson time step (pointer Hamiltonian).
+   */
+  double dyson_timestep_ret_diss(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, cplx *ellL, cplx *ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
 
   /**
    * @brief Performs a mixed axis Dyson equation step.
@@ -343,6 +360,10 @@ public:
    * @return Error estimate.
    */
   double dyson_timestep_tv(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+  /**
+   * @brief Dissipative variant of mixed-axis Dyson time step (pointer Hamiltonian).
+   */
+  double dyson_timestep_tv_diss(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, cplx *ellL, cplx *ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
    * @brief Performs imaginary time convolution appearing in Mixed KBE.
    * @param tstp Time step index.
@@ -398,6 +419,10 @@ public:
    */
   double dyson_timestep_les(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
+   * @brief Dissipative variant of lesser Dyson time step (pointer Hamiltonian).
+   */
+  double dyson_timestep_les_diss(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, cplx *ellL, cplx *ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+  /**
    * @brief Performs a lesser component Dyson equation step without using Mixed component BC - for debugging.
    * @param tstp Time step index.
    * @param G Green's function object.
@@ -410,6 +435,10 @@ public:
    */
   double dyson_timestep_les_nobc(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
+   * @brief Dissipative variant of lesser Dyson time step without BC (pointer Hamiltonian).
+   */
+  double dyson_timestep_les_nobc_diss(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, cplx *ellL, cplx *ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+  /**
    * @brief Performs a lesser component Dyson equation step for two-leg contour.
    * @param tstp Time step index.
    * @param G Green's function object.
@@ -421,6 +450,10 @@ public:
    * @return Error estimate.
    */
   double dyson_timestep_les_2leg(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+  /**
+   * @brief Dissipative variant of two-leg lesser Dyson time step (pointer Hamiltonian).
+   */
+  double dyson_timestep_les_2leg_diss(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, cplx *ellL, cplx *ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
    * @brief Performs imaginary time integral appearing in lesser KBE.
    * @param tstp Time step index.
@@ -470,6 +503,24 @@ public:
    * @return Error estimate.
    */
   double dyson_start(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+  /**
+   * @brief Dissipative variant of bootstrapping for Dyson (complex Hamiltonian).
+   */
+  double dyson_start_diss(herm_matrix_hodlr &G, double mu, cplx *H, cplx *ellL, cplx *ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+  /**
+   * @brief Function overloads for dissipative bootstrapping wrappers (function Hamiltonian).
+   */
+  double dyson_start_diss(herm_matrix_hodlr &G, double mu, function &H, function &ellL, function &ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+  double dyson_start_tv_diss(herm_matrix_hodlr &G, double mu, function &H, function &ellL, function &ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+  double dyson_start_ret_diss(herm_matrix_hodlr &G, double mu, function &H, function &ellL, function &ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+  double dyson_start_ret_ntti_diss(herm_matrix_hodlr &G, double mu, function &H, function &ellL, function &ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h, bool imp_tp0 = false);
+  double dyson_start_les_diss(herm_matrix_hodlr &G, double mu, function &H, function &ellL, function &ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+  double dyson_start_les_ntti_diss(herm_matrix_hodlr &G, double mu, function &H, function &ellL, function &ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+  double dyson_start_les_ntti_nobc_diss(herm_matrix_hodlr &G, double mu, function &H, function &ellL, function &ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+  double dyson_start_les_2leg_diss(herm_matrix_hodlr &G, double mu, function &H, function &ellL, function &ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+  double dyson_start_ntti_diss(herm_matrix_hodlr &G, double mu, function &H, function &ellL, function &ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h, bool imp_tp0 = false);
+  double dyson_start_ntti_nobc_diss(herm_matrix_hodlr &G, double mu, function &H, function &ellL, function &ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h, bool imp_tp0 = false);
+  double dyson_start_2leg_diss(herm_matrix_hodlr &G, double mu, function &H, function &ellL, function &ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h, bool imp_tp0 = false);
   /**
    * @brief Performs bootstrapping for Dyson equation solution with non-time-translation-invariant Hamiltonian (function Hamiltonian).
    * @param G Green's function object.
@@ -565,6 +616,10 @@ public:
    */
   double dyson_start_ret(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
+   * @brief Dissipative variant of retarded bootstrapping (complex Hamiltonian).
+   */
+  double dyson_start_ret_diss(herm_matrix_hodlr &G, double mu, cplx *H, cplx *ellL, cplx *ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+  /**
    * @brief Performs bootstrapping for retarded axis Dyson equation solution with non-time-translation-invariant boundary conditions (function Hamiltonian).
    * @param G Green's function object.
    * @param mu Chemical potential.
@@ -589,6 +644,10 @@ public:
    */
   double dyson_start_ret_ntti(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h, bool imp_tp0 = false);
   /**
+   * @brief Dissipative variant of retarded bootstrapping with NTTI (complex Hamiltonian).
+   */
+  double dyson_start_ret_ntti_diss(herm_matrix_hodlr &G, double mu, cplx *H, cplx *ellL, cplx *ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h, bool imp_tp0 = false);
+  /**
    * @brief Performs bootstrapping for mixed component Dyson equation solution (function Hamiltonian).
    * @param G Green's function object.
    * @param mu Chemical potential.
@@ -610,6 +669,10 @@ public:
    * @return Error estimate.
    */
   double dyson_start_tv(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+  /**
+   * @brief Dissipative variant of mixed-axis bootstrapping (complex Hamiltonian).
+   */
+  double dyson_start_tv_diss(herm_matrix_hodlr &G, double mu, cplx *H, cplx *ellL, cplx *ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
    * @brief Performs bootstrapping for lesser axis Dyson equation solution - assumes steady-state for first k timesteps (function Hamiltonian).
    * @param G Green's function object.
@@ -633,6 +696,10 @@ public:
    */
   double dyson_start_les(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
+   * @brief Dissipative variant of lesser bootstrapping (complex Hamiltonian).
+   */
+  double dyson_start_les_diss(herm_matrix_hodlr &G, double mu, cplx *H, cplx *ellL, cplx *ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+  /**
    * @brief Performs bootstrapping for lesser axis Dyson equation solution with non-time-translation-invariant boundary conditions (function Hamiltonian).
    * @param G Green's function object.
    * @param mu Chemical potential.
@@ -654,6 +721,16 @@ public:
    * @return Error estimate.
    */
   double dyson_start_les_ntti(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+  /**
+   * @brief Dissipative variant of lesser bootstrapping with NTTI (complex Hamiltonian).
+   */
+  double dyson_start_les_ntti_diss(herm_matrix_hodlr &G, double mu, cplx *H, cplx *ellL, cplx *ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+  /**
+   * @brief Dissipative pointer overloads for bootstrapping wrappers.
+   */
+  double dyson_start_ntti_diss(herm_matrix_hodlr &G, double mu, cplx *H, cplx *ellL, cplx *ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h, bool imp_tp0 = false);
+  double dyson_start_ntti_nobc_diss(herm_matrix_hodlr &G, double mu, cplx *H, cplx *ellL, cplx *ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h, bool imp_tp0 = false);
+  double dyson_start_2leg_diss(herm_matrix_hodlr &G, double mu, cplx *H, cplx *ellL, cplx *ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h, bool imp_tp0 = false);
   /**
    * @brief Performs bootstrapping for lesser axis Dyson equation solution with no boundary condition (function Hamiltonian).
    * @param G Green's function object.
@@ -677,6 +754,10 @@ public:
    */
   double dyson_start_les_ntti_nobc(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
+   * @brief Dissipative variant of lesser bootstrapping with NTTI and no BC (complex Hamiltonian).
+   */
+  double dyson_start_les_ntti_nobc_diss(herm_matrix_hodlr &G, double mu, cplx *H, cplx *ellL, cplx *ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+  /**
    * @brief Performs bootstrapping for lesser axis Dyson equation solution for two-leg contour (function Hamiltonian).
    * @param G Green's function object.
    * @param mu Chemical potential.
@@ -698,6 +779,10 @@ public:
    * @return Error estimate.
    */
   double dyson_start_les_2leg(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
+  /**
+   * @brief Dissipative variant of two-leg lesser bootstrapping (complex Hamiltonian).
+   */
+  double dyson_start_les_2leg_diss(herm_matrix_hodlr &G, double mu, cplx *H, cplx *ellL, cplx *ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
 
 
   /**

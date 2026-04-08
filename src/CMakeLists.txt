@@ -12,11 +12,14 @@ add_library(h_nessi SHARED
   block.cpp
   blocks_keldysh.cpp
   dyson.cpp
+  dyson_diss.cpp
   dyson_free.cpp
   dyson_it_integrals.cpp
   dyson_mat.cpp
   dyson_start.cpp
+  dyson_start_diss.cpp
   dyson_timestep.cpp
+  dyson_timestep_diss.cpp
   integration.cpp
   read_inputfile.cpp
   dlr.cpp
