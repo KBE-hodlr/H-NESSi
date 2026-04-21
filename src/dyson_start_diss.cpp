@@ -64,8 +64,9 @@ double dyson::dyson_start_tv_diss(herm_matrix_hodlr &G, double mu, cplx *H, cplx
         }
 
         // Delta energy term
+        // h_o = h - i(\ell^> -\xi \ell^<)
         if(l==n){
-          MMapBlock.noalias() += mu*IMap - ZMatrixMap(H + l*es_, nao_, nao_);
+          MMapBlock.noalias() += mu*IMap - ZMatrixMap(H + l*es_, nao_, nao_) + cplxi * (ZMatrixMap(ellG+l*es_, nao_, nao_) - G.sig() * ZMatrixMap(ellL+l*es_, nao_, nao_));
         }
 
         // Integral term
@@ -162,7 +163,8 @@ double dyson::dyson_start_ret_ntti_diss(herm_matrix_hodlr &G, double mu, cplx *H
 
       for(l = m+1; l <= k_; l++) {
         MMap.block((n-m-1)*nao_, (l-m-1)*nao_, nao_, nao_) += -ncplxi/h * I.poly_diff(n,l) * IMap;
-        if(n==l) MMap.block((n-m-1)*nao_, (l-m-1)*nao_, nao_, nao_) += mu*IMap - ZMatrixMap(H + l*es_, nao_, nao_);
+        // h_o = h - i(\ell^> -\xi \ell^<)
+        if(n==l) MMap.block((n-m-1)*nao_, (l-m-1)*nao_, nao_, nao_) += mu*IMap - ZMatrixMap(H + l*es_, nao_, nao_) - ncplxi * (ZMatrixMap(ellG+l*es_, nao_, nao_) - G.sig() * ZMatrixMap(ellL+l*es_, nao_, nao_));
         if(n>=l) MMap.block((n-m-1)*nao_, (l-m-1)*nao_, nao_, nao_) += -h*I.poly_integ(m,n,l) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(n,l), nao_, nao_);
         else     MMap.block((n-m-1)*nao_, (l-m-1)*nao_, nao_, nao_) -= -h*I.poly_integ(m,n,l) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(n,l), nao_, nao_).adjoint();
       }
@@ -180,13 +182,13 @@ double dyson::dyson_start_ret_ntti_diss(herm_matrix_hodlr &G, double mu, cplx *H
     }
   }
 
+  // We solve the t' equation downwards at all k slices to get G^R(t,0)
   if(imp_tp0) {
     for(m = 1; m <= k_; m++) {
       ZMatrixMap MMap0 = ZMatrixMap(M_.data(), nao_, nao_);
       ZMatrixMap QMap0 = ZMatrixMap(Q_.data(), nao_, nao_);
-//CHECK FOR DISSIPATIVE DYNAMICS
-      MMap0 = -ncplxi/h * I.poly_diff(k_,k_) * IMap - ZMatrixMap(H, nao_, nao_).adjoint() + mu*IMap - h * I.poly_integ(k_-m,k_,k_) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(0,0), nao_, nao_);
-//      MMap0 = -ncplxi/h * I.poly_diff(k_,k_) * IMap - ZMatrixMap(H, nao_, nao_) + mu*IMap - h * I.poly_integ(k_-m,k_,k_) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(0,0), nao_, nao_);
+      // h_o = h - i(\ell^> -\xi \ell^<)
+      MMap0 = -ncplxi/h * I.poly_diff(k_,k_) * IMap - ZMatrixMap(H, nao_, nao_) - ncplxi * (ZMatrixMap(ellG, nao_, nao_) - G.sig() * ZMatrixMap(ellL, nao_, nao_)) + mu*IMap - h * I.poly_integ(k_-m,k_,k_) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(0,0), nao_, nao_);
       QMap0.setZero();
       for(int i = 0; i < k_-m; i++)  QMap0 -= ncplxi/h * I.poly_diff(k_,i) * ZMatrixMap(G.curr_timestep_ret_ptr(k_-i,m), nao_, nao_).adjoint();
       for(int i = k_-m; i < k_; i++) QMap0 += ncplxi/h * I.poly_diff(k_,i) * ZMatrixMap(G.curr_timestep_ret_ptr(m,k_-i), nao_, nao_);
@@ -239,6 +241,7 @@ double dyson::dyson_start_les_ntti_diss(herm_matrix_hodlr &G, double mu, cplx *H
     ZMatrixMap(DIC.data() + (i-1)*es_, nao_, nao_) = ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_);
   }
 
+  // Here we are using the t' equation and solving upwards from the IC at G^<(m,0)
   for(int m = 1; m <= k_; m++) {
     ZMatrix MIC = ZMatrix::Zero(k_*nao_, k_*nao_);
     ZMatrix XIC = ZMatrix::Zero(k_*nao_, nao_);
@@ -254,6 +257,10 @@ double dyson::dyson_start_les_ntti_diss(herm_matrix_hodlr &G, double mu, cplx *H
       }
       QBlock -= (h * I.poly_integ(0,n,0) * ZMatrixMap(G.curr_timestep_les_ptr(0,m), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_ret_ptr(n,0), nao_, nao_).adjoint()).transpose();
       QBlock -= (cplxi/h * I.poly_diff(n,0) * ZMatrixMap(G.curr_timestep_les_ptr(0,m), nao_, nao_).adjoint()).transpose();
+      // additional dissipative term
+      // Using notation from Table 4.1 from thesis q_n = \xi 2 G^R_{mn}\ell^<_n
+      // Q_n = -i [q_n - y_0 M_{0n}]
+      if(m>=n) QBlock -= (2. * G.sig() * cplxi * ZMatrixMap(G.curr_timestep_ret_ptr(m,n), nao_, nao_) * ZMatrixMap(ellL + n*es_, nao_, nao_)).transpose();
 
       ZMatrixMap(M_.data(), nao_, nao_) = ZMatrix::Zero(nao_, nao_);
       les_it_int(m, n, G, Sigma, M_.data());
@@ -263,9 +270,10 @@ double dyson::dyson_start_les_ntti_diss(herm_matrix_hodlr &G, double mu, cplx *H
       for(int l = 1; l <= k_; l++) {
         auto MBlock = MIC.block((n-1)*nao_, (l-1)*nao_, nao_, nao_);
         MBlock += -cplxi/h * I.poly_diff(n,l) * IMap;
-// CHECK FOR DISSIPATIVE DYNAMICS
-        if(n==l) MBlock -= ZMatrixMap(H+l*es_, nao_, nao_).conjugate() - mu*IMap;
-//        if(n==l) MBlock -= ZMatrixMap(H+l*es_, nao_, nao_).transpose() - mu*IMap;
+        // h_o = h - i(\ell^> -\xi \ell^<)
+        // we use the adjoint equation, so h and i share same sign
+        if(n==l) MBlock -= ZMatrixMap(H+l*es_, nao_, nao_).transpose() - mu*IMap;
+        if(n==l) MBlock -= cplxi * (ZMatrixMap(ellG+l*es_, nao_, nao_) - G.sig() * ZMatrixMap(ellL+l*es_, nao_, nao_)).transpose();
         if(n>=l) MBlock -= (h * I.poly_integ(0,n,l) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(n,l), nao_, nao_).adjoint()).transpose();
         else if(n<l) MBlock += (h * I.poly_integ(0,n,l) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(l,n), nao_, nao_)).transpose();
       }
@@ -294,11 +302,22 @@ double dyson::dyson_start_les_ntti_diss(herm_matrix_hodlr &G, double mu, cplx *H
       }
     }
 
+    // Solving \partial_t G = -ih_oG -iG^\dagger h_o^\dagger -iI -iI^\dagger -2\xi i\ell^<
+    //                      = -ih_oG +iG h_o^\dagger -iI -iI^\dagger -2\xi i\ell^<
+    //                      = [iG h_o^\dagger-iI^\dagger] + [-ih_oG-iI] -2\xi i\ell^<
+    //                      = [iG h_o^\dagger-iI^\dagger] + [iG^\dagger h_o^\dagger + iI^dagger]^\dagger -2\xi i\ell^<
+    //                      = [iG h_o^\dagger-iI^\dagger] + [-iG h_o^\dagger + iI^dagger]^\dagger -2\xi i\ell^<
+    //                      = [iG h_o^\dagger-iI^\dagger] - [iG h_o^\dagger - iI^dagger]^\dagger -2\xi i\ell^<
+    // I         =  S^R G^< + S^< G^A
+    // I^\dagger = -G^< S^A - G^R S^<
     for(int i = 1; i <= k_; i++) {
       auto QBlock = QIC.block((i-1)*nao_, 0, nao_, nao_);
-// CHECK FOR DISSIPATIVE DYNAMICS
-      QBlock += cplxi * ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) * (ZMatrixMap(H+i*es_, nao_, nao_).adjoint() - mu*IMap);
-//      QBlock += cplxi * ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) * (ZMatrixMap(H+i*es_, nao_, nao_) - mu*IMap);
+      // h_o = h - i(\ell^> -\xi \ell^<)
+      // we use the adjoint, so h and i share same sign
+      QBlock += cplxi * ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) * (ZMatrixMap(H+i*es_, nao_, nao_) 
+                                                                                + cplxi * (ZMatrixMap(ellG+l*es_, nao_, nao_) 
+                                                                                           - G.sig() * ZMatrixMap(ellL+l*es_, nao_, nao_)) 
+                                                                                - mu*IMap);
 
       for(int l = 0; l <= i; l++) {
         QBlock += cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_ret_ptr(i,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_les_ptr(l,i), nao_, nao_);
@@ -320,6 +339,7 @@ double dyson::dyson_start_les_ntti_diss(herm_matrix_hodlr &G, double mu, cplx *H
       QBlock = ZMatrixMap(XIC.data(), nao_, nao_);
 
       QBlock -= 1./h * I.poly_diff(i,0) * ZMatrixMap(G.curr_timestep_les_ptr(0,0), nao_, nao_);
+      QBlock -= 2. * G.sig() * cplxi * ZMatrixMap(ellL+l*es_, nao_, nao_);
     }
 
     Eigen::FullPivLU<ZMatrix> lu3(MIC);

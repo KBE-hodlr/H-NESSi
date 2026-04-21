@@ -1,3 +1,9 @@
+// TODO: 
+// 3. implement ellG and ellL in start functions
+// 4. implement ellG and ellL in timestep functions
+// 5. implement 2-leg integration in this file
+
+
 #include <filesystem>
 
 #include "h_nessi/mpi_comm.hpp"

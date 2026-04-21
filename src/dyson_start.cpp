@@ -180,6 +180,7 @@ double dyson::dyson_start_ret_ntti(herm_matrix_hodlr &G, double mu, cplx *H, her
     }
   }
 
+  // We solve the t' equation downwards at all k slices to get G^R(t,0)
   if(imp_tp0) {
     for(m = 1; m <= k_; m++) {
       ZMatrixMap MMap0 = ZMatrixMap(M_.data(), nao_, nao_);
@@ -239,6 +240,7 @@ double dyson::dyson_start_les_ntti(herm_matrix_hodlr &G, double mu, cplx *H, her
     ZMatrixMap(DIC.data() + (i-1)*es_, nao_, nao_) = ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_);
   }
 
+  // Here we are using the t' equation and solving upwards from the IC at G^<(m,0)
   for(int m = 1; m <= k_; m++) {
     ZMatrix MIC = ZMatrix::Zero(k_*nao_, k_*nao_);
     ZMatrix XIC = ZMatrix::Zero(k_*nao_, nao_);
