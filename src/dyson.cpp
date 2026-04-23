@@ -51,7 +51,7 @@ dlr_(dlr)
 
   Q_.resize((nt_+1) * es_);
   X_.resize((nt_+1) * es_);
-  M_.resize(k * k * es_);
+  M_.resize((k+1) * k * es_);
   iden_.resize(es_);
   bound_.resize(es_);
 
@@ -120,7 +120,7 @@ dlr_(dlr)
 
   Q_.resize((nt_+1) * es_);
   X_.resize((nt_+1) * es_);
-  M_.resize(k_ * k_ * es_);
+  M_.resize((k_+1) * k_ * es_);
   iden_.resize(es_);
   bound_.resize(es_);
 
