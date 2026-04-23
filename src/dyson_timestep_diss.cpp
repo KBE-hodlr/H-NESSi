@@ -71,8 +71,7 @@ double dyson::dyson_timestep_ret_diss(int tstp, herm_matrix_hodlr &G, double mu,
         // EOM contains -G^R(t,t-t')[\epsilon^\mu(t-t')]
         //           =  -G^R(t,t-t')[h - \mu - i(\ell^> -\xi \ell^<)]
         MMapBlock.noalias() += mu * IMap - ZMatrixMap(H + (tstp-n)*es_, nao_, nao_).transpose();
-        MMapBlock.noalias() -= ncplxi * ZMatrixMap(ellG + (tstp-n)*es_, nao_, nao_).transpose();
-        MMapBlock.noalias() -= ncplxi * -1 * G.sig() * ZMatrixMap(ellL + (tstp-n)*es_, nao_, nao_).transpose();
+        MMapBlock.noalias() -= ncplxi * (ZMatrixMap(ellG + (tstp-n)*es_, nao_, nao_) - G.sig() * ZMatrixMap(ellL + (tstp-n)*es_, nao_, nao_)).transpose();
       }
 
       // Integral terms
@@ -338,7 +337,7 @@ double dyson::dyson_timestep_les_nobc_diss(int tstp, herm_matrix_hodlr &G, doubl
     // Additional Dissipative Term
     // \mp 2i\ell^<(t)G^A(t, T)
     // \mp 2i\ell^<(t)G^R(T, t)^\dagger
-    QMapBlock.noalias() += - G.sig() * 2 * cplxi * ZMatrixMap(ellL+m*es_, nao_, nao_) * ZMatrixMap(G.curr_timestep_ret_ptr(tstp, m), nao_, nao_).adjoint();
+    QMapBlock.noalias() += - G.sig() * 2. * cplxi * ZMatrixMap(ellL+m*es_, nao_, nao_) * ZMatrixMap(G.curr_timestep_ret_ptr(tstp, m), nao_, nao_).adjoint();
 
     for(int l = 0; l <= k_; l++) {
       auto MMapBlock = MMap.block((m-1)*nao_,(l==0)? 0:(l-1)*nao_, nao_, nao_);
@@ -490,7 +489,7 @@ double dyson::dyson_timestep_les_nobc_diss(int tstp, herm_matrix_hodlr &G, doubl
       // Additional Dissipative Term
       // \mp 2i\ell^<(t)G^A(t, T)
       // \mp 2i\ell^<(t)G^R(T, t)^\dagger
-      QMapBlock.noalias() += - G.sig() * 2 * cplxi * ZMatrixMap(ellL+m*es_, nao_, nao_) * ZMatrixMap(G.curr_timestep_ret_ptr(tstp, m), nao_, nao_).adjoint();
+      QMapBlock.noalias() += - G.sig() * 2. * cplxi * ZMatrixMap(ellL+m*es_, nao_, nao_) * ZMatrixMap(G.curr_timestep_ret_ptr(tstp, m), nao_, nao_).adjoint();
     }
     else if(rho_version_ == 0) { // HORIZONTAL FOR RHO
       // Set up M 
@@ -506,7 +505,7 @@ double dyson::dyson_timestep_les_nobc_diss(int tstp, herm_matrix_hodlr &G, doubl
       // Additional Dissipative Term
       // \mp 2i\ell^<(t)G^A(t, T)
       // \mp 2i\ell^<(t)G^R(T, t)^\dagger
-      QMapBlock.noalias() += - G.sig() * 2 * cplxi * ZMatrixMap(ellL+m*es_, nao_, nao_) * ZMatrixMap(G.curr_timestep_ret_ptr(tstp, m), nao_, nao_).adjoint();
+      QMapBlock.noalias() += - G.sig() * 2. * cplxi * ZMatrixMap(ellL+m*es_, nao_, nao_) * ZMatrixMap(G.curr_timestep_ret_ptr(tstp, m), nao_, nao_).adjoint();
     }
     else if(rho_version_ == 1) { // DIAGONAL FOR RHO
       // finish integral
@@ -675,7 +674,7 @@ double dyson::dyson_timestep_les_2leg_diss(int tstp, herm_matrix_hodlr &G, doubl
     // Additional Dissipative Term
     // \mp 2i\ell^<(t)G^A(t, T)
     // \mp 2i\ell^<(t)G^R(T, t)^\dagger
-    QMapBlock.noalias() += - G.sig() * 2 * cplxi * ZMatrixMap(ellL+m*es_, nao_, nao_) * ZMatrixMap(G.curr_timestep_ret_ptr(tstp, m), nao_, nao_).adjoint();
+    QMapBlock.noalias() += - G.sig() * 2. * cplxi * ZMatrixMap(ellL+m*es_, nao_, nao_) * ZMatrixMap(G.curr_timestep_ret_ptr(tstp, m), nao_, nao_).adjoint();
 
     for(int l = 0; l <= k_; l++) {
       auto MMapBlock = MMap.block((m-1)*nao_,(l==0)? 0:(l-1)*nao_, nao_, nao_);
@@ -827,7 +826,7 @@ double dyson::dyson_timestep_les_2leg_diss(int tstp, herm_matrix_hodlr &G, doubl
       // Additional Dissipative Term
       // \mp 2i\ell^<(t)G^A(t, T)
       // \mp 2i\ell^<(t)G^R(T, t)^\dagger
-      QMapBlock.noalias() += - G.sig() * 2 * cplxi * ZMatrixMap(ellL+m*es_, nao_, nao_) * ZMatrixMap(G.curr_timestep_ret_ptr(tstp, m), nao_, nao_).adjoint();
+      QMapBlock.noalias() += - G.sig() * 2. * cplxi * ZMatrixMap(ellL+m*es_, nao_, nao_) * ZMatrixMap(G.curr_timestep_ret_ptr(tstp, m), nao_, nao_).adjoint();
     }
     else if(rho_version_ == 0) { // HORIZONTAL FOR RHO
       // Set up M 
@@ -844,7 +843,7 @@ double dyson::dyson_timestep_les_2leg_diss(int tstp, herm_matrix_hodlr &G, doubl
       // Additional Dissipative Term
       // \mp 2i\ell^<(t)G^A(t, T)
       // \mp 2i\ell^<(t)G^R(T, t)^\dagger
-      QMapBlock.noalias() += - G.sig() * 2 * cplxi * ZMatrixMap(ellL+m*es_, nao_, nao_) * ZMatrixMap(G.curr_timestep_ret_ptr(tstp, m), nao_, nao_).adjoint();
+      QMapBlock.noalias() += - G.sig() * 2. * cplxi * ZMatrixMap(ellL+m*es_, nao_, nao_) * ZMatrixMap(G.curr_timestep_ret_ptr(tstp, m), nao_, nao_).adjoint();
     }
     else if(rho_version_ == 1) { // DIAGONAL FOR RHO
       // finish integral
@@ -949,7 +948,7 @@ double dyson::dyson_timestep_les_diss(int tstp, herm_matrix_hodlr &G, double mu,
     // Additional Dissipative Term
     // \mp 2i\ell^<(t)G^A(t, T)
     // \mp 2i\ell^<(t)G^R(T, t)^\dagger
-    QMapBlock.noalias() += - G.sig() * 2 * cplxi * ZMatrixMap(ellL+m*es_, nao_, nao_) * ZMatrixMap(G.curr_timestep_ret_ptr(tstp, m), nao_, nao_).adjoint();
+    QMapBlock.noalias() += - G.sig() * 2. * cplxi * ZMatrixMap(ellL+m*es_, nao_, nao_) * ZMatrixMap(G.curr_timestep_ret_ptr(tstp, m), nao_, nao_).adjoint();
 
     for(int l = 0; l <= k_; l++) {
       auto MMapBlock = MMap.block((m-1)*nao_,(l==0)? 0:(l-1)*nao_, nao_, nao_);
@@ -1099,7 +1098,7 @@ double dyson::dyson_timestep_les_diss(int tstp, herm_matrix_hodlr &G, double mu,
       // Additional Dissipative Term
       // \mp 2i\ell^<(t)G^A(t, T)
       // \mp 2i\ell^<(t)G^R(T, t)^\dagger
-      QMapBlock.noalias() += - G.sig() * 2 * cplxi * ZMatrixMap(ellL+m*es_, nao_, nao_) * ZMatrixMap(G.curr_timestep_ret_ptr(tstp, m), nao_, nao_).adjoint();
+      QMapBlock.noalias() += - G.sig() * 2. * cplxi * ZMatrixMap(ellL+m*es_, nao_, nao_) * ZMatrixMap(G.curr_timestep_ret_ptr(tstp, m), nao_, nao_).adjoint();
     }
     else if(rho_version_ == 0) { // HORIZONTAL FOR RHO
       // Set up M 
@@ -1116,7 +1115,7 @@ double dyson::dyson_timestep_les_diss(int tstp, herm_matrix_hodlr &G, double mu,
       // Additional Dissipative Term
       // \mp 2i\ell^<(t)G^A(t, T)
       // \mp 2i\ell^<(t)G^R(T, t)^\dagger
-      QMapBlock.noalias() += - G.sig() * 2 * cplxi * ZMatrixMap(ellL+m*es_, nao_, nao_) * ZMatrixMap(G.curr_timestep_ret_ptr(tstp, m), nao_, nao_).adjoint();
+      QMapBlock.noalias() += - G.sig() * 2. * cplxi * ZMatrixMap(ellL+m*es_, nao_, nao_) * ZMatrixMap(G.curr_timestep_ret_ptr(tstp, m), nao_, nao_).adjoint();
     }
     else if(rho_version_ == 1) { // DIAGONAL FOR RHO
       // finish integral

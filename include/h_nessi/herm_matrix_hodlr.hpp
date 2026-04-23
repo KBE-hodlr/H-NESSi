@@ -270,19 +270,48 @@ class herm_matrix_hodlr{
 
   // Mutators (Set)
   /** Store matsubara matrix at dlr index i from an Eigen matrix. */
-  void set_mat(int i, DMatrix &M);
-  /** Store matsubara matrix at dlr index i from a raw double buffer. */
-  void set_mat(int i, double *M);
+  void set_mat(int i, const DMatrix &M);
+  void set_mat(int i, const double *M);
+  template <typename Derived>
+  void set_mat(int i, const Eigen::MatrixBase<Derived>& expr) {
+    assert(expr.rows() == size1_ && expr.cols() == size2_ && "Expression size mismatch!");
+    double* raw_dest_ptr = matptr(i);
+    Eigen::Map<DMatrix> dest_map(raw_dest_ptr, size1_, size2_);
+    dest_map = expr;
+  }
   /** Store tv component (t1,t2) from an Eigen complex matrix. */
-  void set_tv(int t1, int t2, ZMatrix &M);
-  /** Store tv component (t1,t2) from a raw complex buffer. */
-  void set_tv(int t1, int t2, cplx* M);
+  void set_tv(int t1, int t2, const ZMatrix &M);
+  void set_tv(int t1, int t2, const cplx* M);
+  template <typename Derived>
+  void set_tv(int t1, int t2, const Eigen::MatrixBase<Derived>& expr) {
+    assert(expr.rows() == size1_ && expr.cols() == size2_ && "Expression size mismatch!");
+    cplx* raw_dest_ptr = tvptr(t1, t2);
+    Eigen::Map<ZMatrix> dest_map(raw_dest_ptr, size1_, size2_);
+    dest_map = expr;
+    cplx* raw_dest_ptr2 = tvptr_trans(t1, t2);
+    Eigen::Map<ZMatrix> dest_map2(raw_dest_ptr2, size1_, size2_);
+    dest_map2 = dest_map.transpose();
+  }
   /** Store retarded current-timestep buffer entry (t1,t2). */
-  void set_ret_curr(int t1, int t2, ZMatrix &M);
-  void set_ret_curr(int t1, int t2, cplx* M);
+  void set_ret_curr(int t1, int t2, const ZMatrix &M);
+  void set_ret_curr(int t1, int t2, const cplx* M);
+  template <typename Derived>
+  void set_ret_curr(int t1, int t2, const Eigen::MatrixBase<Derived>& expr) {
+    assert(expr.rows() == size1_ && expr.cols() == size2_ && "Expression size mismatch!");
+    cplx* raw_dest_ptr = curr_timestep_ret_ptr(t1, t2);
+    Eigen::Map<ZMatrix> dest_map(raw_dest_ptr, size1_, size2_);
+    dest_map = expr;
+  }
   /** Store lesser current-timestep buffer entry (t1,t2). */
-  void set_les_curr(int t1, int t2, ZMatrix &M);
-  void set_les_curr(int t1, int t2, cplx* M);
+  void set_les_curr(int t1, int t2, const ZMatrix &M);
+  void set_les_curr(int t1, int t2, const cplx* M);
+  template <typename Derived>
+  void set_les_curr(int t1, int t2, const Eigen::MatrixBase<Derived>& expr) {
+    assert(expr.rows() == size1_ && expr.cols() == size2_ && "Expression size mismatch!");
+    cplx* raw_dest_ptr = curr_timestep_les_ptr(t1, t2);
+    Eigen::Map<ZMatrix> dest_map(raw_dest_ptr, size1_, size2_);
+    dest_map = expr;
+  }
 
   // Get/set for current timesteps
   /** Copy the current timestep `tstp` data into `G`. */

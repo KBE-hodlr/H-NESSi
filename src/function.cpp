@@ -90,7 +90,7 @@ void function::set_value(int t, int i, int j, cplx v) {
   ptr(t)[i*size1_ + j] = v;
 }
 
-void function::set_value(int t, ZMatrix &M) {
+void function::set_value(int t, const ZMatrix &M) {
   ZMatrixMap(ptr(t), size1_, size2_) = M;
 }
 
@@ -98,7 +98,7 @@ void function::get_value(int t, ZMatrix &M) {
   M = ZMatrixMap(ptr(t), size1_, size2_);
 }
 
-void function::set_constant(ZMatrix &M) {
+void function::set_constant(const ZMatrix &M) {
   for(int t = -1; t < nt_; t++) {
     ZMatrixMap(ptr(t), size1_, size2_) = M;
   }

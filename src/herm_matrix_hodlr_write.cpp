@@ -179,17 +179,17 @@ void herm_matrix_hodlr::write_checkpoint_hdf5(h5e::File &out, std::string label)
 }
 
 void herm_matrix_hodlr::write_to_hdf5(h5e::File &out, std::string label) {
-  h5e::dump(out, label + std::string("nt"), nt_);
-  h5e::dump(out, label + std::string("r"), r_);
-  h5e::dump(out, label + std::string("size1"), size1_);
-  h5e::dump(out, label + std::string("size2"), size2_);
-  h5e::dump(out, label + std::string("ndir"), ndir_);
-  h5e::dump(out, label + std::string("nbox"), nbox_);
-  h5e::dump(out, label + std::string("nlvl"), nlvl_);
-  h5e::dump(out, label + std::string("maxdir"), maxdir_);
-  h5e::dump(out, label + std::string("k"), k_);
-  h5e::dump(out, label + std::string("tstpmk"), tstpmk_);
-  h5e::dump(out, label + std::string("built_blocks"), built_blocks_);
+  h5e::dump(out, label + std::string("/nt"), nt_);
+  h5e::dump(out, label + std::string("/r"), r_);
+  h5e::dump(out, label + std::string("/size1"), size1_);
+  h5e::dump(out, label + std::string("/size2"), size2_);
+  h5e::dump(out, label + std::string("/ndir"), ndir_);
+  h5e::dump(out, label + std::string("/nbox"), nbox_);
+  h5e::dump(out, label + std::string("/nlvl"), nlvl_);
+  h5e::dump(out, label + std::string("/maxdir"), maxdir_);
+  h5e::dump(out, label + std::string("/k"), k_);
+  h5e::dump(out, label + std::string("/tstpmk"), tstpmk_);
+  h5e::dump(out, label + std::string("/built_blocks"), built_blocks_);
 
   if (!out.exist("geometry/blkr1")) {
     h5e::dump(out, "geometry/blkr1", blkr1_,h5e::DumpMode::Overwrite);
@@ -210,7 +210,7 @@ void herm_matrix_hodlr::write_to_hdf5(h5e::File &out, std::string label) {
   for(int b = 0; b < nbox_; b++) {
     for(int i = 0; i < size1_; i++) {
       for(int j = 0; j < size2_; j++) {
-        std::string prelabel = label + "ret/" + std::to_string(b)+"_"+std::to_string(i)+"_"+std::to_string(j)+"/";
+        std::string prelabel = label + "/ret/" + std::to_string(b)+"_"+std::to_string(i)+"_"+std::to_string(j)+"/";
         h5e::dump(out, prelabel + "epsrank", ret_.data().blocks()[b][i][j].epsrank());
         h5e::dump(out, prelabel + "rows", ret_.data().blocks()[b][i][j].rows());
         h5e::dump(out, prelabel + "cols", ret_.data().blocks()[b][i][j].cols());
@@ -224,7 +224,7 @@ void herm_matrix_hodlr::write_to_hdf5(h5e::File &out, std::string label) {
   for(int b = 0; b < nbox_; b++) {
     for(int i = 0; i < size1_; i++) {
       for(int j = 0; j < size2_; j++) {
-        std::string prelabel = label + "les/"+std::to_string(b)+"_"+std::to_string(i)+"_"+std::to_string(j)+"/";
+        std::string prelabel = label + "/les/"+std::to_string(b)+"_"+std::to_string(i)+"_"+std::to_string(j)+"/";
         h5e::dump(out, prelabel + "epsrank", les_.data().blocks()[b][i][j].epsrank());
         h5e::dump(out, prelabel + "rows", les_.data().blocks()[b][i][j].rows());
         h5e::dump(out, prelabel + "cols", les_.data().blocks()[b][i][j].cols());
@@ -242,7 +242,7 @@ void herm_matrix_hodlr::write_to_hdf5(h5e::File &out, std::string label) {
     static_cast<size_t>(size2_),
     static_cast<size_t>(len_les_dir_square_)
   };
-  auto dset_les = out.createDataSet<cplx>(label + std::string("les/dir"), HighFive::DataSpace(les_dir_shape));
+  auto dset_les = out.createDataSet<cplx>(label + std::string("/les/dir"), HighFive::DataSpace(les_dir_shape));
   dset_les.write_raw(les_dir_square_.data());
 
   // ret_dir is (z,i,j), where z starts at diagonal and goes downwards
@@ -251,7 +251,7 @@ void herm_matrix_hodlr::write_to_hdf5(h5e::File &out, std::string label) {
     static_cast<size_t>(size1_),
     static_cast<size_t>(size2_)
   };
-  auto dset_ret = out.createDataSet<cplx>(label + std::string("ret/dirtricol"), HighFive::DataSpace(ret_dir_shape));
+  auto dset_ret = out.createDataSet<cplx>(label + std::string("/ret/dirtricol"), HighFive::DataSpace(ret_dir_shape));
   dset_ret.write_raw(ret_.dirtricol());
 
   // TV data

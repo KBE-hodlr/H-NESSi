@@ -151,7 +151,7 @@ public:
    * @param t Time slice index. a value of -1 corresponds to the initial value on the Matsubara axis.
    * @param M Matrix to set.
    */
-  void set_value(int t, ZMatrix &M);
+  void set_value(int t, const ZMatrix &M);
 
   /**
    * @brief Sets the value of the element at time slice t and matrix index ij
@@ -179,7 +179,7 @@ public:
    * @brief Sets all matrix data to a constant value.
    * @param M Matrix value to set.
    */
-  void set_constant(ZMatrix &M);
+  void set_constant(const ZMatrix &M);
 
   /**
    * @brief Sets all matrix data to a constant identity value.

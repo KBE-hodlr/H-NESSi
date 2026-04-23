@@ -100,4 +100,4 @@ add_subdirectory(src)
 
 add_subdirectory(SC_example)
 add_subdirectory(mpi_example)
-add_subdirectory(1d_diss_example)
+add_subdirectory(Nonint_diss_example)
