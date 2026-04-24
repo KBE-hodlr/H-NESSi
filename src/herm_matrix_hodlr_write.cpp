@@ -178,7 +178,7 @@ void herm_matrix_hodlr::write_checkpoint_hdf5(h5e::File &out, std::string label)
   h5e::dump(out, label + std::string("/timing"), timing);
 }
 
-void herm_matrix_hodlr::write_to_hdf5(h5e::File &out, std::string label) {
+void herm_matrix_hodlr::write_to_hdf5(h5e::File &out, std::string label, std::string geometry_label) {
   h5e::dump(out, label + std::string("/nt"), nt_);
   h5e::dump(out, label + std::string("/r"), r_);
   h5e::dump(out, label + std::string("/size1"), size1_);
@@ -191,18 +191,18 @@ void herm_matrix_hodlr::write_to_hdf5(h5e::File &out, std::string label) {
   h5e::dump(out, label + std::string("/tstpmk"), tstpmk_);
   h5e::dump(out, label + std::string("/built_blocks"), built_blocks_);
 
-  if (!out.exist("geometry/blkr1")) {
-    h5e::dump(out, "geometry/blkr1", blkr1_,h5e::DumpMode::Overwrite);
-    h5e::dump(out, "geometry/blkr2", blkr2_,h5e::DumpMode::Overwrite);
-    h5e::dump(out, "geometry/blkc1", blkc1_,h5e::DumpMode::Overwrite);
-    h5e::dump(out, "geometry/blkc2", blkc2_,h5e::DumpMode::Overwrite);
-    h5e::dump(out, "geometry/blklevel", blklevel_,h5e::DumpMode::Overwrite);
-    h5e::dump(out, "geometry/blkdirheight", blkdirheight_,h5e::DumpMode::Overwrite);
-    h5e::dump(out, "geometry/blkndirstart", blkndirstart_,h5e::DumpMode::Overwrite);
-    h5e::dump(out, "geometry/c1_dir", c1_dir_,h5e::DumpMode::Overwrite);
-    h5e::dump(out, "geometry/r2_dir", r2_dir_,h5e::DumpMode::Overwrite);
-    h5e::dump(out, "geometry/ntri", ntri_,h5e::DumpMode::Overwrite);
-    h5e::dump(out, "geometry/blklen", blklen_,h5e::DumpMode::Overwrite);
+  if (!out.exist(  "geometry/" + geometry_label + "/blkr1")) {
+    h5e::dump(out, "geometry/" + geometry_label + "/blkr1", blkr1_,h5e::DumpMode::Overwrite);
+    h5e::dump(out, "geometry/" + geometry_label + "/blkr2", blkr2_,h5e::DumpMode::Overwrite);
+    h5e::dump(out, "geometry/" + geometry_label + "/blkc1", blkc1_,h5e::DumpMode::Overwrite);
+    h5e::dump(out, "geometry/" + geometry_label + "/blkc2", blkc2_,h5e::DumpMode::Overwrite);
+    h5e::dump(out, "geometry/" + geometry_label + "/blklevel", blklevel_,h5e::DumpMode::Overwrite);
+    h5e::dump(out, "geometry/" + geometry_label + "/blkdirheight", blkdirheight_,h5e::DumpMode::Overwrite);
+    h5e::dump(out, "geometry/" + geometry_label + "/blkndirstart", blkndirstart_,h5e::DumpMode::Overwrite);
+    h5e::dump(out, "geometry/" + geometry_label + "/c1_dir", c1_dir_,h5e::DumpMode::Overwrite);
+    h5e::dump(out, "geometry/" + geometry_label + "/r2_dir", r2_dir_,h5e::DumpMode::Overwrite);
+    h5e::dump(out, "geometry/" + geometry_label + "/ntri", ntri_,h5e::DumpMode::Overwrite);
+    h5e::dump(out, "geometry/" + geometry_label + "/blklen", blklen_,h5e::DumpMode::Overwrite);
   }
 
   write_mat_to_hdf5(out, label);
@@ -319,8 +319,8 @@ void herm_matrix_hodlr::write_mat_to_hdf5(h5e::File &out, std::string label) {
 }
 
 void herm_matrix_hodlr::write_curr_to_hdf5(h5e::File &out, std::string label) {
-  h5e::dump(out, label + std::string("curr_timestep_ret"), curr_timestep_ret_);
-  h5e::dump(out, label + std::string("curr_timestep_les"), curr_timestep_les_);
+  h5e::dump(out, label + std::string("/curr_timestep_ret"), curr_timestep_ret_);
+  h5e::dump(out, label + std::string("/curr_timestep_les"), curr_timestep_les_);
 }
 
 void herm_matrix_hodlr::write_GR0_to_hdf5(h5e::File &out, std::string label) {

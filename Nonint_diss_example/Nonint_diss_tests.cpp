@@ -145,7 +145,7 @@ int main(int argc, char *argv[]){
 
             std::string prelabel = "/k" + std::to_string(k) + "_h" + std::to_string(hinv) + "_rv" + std::to_string(rv) + "_L" + std::to_string(Lb) + "_G" + std::to_string(Gb) + "/";
             rho.write_to_hdf5(out_file, prelabel + "/rho");
-            G.write_to_hdf5(out_file, prelabel + "/G");
+            G.write_to_hdf5(out_file, prelabel + "/G", std::to_string(hinv));
 
           }
         }
