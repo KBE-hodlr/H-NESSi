@@ -350,7 +350,7 @@ class herm_matrix_hodlr{
   void write_checkpoint_hdf5(h5e::File &out, std::string label);
 
   /** Write the full object to HDF5 under `label`. */
-  void write_to_hdf5(h5e::File &out, std::string label);
+  void write_to_hdf5(h5e::File &out, std::string label, std::string geometry_label = "");
 
   /** Write the density matrix (rho) to HDF5 using `dlr` for Matsubara transforms. */
   void write_rho_to_hdf5(h5e::File &out, std::string label, dlr_info &dlr);
