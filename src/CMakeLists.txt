@@ -31,11 +31,22 @@ target_include_directories(h_nessi PUBLIC
     $<INSTALL_INTERFACE:include>
 )
 
-# Link your dependencies
-target_link_libraries(h_nessi ${HDF5_LIBRARIES} HighFive dlr_c ${COMMON_LIBS} fftw3_omp)
+# Explicitly add the FFTW headers so the compiler can resolve #include <fftw3.h>
+target_include_directories(h_nessi PUBLIC ${FFTW3_INCLUDE_DIR})
+
+# Link your dependencies using the newly found absolute paths and the OpenMP target
+# Note: If you still have other libraries populated in ${COMMON_LIBS}, leave it in this list.
+target_link_libraries(h_nessi PUBLIC 
+    ${HDF5_LIBRARIES} 
+    HighFive 
+    dlr_c 
+    ${FFTW3_LIB} 
+    ${FFTW3_OMP_LIB} 
+    OpenMP::OpenMP_CXX
+)
 
 if(INCLUDE_NESSI)
-  target_link_libraries(h_nessi cntr)
+  target_link_libraries(h_nessi PUBLIC cntr)
 endif()
 
 # Grab the headers from the new directory structure (pointing to the project root -> include -> h_nessi)
