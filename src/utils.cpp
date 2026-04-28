@@ -3,8 +3,9 @@
 
 
 namespace h_nessi {
-	const bool RHO_DIAGONAL=true;
-	const bool RHO_HORIZONTAL=false;
+	const int RHO_DIAGONAL_2=2;
+	const int RHO_DIAGONAL=1;
+	const int RHO_HORIZONTAL=0;
 
 	void svd( ZMatrix &M,ZMatrix &U,ZMatrix &V,DColVector &S){
 		Eigen::BDCSVD<ZMatrix> svd(M,Eigen::ComputeThinU | Eigen::ComputeThinV);

@@ -269,7 +269,7 @@ double dyson::dyson_start_les_ntti(herm_matrix_hodlr &G, double mu, cplx *H, her
     Eigen::FullPivLU<ZMatrix> lu2(MIC);
     XIC = lu2.solve(QIC);
     for(int i = m; i <= k_; i++) {
-      if(rho_version_ == 1) err += i==m ? 0 : (ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose()).norm();
+      if(rho_version_ != 0) err += i==m ? 0 : (ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose()).norm();
       else                  err += (ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose()).norm();
       ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) = ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose();
     }
@@ -329,6 +329,103 @@ double dyson::dyson_start_les_ntti(herm_matrix_hodlr &G, double mu, cplx *H, her
     for(int i = 1; i <= k_; i++) {
       err += (ZMatrixMap(XIC.data()+(i-1)*es_, nao_, nao_) - ZMatrixMap(DIC.data() + (i-1)*es_, nao_, nao_)).norm();
       ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) = ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_);
+    }
+  }
+
+  if(rho_version_ == 2) {
+    // Pre-calculate sizes
+    int n2 = nao_ * nao_;
+    int sys_size = k_ * n2;
+
+    // Allocate the global system matrices
+    ZMatrix L_global = ZMatrix::Zero(sys_size, sys_size);
+    ZColVector RHS_global = ZColVector::Zero(sys_size); // USING YOUR ZColVector
+
+    // Identities needed for Kronecker products
+    ZMatrix I_nao = ZMatrix::Identity(nao_, nao_);
+    ZMatrix I_n2 = ZMatrix::Identity(n2, n2);
+
+    // 1. Build the Time Derivative Operator: D (x) I_n2
+    ZMatrix D_mat = ZMatrix::Zero(k_, k_);
+    for(int i = 1; i <= k_; i++) {
+        for(int j = 1; j <= k_; j++) {
+            D_mat(i-1, j-1) = 1.0 / h * I.poly_diff(i,j);
+        }
+    }
+    L_global += Eigen::kroneckerProduct(D_mat, I_n2).eval();
+
+    // 2. Build the Spatial Operators and RHS per timestep
+    for(int i = 1; i <= k_; i++) {
+        // Construct the effective non-Hermitian Hamiltonian for step i
+        ZMatrix h_o_i = ZMatrixMap(H+i*es_, nao_, nao_)
+                      - mu * IMap;
+
+        // Build the Base Liouvillian A_i (Row-Major)
+        ZMatrix A_i = -cplxi * Eigen::kroneckerProduct(h_o_i, I_nao).eval()
+                  + cplxi * Eigen::kroneckerProduct(I_nao, h_o_i.conjugate()).eval();
+
+        // Pull the l=i collision integral term (from loop 3) into the LHS
+        double w_ii = I.poly_integ(0, i, i);
+        std::complex<double> alpha = cplxi * w_ii * h;
+        ZMatrix Sigma_R_ii = ZMatrixMap(Sigma.curr_timestep_ret_ptr(i,i), nao_, nao_);
+
+        A_i += -alpha * Eigen::kroneckerProduct(Sigma_R_ii, I_nao).eval()
+               + alpha * Eigen::kroneckerProduct(I_nao, Sigma_R_ii.conjugate()).eval();
+
+        // Subtract total A_i from the diagonal block of L_global
+        L_global.block((i-1)*n2, (i-1)*n2, n2, n2) -= A_i;
+
+        // --- Compute RHS Constants for step i ---
+        ZMatrix C_half = ZMatrix::Zero(nao_, nao_);
+
+        // Loop 1: G^R * Sigma^< (Safe for l < i)
+        for(int l = 0; l <= i; l++) {
+            C_half += cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_ret_ptr(i,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_les_ptr(l,i), nao_, nao_);
+        }
+
+        // Loop 2: Advanced components (starts at i+1)
+        for(int l = i+1; l <= k_; l++) {
+            C_half += cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_ret_ptr(l,i), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_les_ptr(i,l), nao_, nao_).adjoint();
+        }
+
+        // Loop 3: l < i (l=i was successfully moved to LHS)
+        for(int l = 0; l < i; l++) {
+            C_half -= cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_les_ptr(l,i), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_ret_ptr(i,l), nao_, nao_).adjoint();
+        }
+
+        // Loop 4: Advanced components (starts at i+1)
+        for(int l = i+1; l <= k_; l++) {
+            C_half -= cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_les_ptr(i,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(l,i), nao_, nao_);
+        }
+
+        ZMatrixMap(M_.data(), nao_, nao_) = ZMatrix::Zero(nao_, nao_);
+        les_it_int(i, i, G, Sigma, M_.data());
+        C_half += cplxi*ZMatrixMap(M_.data(), nao_, nao_).transpose();
+
+        // Apply the physical symmetry trick to generate the missing conjugate halves
+        ZMatrix C_i = C_half - C_half.adjoint();
+
+        // --- ADD FULLY FORMED TERMS ---
+        // (These are added AFTER symmetrization so they are not artificially doubled)
+        C_i -= 1.0 / h * I.poly_diff(i,0) * ZMatrixMap(G.curr_timestep_les_ptr(0,0), nao_, nao_);
+
+        // Flatten C_i into the global RHS column vector
+        RHS_global.segment((i-1)*n2, n2) = Eigen::Map<ZColVector>(C_i.data(), n2);
+    }
+
+    // 3. Direct Exact Solve
+    Eigen::FullPivLU<ZMatrix> lu(L_global);
+    ZColVector G_flat = lu.solve(RHS_global);
+
+    // 4. Map the flattened solution back into the central storage
+    for(int i = 1; i <= k_; i++) {
+        // Extract the N x N block. Because ZMatrix is RowMajor, Mapping the column vector 
+        // segment back to ZMatrix correctly unpacks it row-by-row!
+        ZMatrix G_solved = Eigen::Map<ZMatrix>(G_flat.data() + (i-1)*n2, nao_, nao_);
+
+        // Strictly enforce anti-hermiticity one last time to kill floating point noise
+        ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) = 0.5 * (G_solved - G_solved.adjoint());
+        err += (ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) - ZMatrixMap(DIC.data() + (i-1)*es_, nao_, nao_)).norm();
     }
   }
 
@@ -423,7 +520,7 @@ double dyson::dyson_start_les_ntti_nobc(herm_matrix_hodlr &G, double mu, cplx *H
     Eigen::FullPivLU<ZMatrix> lu2(MIC);
     XIC = lu2.solve(QIC);
     for(int i = m; i <= k_; i++) {
-      if(rho_version_ == 1) err += i==m ? 0 : (ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose()).norm();
+      if(rho_version_ != 0) err += i==m ? 0 : (ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose()).norm();
       else                  err += (ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose()).norm();
       ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) = ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose();
     }
@@ -481,6 +578,103 @@ double dyson::dyson_start_les_ntti_nobc(herm_matrix_hodlr &G, double mu, cplx *H
     for(int i = 1; i <= k_; i++) {
       err += (ZMatrixMap(XIC.data()+(i-1)*es_, nao_, nao_) - ZMatrixMap(DIC.data() + (i-1)*es_, nao_, nao_)).norm();
       ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) = ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_);
+    }
+  }
+
+  if(rho_version_ == 2) {
+    // Pre-calculate sizes
+    int n2 = nao_ * nao_;
+    int sys_size = k_ * n2;
+
+    // Allocate the global system matrices
+    ZMatrix L_global = ZMatrix::Zero(sys_size, sys_size);
+    ZColVector RHS_global = ZColVector::Zero(sys_size); // USING YOUR ZColVector
+
+    // Identities needed for Kronecker products
+    ZMatrix I_nao = ZMatrix::Identity(nao_, nao_);
+    ZMatrix I_n2 = ZMatrix::Identity(n2, n2);
+
+    // 1. Build the Time Derivative Operator: D (x) I_n2
+    ZMatrix D_mat = ZMatrix::Zero(k_, k_);
+    for(int i = 1; i <= k_; i++) {
+        for(int j = 1; j <= k_; j++) {
+            D_mat(i-1, j-1) = 1.0 / h * I.poly_diff(i,j);
+        }
+    }
+    L_global += Eigen::kroneckerProduct(D_mat, I_n2).eval();
+
+    // 2. Build the Spatial Operators and RHS per timestep
+    for(int i = 1; i <= k_; i++) {
+        // Construct the effective non-Hermitian Hamiltonian for step i
+        ZMatrix h_o_i = ZMatrixMap(H+i*es_, nao_, nao_)
+                      - mu * IMap;
+
+        // Build the Base Liouvillian A_i (Row-Major)
+        ZMatrix A_i = -cplxi * Eigen::kroneckerProduct(h_o_i, I_nao).eval()
+                  + cplxi * Eigen::kroneckerProduct(I_nao, h_o_i.conjugate()).eval();
+
+        // Pull the l=i collision integral term (from loop 3) into the LHS
+        double w_ii = I.poly_integ(0, i, i);
+        std::complex<double> alpha = cplxi * w_ii * h;
+        ZMatrix Sigma_R_ii = ZMatrixMap(Sigma.curr_timestep_ret_ptr(i,i), nao_, nao_);
+
+        A_i += -alpha * Eigen::kroneckerProduct(Sigma_R_ii, I_nao).eval()
+               + alpha * Eigen::kroneckerProduct(I_nao, Sigma_R_ii.conjugate()).eval();
+
+        // Subtract total A_i from the diagonal block of L_global
+        L_global.block((i-1)*n2, (i-1)*n2, n2, n2) -= A_i;
+
+        // --- Compute RHS Constants for step i ---
+        ZMatrix C_half = ZMatrix::Zero(nao_, nao_);
+
+        // Loop 1: G^R * Sigma^< (Safe for l < i)
+        for(int l = 0; l <= i; l++) {
+            C_half += cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_ret_ptr(i,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_les_ptr(l,i), nao_, nao_);
+        }
+
+        // Loop 2: Advanced components (starts at i+1)
+        for(int l = i+1; l <= k_; l++) {
+            C_half += cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_ret_ptr(l,i), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_les_ptr(i,l), nao_, nao_).adjoint();
+        }
+
+        // Loop 3: l < i (l=i was successfully moved to LHS)
+        for(int l = 0; l < i; l++) {
+            C_half -= cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_les_ptr(l,i), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_ret_ptr(i,l), nao_, nao_).adjoint();
+        }
+
+        // Loop 4: Advanced components (starts at i+1)
+        for(int l = i+1; l <= k_; l++) {
+            C_half -= cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_les_ptr(i,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(l,i), nao_, nao_);
+        }
+
+        ZMatrixMap(M_.data(), nao_, nao_) = ZMatrix::Zero(nao_, nao_);
+        les_it_int(i, i, G, Sigma, M_.data());
+        C_half += cplxi*ZMatrixMap(M_.data(), nao_, nao_).transpose();
+
+        // Apply the physical symmetry trick to generate the missing conjugate halves
+        ZMatrix C_i = C_half - C_half.adjoint();
+
+        // --- ADD FULLY FORMED TERMS ---
+        // (These are added AFTER symmetrization so they are not artificially doubled)
+        C_i -= 1.0 / h * I.poly_diff(i,0) * ZMatrixMap(G.curr_timestep_les_ptr(0,0), nao_, nao_);
+
+        // Flatten C_i into the global RHS column vector
+        RHS_global.segment((i-1)*n2, n2) = Eigen::Map<ZColVector>(C_i.data(), n2);
+    }
+
+    // 3. Direct Exact Solve
+    Eigen::FullPivLU<ZMatrix> lu(L_global);
+    ZColVector G_flat = lu.solve(RHS_global);
+
+    // 4. Map the flattened solution back into the central storage
+    for(int i = 1; i <= k_; i++) {
+        // Extract the N x N block. Because ZMatrix is RowMajor, Mapping the column vector 
+        // segment back to ZMatrix correctly unpacks it row-by-row!
+        ZMatrix G_solved = Eigen::Map<ZMatrix>(G_flat.data() + (i-1)*n2, nao_, nao_);
+
+        // Strictly enforce anti-hermiticity one last time to kill floating point noise
+        ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) = 0.5 * (G_solved - G_solved.adjoint());
+        err += (ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) - ZMatrixMap(DIC.data() + (i-1)*es_, nao_, nao_)).norm();
     }
   }
 
@@ -573,7 +767,7 @@ double dyson::dyson_start_les_2leg(herm_matrix_hodlr &G, double mu, cplx *H, her
     Eigen::FullPivLU<ZMatrix> lu2(MIC);
     XIC = lu2.solve(QIC);
     for(int i = m; i <= k_; i++) {
-      if(rho_version_ == 1) err += i==m ? 0 : (ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose()).norm();
+      if(rho_version_ != 0) err += i==m ? 0 : (ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose()).norm();
       else                  err += (ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose()).norm();
       ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) = ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose();
     }
@@ -635,6 +829,100 @@ double dyson::dyson_start_les_2leg(herm_matrix_hodlr &G, double mu, cplx *H, her
     }
   }
 
+
+
+  if(rho_version_ == 2) {
+    // Pre-calculate sizes
+    int n2 = nao_ * nao_;
+    int sys_size = k_ * n2;
+
+    // Allocate the global system matrices
+    ZMatrix L_global = ZMatrix::Zero(sys_size, sys_size);
+    ZColVector RHS_global = ZColVector::Zero(sys_size); // USING YOUR ZColVector
+
+    // Identities needed for Kronecker products
+    ZMatrix I_nao = ZMatrix::Identity(nao_, nao_);
+    ZMatrix I_n2 = ZMatrix::Identity(n2, n2);
+
+    // 1. Build the Time Derivative Operator: D (x) I_n2
+    ZMatrix D_mat = ZMatrix::Zero(k_, k_);
+    for(int i = 1; i <= k_; i++) {
+        for(int j = 1; j <= k_; j++) {
+            D_mat(i-1, j-1) = 1.0 / h * I.poly_diff(i,j);
+        }
+    }
+    L_global += Eigen::kroneckerProduct(D_mat, I_n2).eval();
+
+    // 2. Build the Spatial Operators and RHS per timestep
+    for(int i = 1; i <= k_; i++) {
+        // Construct the effective non-Hermitian Hamiltonian for step i
+        ZMatrix h_o_i = ZMatrixMap(H+i*es_, nao_, nao_)
+                      - mu * IMap;
+
+        // Build the Base Liouvillian A_i (Row-Major)
+        ZMatrix A_i = -cplxi * Eigen::kroneckerProduct(h_o_i, I_nao).eval()
+                  + cplxi * Eigen::kroneckerProduct(I_nao, h_o_i.conjugate()).eval();
+
+        // Pull the l=i collision integral term (from loop 3) into the LHS
+        double w_ii = I.poly_integ(0, i, i);
+        std::complex<double> alpha = cplxi * w_ii * h;
+        ZMatrix Sigma_R_ii = ZMatrixMap(Sigma.curr_timestep_ret_ptr(i,i), nao_, nao_);
+
+        A_i += -alpha * Eigen::kroneckerProduct(Sigma_R_ii, I_nao).eval()
+               + alpha * Eigen::kroneckerProduct(I_nao, Sigma_R_ii.conjugate()).eval();
+
+        // Subtract total A_i from the diagonal block of L_global
+        L_global.block((i-1)*n2, (i-1)*n2, n2, n2) -= A_i;
+
+        // --- Compute RHS Constants for step i ---
+        ZMatrix C_half = ZMatrix::Zero(nao_, nao_);
+
+        // Loop 1: G^R * Sigma^< (Safe for l < i)
+        for(int l = 0; l <= i; l++) {
+            C_half += cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_ret_ptr(i,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_les_ptr(l,i), nao_, nao_);
+        }
+
+        // Loop 2: Advanced components (starts at i+1)
+        for(int l = i+1; l <= k_; l++) {
+            C_half += cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_ret_ptr(l,i), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_les_ptr(i,l), nao_, nao_).adjoint();
+        }
+
+        // Loop 3: l < i (l=i was successfully moved to LHS)
+        for(int l = 0; l < i; l++) {
+            C_half -= cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_les_ptr(l,i), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_ret_ptr(i,l), nao_, nao_).adjoint();
+        }
+
+        // Loop 4: Advanced components (starts at i+1)
+        for(int l = i+1; l <= k_; l++) {
+            C_half -= cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_les_ptr(i,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(l,i), nao_, nao_);
+        }
+
+        // Apply the physical symmetry trick to generate the missing conjugate halves
+        ZMatrix C_i = C_half - C_half.adjoint();
+
+        // --- ADD FULLY FORMED TERMS ---
+        // (These are added AFTER symmetrization so they are not artificially doubled)
+        C_i -= 1.0 / h * I.poly_diff(i,0) * ZMatrixMap(G.curr_timestep_les_ptr(0,0), nao_, nao_);
+
+        // Flatten C_i into the global RHS column vector
+        RHS_global.segment((i-1)*n2, n2) = Eigen::Map<ZColVector>(C_i.data(), n2);
+    }
+
+    // 3. Direct Exact Solve
+    Eigen::FullPivLU<ZMatrix> lu(L_global);
+    ZColVector G_flat = lu.solve(RHS_global);
+
+    // 4. Map the flattened solution back into the central storage
+    for(int i = 1; i <= k_; i++) {
+        // Extract the N x N block. Because ZMatrix is RowMajor, Mapping the column vector 
+        // segment back to ZMatrix correctly unpacks it row-by-row!
+        ZMatrix G_solved = Eigen::Map<ZMatrix>(G_flat.data() + (i-1)*n2, nao_, nao_);
+
+        // Strictly enforce anti-hermiticity one last time to kill floating point noise
+        ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) = 0.5 * (G_solved - G_solved.adjoint());
+        err += (ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) - ZMatrixMap(DIC.data() + (i-1)*es_, nao_, nao_)).norm();
+    }
+  }
   return err;
 }
 

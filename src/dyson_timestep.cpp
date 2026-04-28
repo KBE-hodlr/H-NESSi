@@ -455,7 +455,7 @@ double dyson::dyson_timestep_les_nobc(int tstp, herm_matrix_hodlr &G, double mu,
     QMapBlock = QMapBlock.transpose().eval();
 
     // BULK OF ROW
-    if(m != tstp) {
+    if(m != tstp or rho_version_ == 0) {
       // Set up M
       cplx *sigptrmm = m >= Sigma.tstpmk() ? Sigma.curr_timestep_ret_ptr(m,m) : Sigma.retptr_col(m,m);
       MMapSmall.noalias() = -ZMatrixMap(H+m*es_, nao_, nao_) + (cplxi/h*I.bd_weights(0) + mu)*IMap - h*I.omega(0)*ZMatrixMap(sigptrmm, nao_, nao_);
@@ -464,16 +464,10 @@ double dyson::dyson_timestep_les_nobc(int tstp, herm_matrix_hodlr &G, double mu,
       for(int l = 1; l <= k_+1; l++) {
         QMapBlock.noalias() -= cplxi/h*I.bd_weights(l) * ZMatrixMap(X_.data() + (m-l)*es_, nao_, nao_).transpose();
       }
-    }
-    else if(rho_version_ == 0) { // HORIZONTAL FOR RHO
-      // Set up M 
-      cplx *sigptrmm = m >= Sigma.tstpmk() ? Sigma.curr_timestep_ret_ptr(m,m) : Sigma.retptr_col(m,m);
-      MMapSmall.noalias() = -ZMatrixMap(H+m*es_, nao_, nao_) + (cplxi/h*I.bd_weights(0) + mu)*IMap - h*I.omega(0)*ZMatrixMap(sigptrmm, nao_, nao_);
 
-      // Derivatives into Q 
-      for(int l = 1; l <= k_+1; l++) {
-        QMapBlock.noalias() -= cplxi/h*I.bd_weights(l) * ZMatrixMap(X_.data() + (m-l)*es_, nao_, nao_).transpose();
-      }
+      // Solve MX=Q
+      Eigen::FullPivLU<ZMatrix> lu2(MMapSmall);
+      ZMatrixMap(X_.data() + m*es_, nao_, nao_) = lu2.solve(ZMatrixMap(Q_.data() + m*es_, nao_, nao_)).transpose();
     }
     else if(rho_version_ == 1) { // DIAGONAL FOR RHO
       // finish integral
@@ -490,11 +484,68 @@ double dyson::dyson_timestep_les_nobc(int tstp, herm_matrix_hodlr &G, double mu,
       ZMatrixMap(Q_.data(), nao_, nao_).noalias() -= 1./h*I.bd_weights(k_+1) * ZMatrixMap(M_.data(), nao_, nao_);
       MMapSmall.noalias() = 1./h*I.bd_weights(0) * IMap;
       ZMatrixMap(Q_.data() + m*es_, nao_, nao_) = ZMatrixMap(Q_.data(), nao_, nao_);
-    }
 
-    // Solve MX=Q
-    Eigen::FullPivLU<ZMatrix> lu2(MMapSmall);
-    ZMatrixMap(X_.data() + m*es_, nao_, nao_) = lu2.solve(ZMatrixMap(Q_.data() + m*es_, nao_, nao_)).transpose();
+      // Solve MX=Q
+      Eigen::FullPivLU<ZMatrix> lu2(MMapSmall);
+      ZMatrixMap(X_.data() + m*es_, nao_, nao_) = lu2.solve(ZMatrixMap(Q_.data() + m*es_, nao_, nao_)).transpose();
+    }
+    else if(rho_version_ == 2) {
+      int n2 = nao_ * nao_;
+      ZMatrix I_nao = ZMatrix::Identity(nao_, nao_);
+      ZMatrix I_n2 = ZMatrix::Identity(n2, n2);
+
+      // ====================================================================================
+      // 1. CONSTRUCT THE EFFECTIVE HAMILTONIAN
+      // ====================================================================================
+      // This perfectly combines the bare Hamiltonian, the self-energy (ell), 
+      // and the current-time collision integral quadrature into a single left-multiplier.
+      ZMatrix Heff = h * I.omega(0) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(tstp, tstp), nao_, nao_)
+                   + (ZMatrixMap(H+tstp*es_, nao_, nao_) - mu*IMap);
+
+      // ====================================================================================
+      // 2. LIOUVILLE SPACE MAPPING (LHS)
+      // ====================================================================================
+      // The continuous commutator is: -i Heff * G^< + i G^< * Heff^\dagger
+      // Using the row-major vectorization identity: vec_R(A X B) = (A (x) B^T) vec_R(X)
+      // A_row = -i(Heff (x) I) + i(I (x) Heff*)
+      ZMatrix A_row = -cplxi * Eigen::kroneckerProduct(Heff, I_nao).eval()
+                      + cplxi * Eigen::kroneckerProduct(I_nao, Heff.conjugate()).eval();
+
+      // The BDF implicit expansion for \partial_t G is: (w_0/h)*G_new + History
+      // Moving the spatial operator to the LHS yields the global BDF operator:
+      // L_BDF = (w_0 / h) * I_n2 - A_row
+      ZMatrix L_BDF = (1.0 / h * I.bd_weights(0)) * I_n2 - A_row;
+
+      // ====================================================================================
+      // 3. EXPLICIT TERMS (RHS)
+      // ====================================================================================
+      // The RHS contains only the known BDF history and the constant driving terms.
+      ZMatrix RHS_mat = -cplxi * (QMapBlock + QMapBlock.adjoint());
+
+      // BDF History Derivatives
+      for(int l = 1; l <= k_; l++) {
+          RHS_mat -= 1.0 / h * I.bd_weights(l) * ZMatrixMap(G.curr_timestep_les_ptr(tstp-l, tstp-l), nao_, nao_);
+      }
+
+      // Final history point
+      G.get_les(tstp-k_-1, tstp-k_-1, M_.data());
+      RHS_mat -= 1.0 / h * I.bd_weights(k_+1) * ZMatrixMap(M_.data(), nao_, nao_);
+
+      // Flatten the RowMajor RHS matrix into a ColVector
+      ZColVector RHS_flat = Eigen::Map<ZColVector>(RHS_mat.data(), n2);
+
+      // ====================================================================================
+      // 4. DIRECT EXACT SOLVE
+      // ====================================================================================
+      Eigen::FullPivLU<ZMatrix> lu_bdf(L_BDF);
+      ZColVector G_flat = lu_bdf.solve(RHS_flat);
+
+      // Unpack the flat vector back into a RowMajor N x N matrix
+      ZMatrix G_solved = Eigen::Map<ZMatrix>(G_flat.data(), nao_, nao_);
+
+      // Strictly enforce anti-hermiticity to eliminate floating-point roundoff noise
+      ZMatrixMap(X_.data() + m*es_, nao_, nao_) = (0.5 * (G_solved - G_solved.adjoint())).transpose();
+    }
   }
 
   // Write elements into G
@@ -763,7 +814,7 @@ double dyson::dyson_timestep_les_2leg(int tstp, herm_matrix_hodlr &G, double mu,
     QMapBlock = QMapBlock.transpose().eval();
 
     // BULK OF ROW
-    if(m != tstp) {
+    if(m != tstp or rho_version_ == 0) {
       // Set up M
       cplx *sigptrmm = m >= Sigma.tstpmk() ? Sigma.curr_timestep_ret_ptr(m,m) : Sigma.retptr_col(m,m);
       MMapSmall.noalias() = -ZMatrixMap(H+m*es_, nao_, nao_) + (cplxi/h*I.bd_weights(0) + mu)*IMap - h*I.omega(0)*ZMatrixMap(sigptrmm, nao_, nao_);
@@ -772,16 +823,10 @@ double dyson::dyson_timestep_les_2leg(int tstp, herm_matrix_hodlr &G, double mu,
       for(int l = 1; l <= k_+1; l++) {
         QMapBlock.noalias() -= cplxi/h*I.bd_weights(l) * ZMatrixMap(X_.data() + (m-l)*es_, nao_, nao_).transpose();
       }
-    }
-    else if(rho_version_ == 0) { // HORIZONTAL FOR RHO
-      // Set up M 
-      cplx *sigptrmm = m >= Sigma.tstpmk() ? Sigma.curr_timestep_ret_ptr(m,m) : Sigma.retptr_col(m,m);
-      MMapSmall.noalias() = -ZMatrixMap(H+m*es_, nao_, nao_) + (cplxi/h*I.bd_weights(0) + mu)*IMap - h*I.omega(0)*ZMatrixMap(sigptrmm, nao_, nao_);
 
-      // Derivatives into Q 
-      for(int l = 1; l <= k_+1; l++) {
-        QMapBlock.noalias() -= cplxi/h*I.bd_weights(l) * ZMatrixMap(X_.data() + (m-l)*es_, nao_, nao_).transpose();
-      }
+      // Solve MX=Q
+      Eigen::FullPivLU<ZMatrix> lu2(MMapSmall);
+      ZMatrixMap(X_.data() + m*es_, nao_, nao_) = lu2.solve(ZMatrixMap(Q_.data() + m*es_, nao_, nao_)).transpose();
     }
     else if(rho_version_ == 1) { // DIAGONAL FOR RHO
       // finish integral
@@ -798,11 +843,68 @@ double dyson::dyson_timestep_les_2leg(int tstp, herm_matrix_hodlr &G, double mu,
       ZMatrixMap(Q_.data(), nao_, nao_).noalias() -= 1./h*I.bd_weights(k_+1) * ZMatrixMap(M_.data(), nao_, nao_);
       MMapSmall.noalias() = 1./h*I.bd_weights(0) * IMap;
       ZMatrixMap(Q_.data() + m*es_, nao_, nao_) = ZMatrixMap(Q_.data(), nao_, nao_);
-    }
 
-    // Solve MX=Q
-    Eigen::FullPivLU<ZMatrix> lu2(MMapSmall);
-    ZMatrixMap(X_.data() + m*es_, nao_, nao_) = lu2.solve(ZMatrixMap(Q_.data() + m*es_, nao_, nao_)).transpose();
+      // Solve MX=Q
+      Eigen::FullPivLU<ZMatrix> lu2(MMapSmall);
+      ZMatrixMap(X_.data() + m*es_, nao_, nao_) = lu2.solve(ZMatrixMap(Q_.data() + m*es_, nao_, nao_)).transpose();
+    }
+    else if(rho_version_ == 2) {
+      int n2 = nao_ * nao_;
+      ZMatrix I_nao = ZMatrix::Identity(nao_, nao_);
+      ZMatrix I_n2 = ZMatrix::Identity(n2, n2);
+
+      // ====================================================================================
+      // 1. CONSTRUCT THE EFFECTIVE HAMILTONIAN
+      // ====================================================================================
+      // This perfectly combines the bare Hamiltonian, the self-energy (ell), 
+      // and the current-time collision integral quadrature into a single left-multiplier.
+      ZMatrix Heff = h * I.omega(0) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(tstp, tstp), nao_, nao_)
+                   + (ZMatrixMap(H+tstp*es_, nao_, nao_) - mu*IMap);
+
+      // ====================================================================================
+      // 2. LIOUVILLE SPACE MAPPING (LHS)
+      // ====================================================================================
+      // The continuous commutator is: -i Heff * G^< + i G^< * Heff^\dagger
+      // Using the row-major vectorization identity: vec_R(A X B) = (A (x) B^T) vec_R(X)
+      // A_row = -i(Heff (x) I) + i(I (x) Heff*)
+      ZMatrix A_row = -cplxi * Eigen::kroneckerProduct(Heff, I_nao).eval()
+                      + cplxi * Eigen::kroneckerProduct(I_nao, Heff.conjugate()).eval();
+
+      // The BDF implicit expansion for \partial_t G is: (w_0/h)*G_new + History
+      // Moving the spatial operator to the LHS yields the global BDF operator:
+      // L_BDF = (w_0 / h) * I_n2 - A_row
+      ZMatrix L_BDF = (1.0 / h * I.bd_weights(0)) * I_n2 - A_row;
+
+      // ====================================================================================
+      // 3. EXPLICIT TERMS (RHS)
+      // ====================================================================================
+      // The RHS contains only the known BDF history and the constant driving terms.
+      ZMatrix RHS_mat = -cplxi * (QMapBlock + QMapBlock.adjoint());
+
+      // BDF History Derivatives
+      for(int l = 1; l <= k_; l++) {
+          RHS_mat -= 1.0 / h * I.bd_weights(l) * ZMatrixMap(G.curr_timestep_les_ptr(tstp-l, tstp-l), nao_, nao_);
+      }
+
+      // Final history point
+      G.get_les(tstp-k_-1, tstp-k_-1, M_.data());
+      RHS_mat -= 1.0 / h * I.bd_weights(k_+1) * ZMatrixMap(M_.data(), nao_, nao_);
+
+      // Flatten the RowMajor RHS matrix into a ColVector
+      ZColVector RHS_flat = Eigen::Map<ZColVector>(RHS_mat.data(), n2);
+
+      // ====================================================================================
+      // 4. DIRECT EXACT SOLVE
+      // ====================================================================================
+      Eigen::FullPivLU<ZMatrix> lu_bdf(L_BDF);
+      ZColVector G_flat = lu_bdf.solve(RHS_flat);
+
+      // Unpack the flat vector back into a RowMajor N x N matrix
+      ZMatrix G_solved = Eigen::Map<ZMatrix>(G_flat.data(), nao_, nao_);
+
+      // Strictly enforce anti-hermiticity to eliminate floating-point roundoff noise
+      ZMatrixMap(X_.data() + m*es_, nao_, nao_) = (0.5 * (G_solved - G_solved.adjoint())).transpose();
+    }
   }
 
   // Write elements into G
@@ -1010,7 +1112,7 @@ double dyson::dyson_timestep_les(int tstp, herm_matrix_hodlr &G, double mu, cplx
     QMapBlock = QMapBlock.transpose().eval();
 
     // BULK OF ROW
-    if(m != tstp) {
+    if(m != tstp or rho_version_ == 0) {
       // Set up M
       cplx *sigptrmm = m >= Sigma.tstpmk() ? Sigma.curr_timestep_ret_ptr(m,m) : Sigma.retptr_col(m,m);
       MMapSmall.noalias() = -ZMatrixMap(H+m*es_, nao_, nao_) + (cplxi/h*I.bd_weights(0) + mu)*IMap - h*I.omega(0)*ZMatrixMap(sigptrmm, nao_, nao_);
@@ -1019,16 +1121,10 @@ double dyson::dyson_timestep_les(int tstp, herm_matrix_hodlr &G, double mu, cplx
       for(int l = 1; l <= k_+1; l++) {
         QMapBlock.noalias() -= cplxi/h*I.bd_weights(l) * ZMatrixMap(X_.data() + (m-l)*es_, nao_, nao_).transpose();
       }
-    }
-    else if(rho_version_ == 0) { // HORIZONTAL FOR RHO
-      // Set up M 
-      cplx *sigptrmm = m >= Sigma.tstpmk() ? Sigma.curr_timestep_ret_ptr(m,m) : Sigma.retptr_col(m,m);
-      MMapSmall.noalias() = -ZMatrixMap(H+m*es_, nao_, nao_) + (cplxi/h*I.bd_weights(0) + mu)*IMap - h*I.omega(0)*ZMatrixMap(sigptrmm, nao_, nao_);
 
-      // Derivatives into Q 
-      for(int l = 1; l <= k_+1; l++) {
-        QMapBlock.noalias() -= cplxi/h*I.bd_weights(l) * ZMatrixMap(X_.data() + (m-l)*es_, nao_, nao_).transpose();
-      }
+      // Solve MX=Q
+      Eigen::FullPivLU<ZMatrix> lu2(MMapSmall);
+      ZMatrixMap(X_.data() + m*es_, nao_, nao_) = lu2.solve(ZMatrixMap(Q_.data() + m*es_, nao_, nao_)).transpose();
     }
     else if(rho_version_ == 1) { // DIAGONAL FOR RHO
       // finish integral
@@ -1045,11 +1141,69 @@ double dyson::dyson_timestep_les(int tstp, herm_matrix_hodlr &G, double mu, cplx
       ZMatrixMap(Q_.data(), nao_, nao_).noalias() -= 1./h*I.bd_weights(k_+1) * ZMatrixMap(M_.data(), nao_, nao_);
       MMapSmall.noalias() = 1./h*I.bd_weights(0) * IMap;
       ZMatrixMap(Q_.data() + m*es_, nao_, nao_) = ZMatrixMap(Q_.data(), nao_, nao_);
+
+      // Solve MX=Q
+      Eigen::FullPivLU<ZMatrix> lu2(MMapSmall);
+      ZMatrixMap(X_.data() + m*es_, nao_, nao_) = lu2.solve(ZMatrixMap(Q_.data() + m*es_, nao_, nao_)).transpose();
+    }
+    else if(rho_version_ == 2) {
+      int n2 = nao_ * nao_;
+      ZMatrix I_nao = ZMatrix::Identity(nao_, nao_);
+      ZMatrix I_n2 = ZMatrix::Identity(n2, n2);
+
+      // ====================================================================================
+      // 1. CONSTRUCT THE EFFECTIVE HAMILTONIAN
+      // ====================================================================================
+      // This perfectly combines the bare Hamiltonian, the self-energy (ell), 
+      // and the current-time collision integral quadrature into a single left-multiplier.
+      ZMatrix Heff = h * I.omega(0) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(tstp, tstp), nao_, nao_)
+                   + (ZMatrixMap(H+tstp*es_, nao_, nao_) - mu*IMap);
+
+      // ====================================================================================
+      // 2. LIOUVILLE SPACE MAPPING (LHS)
+      // ====================================================================================
+      // The continuous commutator is: -i Heff * G^< + i G^< * Heff^\dagger
+      // Using the row-major vectorization identity: vec_R(A X B) = (A (x) B^T) vec_R(X)
+      // A_row = -i(Heff (x) I) + i(I (x) Heff*)
+      ZMatrix A_row = -cplxi * Eigen::kroneckerProduct(Heff, I_nao).eval()
+                      + cplxi * Eigen::kroneckerProduct(I_nao, Heff.conjugate()).eval();
+
+      // The BDF implicit expansion for \partial_t G is: (w_0/h)*G_new + History
+      // Moving the spatial operator to the LHS yields the global BDF operator:
+      // L_BDF = (w_0 / h) * I_n2 - A_row
+      ZMatrix L_BDF = (1.0 / h * I.bd_weights(0)) * I_n2 - A_row;
+
+      // ====================================================================================
+      // 3. EXPLICIT TERMS (RHS)
+      // ====================================================================================
+      // The RHS contains only the known BDF history and the constant driving terms.
+      ZMatrix RHS_mat = -cplxi * (QMapBlock + QMapBlock.adjoint());
+
+      // BDF History Derivatives
+      for(int l = 1; l <= k_; l++) {
+          RHS_mat -= 1.0 / h * I.bd_weights(l) * ZMatrixMap(G.curr_timestep_les_ptr(tstp-l, tstp-l), nao_, nao_);
+      }
+
+      // Final history point
+      G.get_les(tstp-k_-1, tstp-k_-1, M_.data());
+      RHS_mat -= 1.0 / h * I.bd_weights(k_+1) * ZMatrixMap(M_.data(), nao_, nao_);
+
+      // Flatten the RowMajor RHS matrix into a ColVector
+      ZColVector RHS_flat = Eigen::Map<ZColVector>(RHS_mat.data(), n2);
+
+      // ====================================================================================
+      // 4. DIRECT EXACT SOLVE
+      // ====================================================================================
+      Eigen::FullPivLU<ZMatrix> lu_bdf(L_BDF);
+      ZColVector G_flat = lu_bdf.solve(RHS_flat);
+
+      // Unpack the flat vector back into a RowMajor N x N matrix
+      ZMatrix G_solved = Eigen::Map<ZMatrix>(G_flat.data(), nao_, nao_);
+
+      // Strictly enforce anti-hermiticity to eliminate floating-point roundoff noise
+      ZMatrixMap(X_.data() + m*es_, nao_, nao_) = (0.5 * (G_solved - G_solved.adjoint())).transpose();
     }
 
-    // Solve MX=Q
-    Eigen::FullPivLU<ZMatrix> lu2(MMapSmall);
-    ZMatrixMap(X_.data() + m*es_, nao_, nao_) = lu2.solve(ZMatrixMap(Q_.data() + m*es_, nao_, nao_)).transpose();
   }
 
   // Write elements into G

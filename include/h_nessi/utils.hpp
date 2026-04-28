@@ -12,8 +12,9 @@ namespace h5 = HighFive;
 namespace h5e= H5Easy;
 
 namespace h_nessi {
-  extern const bool RHO_DIAGONAL;
-  extern const bool RHO_HORIZONTAL;
+  extern const int RHO_DIAGONAL_2;
+  extern const int RHO_DIAGONAL;
+  extern const int RHO_HORIZONTAL;
 
   using cplx = std::complex<double>;
  
