@@ -11,5 +11,5 @@
 #SBATCH --error=perlmutter_%j.err
 
 export SLURM_CPU_BIND="cores"
-srun /global/u1/t/tblommel/Libraries/H-NESSi/build/Nonint_diss_example/Nonint_diss_tests.x 2 /global/cfs/projectdirs/m5202/Thomas_nonint_diss_test/output.h5
+srun /global/u1/t/tblommel/Libraries/H-NESSi/build/Nonint_diss_example/Nonint_diss_tests.x 2 /global/cfs/projectdirs/m5202/Thomas_nonint_diss_test/output_LouiStartStep.h5
 

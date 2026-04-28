@@ -94,6 +94,7 @@ int main(int argc, char *argv[]){
       for(int rv = 0; rv <= 1; rv++) {
         for(int Lb = 0; Lb <= 1; Lb++) {
           for(int Gb = 0; Gb <= 1; Gb++) {
+              std::cout << k << " " << hinv << " " << rv << " " << Lb << " " << Gb << std::endl;
 
             int nt = t_final * hinv + 1;
             int nlvl = std::max(0, static_cast<int>(std::round(std::log2(nt) - 3.0)));
@@ -122,7 +123,6 @@ int main(int argc, char *argv[]){
             dyson_sol.dyson_start_2leg_diss(G, mu, H, ellL, ellG, Sigma, I, 1./hinv);
 
             for(int tstp = k+1; tstp < nt; tstp++) {
-              std::cout << k << " " << hinv << " " << rv << " " << Lb << " " << Gb << " " << tstp << std::endl;
               G.update_blocks(I);
               Sigma.update_blocks(I);
               Sigma.set_tstp_zero(tstp);
@@ -131,14 +131,12 @@ int main(int argc, char *argv[]){
             }
 
             for(int i = 0; i <= k; i++) {
-              std::cout << "update " << i << std::endl;
               G.update_blocks(I);
               Sigma.update_blocks(I);
             }
 
             ZMatrix tmp_rho(size, size);
             for(int i = 0; i < nt; i++) {
-              std::cout << "dm " << i << std::endl;
               G.density_matrix(i, dlr, tmp_rho);
               rho.get_map(i) = tmp_rho;
             }

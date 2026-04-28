@@ -12,6 +12,7 @@
 #include <iostream>
 #include <algorithm>
 #include <unsupported/Eigen/MatrixFunctions>
+#include <unsupported/Eigen/KroneckerProduct>
 #include <chrono>
 
 #include "function.hpp"
