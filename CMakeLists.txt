@@ -30,7 +30,28 @@ message(STATUS "Eigen dir: ${EIGEN3_INCLUDE_DIR}")
 add_compile_definitions(EIGEN_DONT_PARALLELIZE)
 
 # ~~ Add FFTW ~~
-link_directories(${FFTW_DIR})
+find_path(FFTW3_INCLUDE_DIR NAMES fftw3.h 
+          PATHS "${FFTW_DIR}/include" $ENV{FFTW_DIR}/include 
+          NO_DEFAULT_PATH)
+find_path(FFTW3_INCLUDE_DIR NAMES fftw3.h) 
+
+find_library(FFTW3_LIB NAMES fftw3 
+             PATHS "${FFTW_DIR}/lib" $ENV{FFTW_DIR}/lib 
+             NO_DEFAULT_PATH)
+find_library(FFTW3_LIB NAMES fftw3)
+
+find_library(FFTW3_OMP_LIB NAMES fftw3_omp 
+             PATHS "${FFTW_DIR}/lib" $ENV{FFTW_DIR}/lib 
+             NO_DEFAULT_PATH)
+find_library(FFTW3_OMP_LIB NAMES fftw3_omp)
+
+if(NOT FFTW3_INCLUDE_DIR OR NOT FFTW3_LIB OR NOT FFTW3_OMP_LIB)
+    message(FATAL_ERROR "Could not find FFTW3 or its OpenMP components. Please set FFTW_DIR.")
+else()
+    message(STATUS "Found FFTW3 Headers: ${FFTW3_INCLUDE_DIR}")
+    message(STATUS "Found FFTW3 Library: ${FFTW3_LIB}")
+    message(STATUS "Found FFTW3 OMP Library: ${FFTW3_OMP_LIB}")
+endif()
 
 # ~~ Add HDF5 ~~
 find_package(HDF5 REQUIRED)
