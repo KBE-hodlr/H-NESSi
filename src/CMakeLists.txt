@@ -54,3 +54,12 @@ file(GLOB h_nessi_HEADERS
     "${CMAKE_SOURCE_DIR}/include/h_nessi/*.hpp"
     "${CMAKE_SOURCE_DIR}/include/h_nessi/*.h"
 )
+
+# Install the compiled h_nessi library
+install(TARGETS h_nessi
+    EXPORT h_nessiTargets
+    LIBRARY DESTINATION lib     # For .so / .dylib shared libraries
+    ARCHIVE DESTINATION lib     # For .a static libraries
+    RUNTIME DESTINATION bin     # For .dll / executables
+    INCLUDES DESTINATION include
+)

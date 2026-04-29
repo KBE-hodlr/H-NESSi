@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.13)
 set(CMAKE_CXX_STANDARD 20) 
 project("h_nessi")
+set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CMAKE_COMMAND} -E time")
 
 set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 set(COMMON_LIBS "")
@@ -88,6 +89,7 @@ CPMAddPackage(
   "HIGHFIVE_USE_EIGEN ON"
   "HIGHFIVE_UNIT_TESTS OFF"
   "HIGHFIVE_EXAMPLES OFF"
+  "HIGHFIVE_USE_INSTALL OFF"
 )
 set(CMAKE_MESSAGE_LOG_LEVEL ${_old_log_level})
 
@@ -125,3 +127,20 @@ add_subdirectory(src)
 
 add_subdirectory(SC_example)
 add_subdirectory(mpi_example)
+
+# ==============================================================================
+# INSTALLATION SETUP
+# ==============================================================================
+
+# 1. Install your project's public headers
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/h_nessi
+    DESTINATION include
+)
+
+# 2. Package HighFive's headers so downstream users can link to h_nessi
+if(HighFive_SOURCE_DIR)
+    message(STATUS "Packaging HighFive headers for installation...")
+    install(DIRECTORY ${HighFive_SOURCE_DIR}/include/highfive
+        DESTINATION include
+    )
+endif()
