@@ -24,7 +24,11 @@ include_directories(${MPI_INCLUDE_PATH})
 list(APPEND COMMON_LIBS ${MPI_LIBRARIES})
 
 # ~~ Add Eigen ~~
-find_package(Eigen3 3.4 REQUIRED NO_MODULE)
+find_package(Eigen3 REQUIRED NO_MODULE)
+if(Eigen3_VERSION VERSION_LESS "3.4")
+    message(FATAL_ERROR "Eigen3 version 3.4 or higher required. Found ${Eigen3_VERSION}")
+endif()
+
 include_directories(${EIGEN3_INCLUDE_DIR})
 message(STATUS "Eigen dir: ${EIGEN3_INCLUDE_DIR}")
 add_compile_definitions(EIGEN_DONT_PARALLELIZE)

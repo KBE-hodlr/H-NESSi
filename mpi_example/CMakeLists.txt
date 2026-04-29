@@ -9,8 +9,9 @@ foreach(exe ${mpi_EXECUTABLES})
     # declare the target...
     add_executable(${exe} ${EXE_${exe}_SOURCES})
     
+    target_include_directories(h_nessi PUBLIC ${FFTW3_INCLUDE_DIR})
     # Linking h_nessi automatically gives this executable access to include/h_nessi/
-    target_link_libraries(${exe} h_nessi ${COMMON_LIBS} fftw3)
+    target_link_libraries(${exe} h_nessi ${COMMON_LIBS})
 
 endforeach()
 

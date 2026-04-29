@@ -5,6 +5,8 @@ foreach(exe ${programs})
     # Declare the executable
     add_executable(${exe} ${EXE_${exe}_SOURCES})
     
+    target_include_directories(h_nessi PUBLIC ${FFTW3_INCLUDE_DIR})
+
     # Link the target. This automatically pulls in the include/h_nessi paths!
     target_link_libraries(${exe} h_nessi ${COMMON_LIBS})
 
