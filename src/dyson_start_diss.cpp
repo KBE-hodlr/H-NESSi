@@ -779,6 +779,345 @@ double dyson::dyson_start_les_2leg_diss(herm_matrix_hodlr &G, double mu, cplx *H
   }
   // REST OF THE COLUMNS 
   for(m = 1; m <= k_; m++) {
+    MIC = ZMatrix::Zero((k_-m+1)*nao_, (k_-1+m)*nao_);
+    XIC = ZMatrix::Zero((k_-m+1)*nao_, nao_);
+    QIC = ZMatrix::Zero((k_-m+1)*nao_, nao_);
+
+    for(int n = m; n <= k_; n++) {
+      auto QBlock = QIC.block((n-m)*nao_, 0, nao_, nao_);
+      for(int l = 0; l <= k_; l++) {
+        if(m>=l && n>=l) QBlock += (h * I.poly_integ(0,m,l) * ZMatrixMap(G.curr_timestep_ret_ptr(m,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_les_ptr(l,n), nao_, nao_)).transpose();
+        else if(m<l && n>=l) QBlock -= (h * I.poly_integ(0,m,l) * ZMatrixMap(G.curr_timestep_ret_ptr(l,m), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_les_ptr(l,n), nao_, nao_)).transpose();
+        else if(m>=l && n<l) QBlock -= (h * I.poly_integ(0,m,l) * ZMatrixMap(G.curr_timestep_ret_ptr(m,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_les_ptr(n,l), nao_, nao_).adjoint()).transpose();
+        else if(m<l && n<l) QBlock += (h * I.poly_integ(0,m,l) * ZMatrixMap(G.curr_timestep_ret_ptr(l,m), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_les_ptr(n,l), nao_, nao_).adjoint()).transpose();
+      }
+      for(int l = 0; l < m; l++) {
+        if(n>=l) QBlock -= (h * I.poly_integ(0,n,l) * ZMatrixMap(G.curr_timestep_les_ptr(l,m), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_ret_ptr(n,l), nao_, nao_).adjoint()).transpose();
+        else if(n<l) QBlock += (h * I.poly_integ(0,n,l) * ZMatrixMap(G.curr_timestep_les_ptr(l,m), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_ret_ptr(l,n), nao_, nao_)).transpose();
+      }
+      for(int l = 0; l < m; l++) {
+        QBlock -= (cplxi/h * I.poly_diff(n,l) * ZMatrixMap(G.curr_timestep_les_ptr(l,m), nao_, nao_).adjoint()).transpose();
+      }
+      // additional dissipative term
+      // Using notation from Table 4.1 from thesis q_n = \xi 2 G^R_{mn}\ell^<_n
+      // Q_n = -i [q_n - y_0 M_{0n}]
+      // comment out since we are solving for n>=m so G^R_{mn}=0
+      if(n==m) QBlock -= (2. * G.sig() * cplxi * ZMatrixMap(G.curr_timestep_ret_ptr(m,n), nao_, nao_) * ZMatrixMap(ellL + n*es_, nao_, nao_)).transpose();
+
+      ZMatrixMap(M_.data(), nao_, nao_) = ZMatrix::Zero(nao_, nao_);
+//      les_it_int(m, n, G, Sigma, M_.data());
+      QBlock += ZMatrixMap(M_.data(), nao_, nao_);
+    }
+
+    for(int n = m; n <= k_; n++) {
+      for(int l = m; l <= k_; l++) {
+        auto MBlock = MIC.block((n-m)*nao_, (l-m)*nao_, nao_, nao_);
+        MBlock -= cplxi/h * I.poly_diff(n,l) * IMap;
+        // h_o = h - i(\ell^> -\xi \ell^<)
+        // we use the adjoint equation, so h and i share same sign
+        if(n==l) MBlock -= ZMatrixMap(H+l*es_, nao_, nao_).transpose() - mu*IMap;
+        if(n==l) MBlock -= cplxi * (ZMatrixMap(ellG+l*es_, nao_, nao_) - G.sig() * ZMatrixMap(ellL+l*es_, nao_, nao_)).transpose();
+        if(n>=l) MBlock -= (h * I.poly_integ(0,n,l) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(n,l), nao_, nao_).adjoint()).transpose();
+        else if(n<l) MBlock += (h * I.poly_integ(0,n,l) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(l,n), nao_, nao_)).transpose();
+      }
+    }
+
+    Eigen::FullPivLU<ZMatrix> lu2(MIC);
+    XIC = lu2.solve(QIC);
+    for(int i = m; i <= k_; i++) {
+      if(rho_version_ != 0) err += i==m ? 0 : (ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-m)*es_, nao_, nao_).transpose()).norm();
+      else                  err += (ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-m)*es_, nao_, nao_).transpose()).norm();
+      ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) = ZMatrixMap(XIC.data() + (i-m)*es_, nao_, nao_).transpose();
+    }
+  }
+
+  if(rho_version_==1) {
+    // redo diagonal
+    MIC = ZMatrix::Zero(k_*nao_, k_*nao_);
+    XIC = ZMatrix::Zero(k_*nao_, nao_);
+    QIC = ZMatrix::Zero(k_*nao_, nao_);
+
+
+    for(int i = 1; i <= k_; i++) {
+      for(int j = 1; j <= k_; j++) {
+        auto MBlock = MIC.block((i-1)*nao_, (j-1)*nao_, nao_, nao_);
+        MBlock = 1./h * I.poly_diff(i,j) * IMap;
+      }
+    }
+
+    // Solving \partial_t G = -ih_oG -iG^\dagger h_o^\dagger -iI -iI^\dagger -2\xi i\ell^<
+    //                      = -ih_oG +iG h_o^\dagger -iI -iI^\dagger -2\xi i\ell^<
+    //                      = [iG h_o^\dagger-iI^\dagger] + [-ih_oG-iI] -2\xi i\ell^<
+    //                      = [iG h_o^\dagger-iI^\dagger] + [iG^\dagger h_o^\dagger + iI^dagger]^\dagger -2\xi i\ell^<
+    //                      = [iG h_o^\dagger-iI^\dagger] + [-iG h_o^\dagger + iI^dagger]^\dagger -2\xi i\ell^<
+    //                      = [iG h_o^\dagger-iI^\dagger] - [iG h_o^\dagger - iI^dagger]^\dagger -2\xi i\ell^<
+    // I         =  S^R G^< + S^< G^A
+    // I^\dagger = -G^< S^A - G^R S^<
+    for(int i = 1; i <= k_; i++) {
+      auto QBlock = QIC.block((i-1)*nao_, 0, nao_, nao_);
+      // h_o = h - i(\ell^> -\xi \ell^<)
+      // we use the adjoint, so h and i share same sign
+      QBlock += cplxi * ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) * (ZMatrixMap(H+i*es_, nao_, nao_)
+                                                                                + cplxi * (ZMatrixMap(ellG+i*es_, nao_, nao_)
+                                                                                           - G.sig() * ZMatrixMap(ellL+i*es_, nao_, nao_))
+                                                                                - mu*IMap);
+      for(int l = 0; l <= i; l++) {
+        QBlock += cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_ret_ptr(i,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_les_ptr(l,i), nao_, nao_);
+      }
+      for(int l = i+1; l <= k_; l++) {
+        QBlock += cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_ret_ptr(l,i), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_les_ptr(i,l), nao_, nao_).adjoint();
+      }
+      for(int l = 0; l <= i; l++) {
+        QBlock -= cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_les_ptr(l,i), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_ret_ptr(i,l), nao_, nao_).adjoint();
+      }
+      for(int l = i+1; l <= k_; l++) {
+        QBlock -= cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_les_ptr(i,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(l,i), nao_, nao_);
+      }
+      ZMatrixMap(M_.data(), nao_, nao_) = ZMatrix::Zero(nao_, nao_);
+  //    les_it_int(i, i, G, Sigma, M_.data());
+      QBlock += cplxi*ZMatrixMap(M_.data(), nao_, nao_).transpose();
+
+      ZMatrixMap(XIC.data(), nao_, nao_) = QBlock-QBlock.adjoint();
+      QBlock = ZMatrixMap(XIC.data(), nao_, nao_);
+
+      QBlock -= 1./h * I.poly_diff(i,0) * ZMatrixMap(G.curr_timestep_les_ptr(0,0), nao_, nao_);
+      // additional dissipative term
+      QBlock -= 2. * G.sig() * cplxi * ZMatrixMap(ellL+i*es_, nao_, nao_);
+    }
+
+    Eigen::FullPivLU<ZMatrix> lu3(MIC);
+    XIC = lu3.solve(QIC);
+    for(int i = 1; i <= k_; i++) {
+      err += (ZMatrixMap(XIC.data()+(i-1)*es_, nao_, nao_) - ZMatrixMap(DIC.data() + (i-1)*es_, nao_, nao_)).norm();
+      ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) = ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_);
+    }
+  }
+
+  // ========================================================================================
+  // EXACT DIRECT SOLVER FORMALISM (LIOUVILLE SPACE)
+  // ========================================================================================
+  // Original Equation of Motion:
+  // \partial_t G^< = [iG^< h_o^\dagger - iI^\dagger] - [iG^< h_o^\dagger - iI^\dagger]^\dagger - 2\xi i\ell^<
+  // 
+  // Where the collision integral is:
+  // I         = S^R G^< + S^< G^A
+  // I^\dagger = -G^< S^A - G^R S^<
+  //
+  // Let C_half = iG^< h_o^\dagger - iI^\dagger 
+  //            = iG^< h_o^\dagger + iG^< S^A + iG^R S^<
+  // By computing C_half and taking (C_half - C_half^\dagger), we perfectly generate 
+  // both the Left and Right acting Hamiltonian and Collision terms while strictly 
+  // enforcing anti-Hermiticity (G^< = -G^<^\dagger).
+  //
+  // ----------------------------------------------------------------------------------------
+  // VECTORIZATION IDENTITY (ROW-MAJOR)
+  // ----------------------------------------------------------------------------------------
+  // To solve this implicitly without a fixed-point loop, we map the N x N matrices into 
+  // an N^2 x 1 column vector. Because Eigen maps RowMajor matrices by stacking rows, we 
+  // MUST use the Row-Major Kronecker identity:
+  //      vec_R(A * X * B) = (A (x) B^T) * vec_R(X)
+  // Note: Since (B^\dagger)^T = B^*, right-multiplying by B^\dagger maps to (I (x) B^*).
+  //
+  // ----------------------------------------------------------------------------------------
+  // 1. THE SPATIAL HAMILTONIAN (LHS)
+  // ----------------------------------------------------------------------------------------
+  // The commutator generated by the symmetry trick is: -ih_o G^< + iG^< h_o^\dagger
+  // Applying the row-major identity:
+  //      vec_R(-ih_o G^< I)  = -i(h_o (x) I) * vec_R(G^<)
+  //      vec_R(i I G^< h_o^\dagger) =  i(I (x) h_o^*) * vec_R(G^<)
+  // 
+  // Base Liouvillian: A_i = -i(h_o (x) I) + i(I (x) h_o^*)
+  //
+  // ----------------------------------------------------------------------------------------
+  // 2. EXTRACTING THE IMPLICIT COLLISION TERM (LHS)
+  // ----------------------------------------------------------------------------------------
+  // The l=i term of the collision integral contains the unknown G^<(t_i, t_i). 
+  // Inside C_half, this term is: Q = i * w_ii * h * G^< S^A
+  // Let \alpha = i * w_ii * h. 
+  // When the symmetry trick (Q - Q^\dagger) is applied, it generates:
+  //      Q - Q^\dagger = \alpha G^< S^A - (\alpha G^< S^A)^\dagger
+  //                    = \alpha G^< S^A - \alpha^* (S^A)^\dagger (G^<)^\dagger
+  // Because \alpha is purely imaginary (\alpha^* = -\alpha) and G^< is anti-Hermitian:
+  //                    = \alpha G^< S^A - (-\alpha) S^R (-G^<)
+  //                    = \alpha G^< S^A - \alpha S^R G^<
+  //
+  // To make the solver fully implicit, we move this to the LHS block matrix A_i.
+  // Applying the row-major vectorization identity to (-\alpha S^R G^< + \alpha G^< S^A):
+  //      vec_R(-\alpha S^R G^< I) = -\alpha(S^R (x) I) * vec_R(G^<)
+  //      vec_R(\alpha I G^< S^A)  =  \alpha(I (x) (S^A)^T) * vec_R(G^<) 
+  //                               =  \alpha(I (x) (S^R)^*) * vec_R(G^<)
+  //
+  // Correction to Liouvillian: \Delta A_i = -\alpha(S^R (x) I) + \alpha(I (x) (S^R)^*)
+  //
+  // ----------------------------------------------------------------------------------------
+  // 3. THE EXPLICIT TERMS (RHS)
+  // ----------------------------------------------------------------------------------------
+  // The remaining terms are safely computed explicitly and stored in C_half.
+  // OPTIMIZATION: For the l=i loop of (iG^R S^<), we know exactly that G^R(t,t) = -i1.
+  //      i * w_ii * h * (-i1) * S^< = 1.0 * w_ii * h * S^<
+  // 
+  // Finally, the known j=0 derivative boundary and the -2\xi i\ell^< driving term are 
+  // inherently anti-Hermitian. They are added AFTER the (C_half - C_half^\dagger) 
+  // symmetrization so their magnitudes are not artificially doubled.
+  // ========================================================================================
+  if(rho_version_ == 2) {
+    // Pre-calculate sizes
+    int n2 = nao_ * nao_;
+    int sys_size = k_ * n2;
+
+    // Allocate the global system matrices
+    ZMatrix L_global = ZMatrix::Zero(sys_size, sys_size);
+    ZColVector RHS_global = ZColVector::Zero(sys_size); // USING YOUR ZColVector
+
+    // Identities needed for Kronecker products
+    ZMatrix I_nao = ZMatrix::Identity(nao_, nao_);
+    ZMatrix I_n2 = ZMatrix::Identity(n2, n2);
+
+    // 1. Build the Time Derivative Operator: D (x) I_n2
+    ZMatrix D_mat = ZMatrix::Zero(k_, k_);
+    for(int i = 1; i <= k_; i++) {
+        for(int j = 1; j <= k_; j++) {
+            D_mat(i-1, j-1) = 1.0 / h * I.poly_diff(i,j);
+        }
+    }
+    L_global += Eigen::kroneckerProduct(D_mat, I_n2).eval();
+
+    // 2. Build the Spatial Operators and RHS per timestep
+    for(int i = 1; i <= k_; i++) {
+        // Construct the effective non-Hermitian Hamiltonian for step i
+        ZMatrix h_o_i = ZMatrixMap(H+i*es_, nao_, nao_) 
+                      - cplxi * (ZMatrixMap(ellG+i*es_, nao_, nao_) - G.sig() * ZMatrixMap(ellL+i*es_, nao_, nao_)) 
+                      - mu * IMap;
+
+        // Build the Base Liouvillian A_i (Row-Major)
+        ZMatrix A_i = -cplxi * Eigen::kroneckerProduct(h_o_i, I_nao).eval() 
+                  + cplxi * Eigen::kroneckerProduct(I_nao, h_o_i.conjugate()).eval();
+
+        // Pull the l=i collision integral term (from loop 3) into the LHS
+        double w_ii = I.poly_integ(0, i, i);
+        std::complex<double> alpha = cplxi * w_ii * h;
+        ZMatrix Sigma_R_ii = ZMatrixMap(Sigma.curr_timestep_ret_ptr(i,i), nao_, nao_);
+
+        A_i += -alpha * Eigen::kroneckerProduct(Sigma_R_ii, I_nao).eval() 
+               + alpha * Eigen::kroneckerProduct(I_nao, Sigma_R_ii.conjugate()).eval();
+
+        // Subtract total A_i from the diagonal block of L_global
+        L_global.block((i-1)*n2, (i-1)*n2, n2, n2) -= A_i;
+
+        // --- Compute RHS Constants for step i ---
+        ZMatrix C_half = ZMatrix::Zero(nao_, nao_);
+        
+        // Loop 1: G^R * Sigma^< (Safe for l < i)
+        for(int l = 0; l <= i; l++) {
+            C_half += cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_ret_ptr(i,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_les_ptr(l,i), nao_, nao_);
+        }
+
+        // Loop 2: Advanced components (starts at i+1)
+        for(int l = i+1; l <= k_; l++) {
+            C_half += cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_ret_ptr(l,i), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_les_ptr(i,l), nao_, nao_).adjoint();
+        }
+        
+        // Loop 3: l < i (l=i was successfully moved to LHS)
+        for(int l = 0; l < i; l++) { 
+            C_half -= cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_les_ptr(l,i), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_ret_ptr(i,l), nao_, nao_).adjoint();
+        }
+        
+        // Loop 4: Advanced components (starts at i+1)
+        for(int l = i+1; l <= k_; l++) {
+            C_half -= cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_les_ptr(i,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(l,i), nao_, nao_);
+        }
+        
+        // Apply the physical symmetry trick to generate the missing conjugate halves
+        ZMatrix C_i = C_half - C_half.adjoint();
+
+        // --- ADD FULLY FORMED TERMS ---
+        // (These are added AFTER symmetrization so they are not artificially doubled)
+        C_i -= 1.0 / h * I.poly_diff(i,0) * ZMatrixMap(G.curr_timestep_les_ptr(0,0), nao_, nao_);
+        C_i -= 2.0 * G.sig() * cplxi * ZMatrixMap(ellL+i*es_, nao_, nao_);
+        
+        // Flatten C_i into the global RHS column vector
+        RHS_global.segment((i-1)*n2, n2) = Eigen::Map<ZColVector>(C_i.data(), n2);
+    }
+        
+    // 3. Direct Exact Solve
+    Eigen::FullPivLU<ZMatrix> lu(L_global);
+    ZColVector G_flat = lu.solve(RHS_global);
+    
+    // 4. Map the flattened solution back into the central storage
+    for(int i = 1; i <= k_; i++) {
+        // Extract the N x N block. Because ZMatrix is RowMajor, Mapping the column vector 
+        // segment back to ZMatrix correctly unpacks it row-by-row!
+        ZMatrix G_solved = Eigen::Map<ZMatrix>(G_flat.data() + (i-1)*n2, nao_, nao_);
+        
+        // Strictly enforce anti-hermiticity one last time to kill floating point noise
+        ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) = 0.5 * (G_solved - G_solved.adjoint());
+        err += (ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) - ZMatrixMap(DIC.data() + (i-1)*es_, nao_, nao_)).norm();
+    }
+  }
+
+  return err;
+}
+
+/*
+double dyson::dyson_start_les_2leg_diss(herm_matrix_hodlr &G, double mu, cplx *H, cplx *ellL, cplx *ellG, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h) {
+  cplx cplxi = cplx(0,1);
+
+  ZMatrix QIC = ZMatrix::Zero(k_*nao_, nao_);
+  ZMatrix XIC = ZMatrix::Zero(k_*nao_, nao_);
+  ZMatrix MIC = ZMatrix::Zero(k_*nao_, k_*nao_);
+  ZMatrixMap IMap = ZMatrixMap(iden_.data(), nao_, nao_);
+  double err = 0;
+  int m = 0;
+
+  // FIRST COLUMN, T=0
+  for(int n = 1; n <= k_; n++) {
+    auto QBlock = QIC.block((n-1)*nao_, 0, nao_, nao_);
+
+    for(int l = 0; l <= k_; l++) {
+      if(m>=l && n>=l) QBlock += (h * I.poly_integ(0,m,l) * ZMatrixMap(G.curr_timestep_ret_ptr(m,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_les_ptr(l,n), nao_, nao_)).transpose();
+      else if(m<l && n>=l) QBlock -= (h * I.poly_integ(0,m,l) * ZMatrixMap(G.curr_timestep_ret_ptr(l,m), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_les_ptr(l,n), nao_, nao_)).transpose();
+      else if(m>=l && n<l) QBlock -= (h * I.poly_integ(0,m,l) * ZMatrixMap(G.curr_timestep_ret_ptr(m,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_les_ptr(n,l), nao_, nao_).adjoint()).transpose();
+      else if(m<l && n<l) QBlock += (h * I.poly_integ(0,m,l) * ZMatrixMap(G.curr_timestep_ret_ptr(l,m), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_les_ptr(n,l), nao_, nao_).adjoint()).transpose();
+    }
+
+    int l = 0;
+    QBlock += (h * I.poly_integ(0,n,l) * ZMatrixMap(G.curr_timestep_les_ptr(m,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(n,l), nao_, nao_).adjoint()).transpose();
+    QBlock += (cplxi/h * I.poly_diff(n,l) * ZMatrixMap(G.curr_timestep_les_ptr(m,l), nao_, nao_)).transpose();
+    // additional dissipative term would go here, but it is proportional to G^R(0,t')
+    // if we interpret our integration as starting from t'=0^+, this evaluates to zero.
+
+    ZMatrixMap(M_.data(), nao_, nao_) = ZMatrix::Zero(nao_, nao_);
+//    les_it_int(m, n, G, Sigma, M_.data());
+    QBlock += ZMatrixMap(M_.data(), nao_, nao_);
+  }
+
+  for(int n = 1; n <= k_; n++) {
+    for(int l = 1; l <= k_; l++) {
+      auto MBlock = MIC.block((n-1)*nao_, (l-1)*nao_, nao_, nao_);
+      MBlock += -cplxi/h * I.poly_diff(n,l) * IMap;
+      // h_o = h - i(\ell^> -\xi \ell^<)
+      // we use the adjoint equation, so h and i share same sign
+      if(n==l) MBlock -= ZMatrixMap(H+l*es_, nao_, nao_).transpose() - mu*IMap;
+      if(n==l) MBlock -= cplxi * (ZMatrixMap(ellG+l*es_, nao_, nao_) - G.sig() * ZMatrixMap(ellL+l*es_, nao_, nao_)).transpose();
+      if(n>=l) MBlock -= (h * I.poly_integ(0,n,l) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(n,l), nao_, nao_).adjoint()).transpose();
+      else if(n<l) MBlock += (h * I.poly_integ(0,n,l) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(l,n), nao_, nao_)).transpose();
+    }
+  }
+  Eigen::FullPivLU<ZMatrix> lu(MIC);
+  XIC = lu.solve(QIC);
+  for(int i = 1; i <= k_; i++) {
+    err += (ZMatrixMap(G.curr_timestep_les_ptr(0,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose()).norm();
+    ZMatrixMap(G.curr_timestep_les_ptr(0,i), nao_, nao_) = ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose();
+  }
+
+  // store diagonal in case we do the diagonal correction.
+  // needed for evaluating iteration error
+  ZMatrix DIC = ZMatrix::Zero(k_*nao_, nao_);
+  for(int i = 1; i <= k_; i++) {
+    ZMatrixMap(DIC.data() + (i-1)*es_, nao_, nao_) = ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_);
+  }
+  // REST OF THE COLUMNS 
+  for(m = 1; m <= k_; m++) {
     MIC = ZMatrix::Zero(k_*nao_, k_*nao_);
     XIC = ZMatrix::Zero(k_*nao_, nao_);
     QIC = ZMatrix::Zero(k_*nao_, nao_);
@@ -1049,6 +1388,7 @@ double dyson::dyson_start_les_2leg_diss(herm_matrix_hodlr &G, double mu, cplx *H
 
   return err;
 }
+*/
 
 } // namespace
 
