@@ -42,6 +42,7 @@ target_link_libraries(h_nessi PUBLIC
     dlr_c 
     ${FFTW3_LIB} 
     ${FFTW3_OMP_LIB} 
+    Eigen3::Eigen
     OpenMP::OpenMP_CXX
 )
 
