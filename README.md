@@ -34,6 +34,7 @@ We recommend using a `build.sh` script to pass the necessary path parameters to 
    
    cmake \
      -DCMAKE_BUILD_TYPE=Release \
+     -DCMAKE_INSTALL_PREFIX="/path/to/install/location/" \
      -DCMAKE_CXX_FLAGS="${CMAKE_CXX_FLAGS} -g -std=c++11" \
      -DCMAKE_PREFIX_PATH=${FFTW_DIR} \
      -DLIBDLR_LIB=/path/to/libdlr/build/lib/ \
@@ -51,9 +52,10 @@ We recommend using a `build.sh` script to pass the necessary path parameters to 
    ./../build.sh
    ```
 
-4. Compile the code:
+4. Compile and install the code:
    ```bash
    make
+   make install
    ```
 
 ## Citation
