@@ -2,9 +2,12 @@
 #include <iostream>
 
 // Constructor
-Hubb_diss::Hubb_diss(double U, int L, int nthreads) 
+Hubb_diss::Hubb_diss(function &U, int L, int nthreads) 
     : U_(U), L_(L), Nk_(L), nthreads_(nthreads) 
 {
+
+    ellG_ = 0;
+
     // Create optimal FFTW plans using temporary dummy arrays
     fftw_complex* in_dummy = (fftw_complex*) fftw_malloc(sizeof(fftw_complex) * L_);
     fftw_complex* out_dummy = (fftw_complex*) fftw_malloc(sizeof(fftw_complex) * L_);
@@ -127,11 +130,24 @@ void Hubb_diss::Sigma_Mat_spawn(mpi_comm &comm)
 void Hubb_diss::Sigma_Real_spawn(int tstp, mpi_comm &comm) {
 //    Sigma_Real_tv_spawn(tstp, comm);
     Sigma_Real_lesret_spawn(tstp, comm);
+
+  MPI_Allreduce(
+    MPI_IN_PLACE,          // Tells MPI to read from and write to the recvbuf
+    &ellG_,          // Pointer to the underlying contiguous array
+    1,          // Total number of elements (L * L)
+    MPI_DOUBLE_COMPLEX,    // MPI datatype matching std::complex<double>
+    MPI_SUM,               // Summing zeroes with the non-zero gives the non-zero
+    MPI_COMM_WORLD         // Replace with your specific communicator if needed
+  );
+
 }
 
 void Hubb_diss::Sigma_Real_lesret_spawn(int tstp, mpi_comm &comm) {
     int init_t = comm.my_first_t;
     int last_t = init_t + comm.my_Nt;
+
+    // Each mpi process sets ellG to zero
+    ellG_ = 0;
 
     #pragma omp parallel
     {
@@ -145,6 +161,8 @@ void Hubb_diss::Sigma_Real_lesret_spawn(int tstp, mpi_comm &comm) {
         // each mpi process must do assigned t points and all k points
         #pragma omp for schedule(static)
         for (int t = init_t; t < last_t; t++) {
+
+            std::complex<double> U2 = U_(t,0,0) * U_(tstp,0,0);
 
             // We first FT G_k to G_r (1D)
             for(int ki = 0; ki < Nk_; ki++) {
@@ -163,6 +181,15 @@ void Hubb_diss::Sigma_Real_lesret_spawn(int tstp, mpi_comm &comm) {
             // FFT normalization factor
             double norm = 1.0 / L_;
 
+            // we have G^<(t,t) so do the HF eval
+            if(t == tstp) {
+              // ellG_{in}(t) = U(t) \rho_{ii}(t)\delta_{in}
+              // \rho_{ii}(t) = -iG^<_{r=0}(t,t) * Iden
+              // Fourier transform gives \ellG_{k} = -iG^<_{r=0}(t,t) * U(t)
+              int ri = 0;
+              ellG_ = -cplx(0.,1.) * cplx(out_fft[ri][0] * norm, out_fft[ri][1] * norm) * U_(tstp,0,0);
+            }
+
             // Evaluate Sigma^<(t,T) =   U^2 G^<_r(t,T) G^<_r(t,T) G^>_{-r}(T,t)
             // Evaluate Sigma^>(T,t) = - U^2 G^>_r(T,t) G^>_r(T,t) G^<_{-r}(t,T)
             //                       +  2U^2 G^<_r(T,t) G^<_r(T,t) G^<_{-r}(t,T)
@@ -180,10 +207,10 @@ void Hubb_diss::Sigma_Real_lesret_spawn(int tstp, mpi_comm &comm) {
                 std::complex<double> G_gtr_r = G_ret_r - std::conj(G_les_mr);
                 std::complex<double> G_gtr_mr = G_ret_mr - std::conj(G_les_r);
 
-                std::complex<double> Sigma_les_r = U_ * U_ * G_les_r * G_les_r * G_gtr_mr;
-                std::complex<double> Sigma_les_mr = U_ * U_ * G_les_mr * G_les_mr * G_gtr_r;
-                std::complex<double> Sigma_gtr_r = -U_ * U_ * G_gtr_r * G_gtr_r * G_les_mr;
-                Sigma_gtr_r                     += 2*U_ * U_ * std::conj(G_les_mr) * std::conj(G_les_mr) * G_les_mr;
+                std::complex<double> Sigma_les_r = U2 * G_les_r * G_les_r * G_gtr_mr;
+                std::complex<double> Sigma_les_mr = U2 * G_les_mr * G_les_mr * G_gtr_r;
+                std::complex<double> Sigma_gtr_r = -U2 * G_gtr_r * G_gtr_r * G_les_mr;
+                Sigma_gtr_r                     += 2*U2 * std::conj(G_les_mr) * std::conj(G_les_mr) * G_les_mr;
 
                 std::complex<double> Sigma_ret_r = Sigma_gtr_r + std::conj(Sigma_les_mr);
                 
@@ -299,6 +326,19 @@ void Hubb_diss::Sigma_nospawn(int tstp,
 
     // 3. Sync and write back S results
     comm.mpi_comm_and_set_nospawn(tstp, Srefs);
+
+    #pragma omp barrier
+
+    if(omp_get_thread_num() == 0 ) {
+      MPI_Allreduce(
+        MPI_IN_PLACE,          // Tells MPI to read from and write to the recvbuf
+        &ellG_,          // Pointer to the underlying contiguous array
+        1,          // Total number of elements (L * L)
+        MPI_DOUBLE_COMPLEX,    // MPI datatype matching std::complex<double>
+        MPI_SUM,               // Summing zeroes with the non-zero gives the non-zero
+        MPI_COMM_WORLD         // Replace with your specific communicator if needed
+      );
+    }
 
     #pragma omp barrier
 }
@@ -459,6 +499,9 @@ void Hubb_diss::Sigma_Real_lesret_nospawn(int tstp, mpi_comm &comm) {
     int init_t = comm.my_first_t;
     int my_Nt = comm.my_Nt;
 
+    // if mpi process is not assigned any time points, we just set ellG_=0
+    if(my_Nt == 0) ellG_ = 0;
+
     // identify thread local fftw buffers
     fftw_complex* in_fft = in_thread_vec[2 * thread_id];
     fftw_complex* out_fft = out_thread_vec[2 * thread_id];
@@ -477,6 +520,8 @@ void Hubb_diss::Sigma_Real_lesret_nospawn(int tstp, mpi_comm &comm) {
         // Iterate over the thread's assigned chunk using t directly
         for (int t = th_my_init_t; t <= th_my_end_t; t++) {
 
+            std::complex<double> U2 = U_(t,0,0) * U_(tstp,0,0);
+
             // We first FT G_k to G_r (1D)
             for(int ki = 0; ki < Nk_; ki++) {
                 auto G_les = comm.map_les(ki, t)(0,0);
@@ -490,6 +535,18 @@ void Hubb_diss::Sigma_Real_lesret_nospawn(int tstp, mpi_comm &comm) {
             // Do the fft for both
             fftw_execute_dft(Gk_to_Gr, in_fft, out_fft);
             fftw_execute_dft(Gk_to_Gr, in_fft_2, out_fft_2);
+
+            // Each mpi process sets ellG to zero
+            // Here, only the thread assigned to the last time point is responsible
+            if(t == init_t+my_Nt) ellG_ = 0;
+
+            // we have G^<(t,t) so do the HF eval
+            if(t == tstp) {
+              // ellG_{in}(t) = U(t) \rho_{ii}(t)\delta_{in}
+              // \rho_{ii}(t) = -iG^<_{r=0}(t,t) * Iden
+              int ri = 0;
+              ellG_ = -cplx(0.,1.) * cplx(out_fft[ri][0] * norm, out_fft[ri][1] * norm) * U_(tstp,0,0);
+            }
 
             // FFT normalization factor
             double norm = 1.0 / L_;
@@ -511,10 +568,10 @@ void Hubb_diss::Sigma_Real_lesret_nospawn(int tstp, mpi_comm &comm) {
                 std::complex<double> G_gtr_r = G_ret_r - std::conj(G_les_mr);
                 std::complex<double> G_gtr_mr = G_ret_mr - std::conj(G_les_r);
 
-                std::complex<double> Sigma_les_r = U_ * U_ * G_les_r * G_les_r * G_gtr_mr;
-                std::complex<double> Sigma_les_mr = U_ * U_ * G_les_mr * G_les_mr * G_gtr_r;
-                std::complex<double> Sigma_gtr_r = -U_ * U_ * G_gtr_r * G_gtr_r * G_les_mr;
-                Sigma_gtr_r                     += 2*U_ * U_ * std::conj(G_les_mr) * std::conj(G_les_mr) * G_les_mr;
+                std::complex<double> Sigma_les_r = U2 * G_les_r * G_les_r * G_gtr_mr;
+                std::complex<double> Sigma_les_mr = U2 * G_les_mr * G_les_mr * G_gtr_r;
+                std::complex<double> Sigma_gtr_r = -U2 * G_gtr_r * G_gtr_r * G_les_mr;
+                Sigma_gtr_r                     += 2*U2 * std::conj(G_les_mr) * std::conj(G_les_mr) * G_les_mr;
 
                 std::complex<double> Sigma_ret_r = Sigma_gtr_r + std::conj(Sigma_les_mr);
                 

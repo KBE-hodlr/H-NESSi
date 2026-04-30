@@ -26,7 +26,7 @@ public:
      * @param Nk Number of irreducible k-points
      * @param nthreads Number of OpenMP threads for local execution
      */
-    Hubb_diss(double U, int L, int nthreads);
+    Hubb_diss(function &U, int L, int nthreads);
 
     /**
      * @brief Destructor - handles FFTW plan destruction and memory cleanup
@@ -52,12 +52,16 @@ public:
                      std::vector<std::reference_wrapper<herm_matrix_hodlr>> &Grefs, 
                      std::vector<std::reference_wrapper<herm_matrix_hodlr>> &Srefs, 
                      dlr_info &dlr);
+
+    double ellG(void) {return ellG_;};
+
 private:
     // Constants
-    double U_; 
+    double function &U_; 
     int L_;
     int Nk_;
     int nthreads_;
+    cplx ellG_;
 
     // Shared FFTW plans (Thread-safe for execution)
     fftw_plan Gk_to_Gr;
