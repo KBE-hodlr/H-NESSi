@@ -95,14 +95,28 @@ set(CMAKE_MESSAGE_LOG_LEVEL ${_old_log_level})
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 # ~~ Option to compile with Nessi ~~
+# INCLUDE_NESSI=ON compiles the NESSi interoperability functions (distance_norm2_* with a cntr::herm_matrix<double>,
+# herm_matrix_hodlr.hpp) and the `nessi` tests.  It needs an installed NESSi libcntr built with -Domp=ON -Dhdf5=ON
+# -Dmpi=ON (the CNTR_USE_* macros below must match the libcntr build).  Give either NESSI_ROOT (install prefix) or
+# NESSI_INCLUDE_DIR (directory that contains cntr/) and NESSI_LIB (directory that contains libcntr).
+# The macros and the library are attached to the h_nessi target as PUBLIC usage requirements (src/CMakeLists.txt),
+# so the library, the examples, the tests and downstream code all see the same INCLUDE_NESSI definition.
 option(INCLUDE_NESSI "Compile functions that use nessi objects" OFF)
 if(INCLUDE_NESSI)
-    message(STATUS "Including nessi headers")
-    include_directories(${NESSI_INCLUDE_DIR})
-    link_directories(${NESSI_LIB})
-    add_definitions("-DCNTR_USE_HDF5")
-    add_definitions("-DCNTR_USE_OMP")
-    add_definitions("-DCNTR_USE_MPI")
+    set(NESSI_ROOT "" CACHE PATH "NESSi (libcntr) install prefix")
+    find_path(NESSI_CNTR_INCLUDE_DIR NAMES cntr/cntr.hpp
+              HINTS ${NESSI_INCLUDE_DIR} ${NESSI_ROOT}/include NO_DEFAULT_PATH)
+    find_path(NESSI_CNTR_INCLUDE_DIR NAMES cntr/cntr.hpp)
+    find_library(NESSI_CNTR_LIBRARY NAMES cntr HINTS ${NESSI_LIB} ${NESSI_ROOT}/lib NO_DEFAULT_PATH)
+    find_library(NESSI_CNTR_LIBRARY NAMES cntr)
+    find_library(NESSI_CNTR_HDF5_LIBRARY NAMES cntr_hdf5 HINTS ${NESSI_LIB} ${NESSI_ROOT}/lib NO_DEFAULT_PATH)
+    find_library(NESSI_CNTR_HDF5_LIBRARY NAMES cntr_hdf5)
+    if(NOT NESSI_CNTR_INCLUDE_DIR OR NOT NESSI_CNTR_LIBRARY OR NOT NESSI_CNTR_HDF5_LIBRARY)
+        message(FATAL_ERROR "INCLUDE_NESSI=ON but NESSi was not found (cntr/cntr.hpp: ${NESSI_CNTR_INCLUDE_DIR}, "
+                            "libcntr: ${NESSI_CNTR_LIBRARY}, libcntr_hdf5: ${NESSI_CNTR_HDF5_LIBRARY}). "
+                            "Set NESSI_ROOT, or NESSI_INCLUDE_DIR and NESSI_LIB.")
+    endif()
+    message(STATUS "Including NESSi: headers ${NESSI_CNTR_INCLUDE_DIR}, library ${NESSI_CNTR_LIBRARY}")
 endif(INCLUDE_NESSI)
 
 # ~~ Build tests ~~

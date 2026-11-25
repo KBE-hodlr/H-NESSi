@@ -9,7 +9,11 @@
 #include "dlr.hpp"
 
 #ifdef INCLUDE_NESSI
-  #include "cntr/cntr_herm_matrix_decl.hpp"
+// NESSi interoperability (BUGS B8, WP-N). Only the class template is needed for the declarations below; code that
+// calls them includes "cntr/cntr.hpp" itself. The INCLUDE_NESSI macro is defined by the CMake option of the same name.
+namespace cntr {
+template <typename T> class herm_matrix;
+}
 #endif
 
 
@@ -585,11 +589,42 @@ double distance_norm2_curr_les(int tstp, herm_matrix_hodlr &g1, herm_matrix_hodl
 double distance_norm2_tv(int tstp, herm_matrix_hodlr &g1, herm_matrix_hodlr &g2);
 
 #ifdef INCLUDE_NESSI
-double distance_norm2_curr(int tstp, herm_matrix_hodlr &g1, cntr::herm_matrix &g2, dlr_info &dlr);
-double distance_norm2_mat(herm_matrix_hodlr &g1, cntr::herm_matrix &g2, dlr_info &dlr);
-double distance_norm2_curr_ret(int tstp, herm_matrix_hodlr &g1, cntr::herm_matrix &g2);
-double distance_norm2_curr_les(int tstp, herm_matrix_hodlr &g1, cntr::herm_matrix &g2);
-double distance_norm2_tv(int tstp, herm_matrix_hodlr &g1, cntr::herm_matrix &g2, dlr_info &dlr);
+/**
+ * @name Distance to a NESSi `cntr::herm_matrix<double>` (compiled only with -DINCLUDE_NESSI=ON)
+ *
+ * Compare a herm_matrix_hodlr `g1` with a NESSi (uncompressed, equidistant-tau) `cntr::herm_matrix<double>` `g2` of
+ * the same contour function. Conventions and the storage mapping are in agent_docs/05_nessi_herm_matrix.md:
+ * both store G^R(t,t') for t >= t' and G^<(t,t') for t <= t' with the same orbital order (row-major (i,j)), the
+ * same sign conventions (G^R = G^> - G^<, rho = -G^M(beta) = i xi G^<(t,t), G^tv(t,0) = G^<(t,0)), and the same
+ * time index t_n = n h. NESSi's `nt()` is the LAST time index (nt+1 points) while H-NESSi's `nt()` is the number of
+ * points. NESSi stores G^M and G^tv at tau_m = m beta/ntau, m = 0..ntau (ntau = g2.ntau()); H-NESSi stores them at
+ * the DLR nodes, so for mat/tv the DLR expansion of g1 is evaluated at NESSi's grid (get_mat_tau_array /
+ * get_tv_tau_array), and these two distances contain the DLR interpolation error (~ eps_dlr * |G|).
+ *
+ * All five return an absolute, unnormalised Frobenius (l2) norm of the difference, summed over all stored entries
+ * listed below (no division by the number of points; mat and tv therefore grow like sqrt(ntau+1)). With
+ * ||A||^2 = sum_ij |A_ij|^2 for an N_o x N_o block:
+ *  - distance_norm2_curr_ret(tstp,g1,g2)  = sqrt( sum_{t'=0..tstp} ||g1^R(tstp,t') - g2^R(tstp,t')||^2 )
+ *  - distance_norm2_curr_les(tstp,g1,g2)  = sqrt( sum_{t=0..tstp}  ||g1^<(t,tstp) - g2^<(t,tstp)||^2 )
+ *  - distance_norm2_tv(tstp,g1,g2,dlr)    = sqrt( sum_{m=0..ntau}  ||g1^tv(tstp,tau_m) - g2^tv(tstp,tau_m)||^2 )
+ *  - distance_norm2_mat(g1,g2,dlr)        = sqrt( sum_{m=0..ntau}  ||g1^M(tau_m) - g2^M(tau_m)||^2 )
+ *    (g1^M is real, H-NESSi limitation D1: an imaginary part of g2^M counts fully in the distance)
+ *  - distance_norm2_curr(tstp,g1,g2,dlr)  = distance_norm2_mat(g1,g2,dlr) for tstp == -1, otherwise
+ *                                           sqrt( curr_ret^2 + curr_les^2 + tv^2 ) at tstp.
+ *
+ * Preconditions (checked, std::invalid_argument): equal size1/size2 (square), equal sig, g2.nt() >= tstp; for the
+ * real-time rows g1 must hold row tstp in its current window (g1.tstpmk() <= tstp <= g1.tstp()); for mat/tv
+ * g2.ntau() >= 1 and dlr.r() == g1.r(), dlr.xi() == g1.sig(), dlr.size1() == g1.size1(); tv needs 0 <= tstp < g1.nt().
+ * The beta of NESSi's tau grid is taken from dlr.beta() (NESSi does not store beta).
+ * Not thread-safe for a shared dlr_info (eval_point uses dlr scratch, doc 03).
+ */
+///@{
+double distance_norm2_curr(int tstp, herm_matrix_hodlr &g1, cntr::herm_matrix<double> &g2, dlr_info &dlr);
+double distance_norm2_mat(herm_matrix_hodlr &g1, cntr::herm_matrix<double> &g2, dlr_info &dlr);
+double distance_norm2_curr_ret(int tstp, herm_matrix_hodlr &g1, cntr::herm_matrix<double> &g2);
+double distance_norm2_curr_les(int tstp, herm_matrix_hodlr &g1, cntr::herm_matrix<double> &g2);
+double distance_norm2_tv(int tstp, herm_matrix_hodlr &g1, cntr::herm_matrix<double> &g2, dlr_info &dlr);
+///@}
 #endif
 
 

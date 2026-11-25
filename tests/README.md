@@ -57,7 +57,7 @@ about 90 s wall. The `slow` sweeps (21 tests) dominate in Debug at roughly 70 s 
 | executable | ported from | contents |
 |---|---|---|
 | `test_integration` | `agent_scratch/02/t.cpp` | polynomial exactness of every weight table (k = 0..6); `bd_weights` with k+2 terms; Gregory symmetry; convergence orders |
-| `test_dlr_matsubara` | `03/test_dlr.cpp`, `51/t_mat.cpp` | DLR maps, `get_mat_tau`, `density_matrix`, reversed/tv accessors, `tv_it_conv`, `les_it_int`, `gamma_integral(_mat)` against quadrature; `dyson_mat` against the exact hybridised G^M (μ shift, mixing, return value); `dyson_mat` leaves Σ and both conv tensors untouched, `fixHam=true` reuses the saved G0; `dyson::memory_usage_bytes` counts every heap buffer with its real size (B32); the `initGMConvTensor` dlr ξ/r assert (death test, Debug only, skipped in Release); B1 B2 B3 B4 (B1, B2 fixed in WP3; B4 fixed in WP2) |
+| `test_dlr_matsubara` | `03/test_dlr.cpp`, `51/t_mat.cpp` | DLR maps, `get_mat_tau`, `density_matrix`, reversed/tv accessors, `tv_it_conv`, `les_it_int`, `gamma_integral(_mat)` against quadrature; `dyson_mat` against the exact hybridised G^M (μ shift, mixing, return value); `dyson_mat` leaves Σ and both conv tensors untouched, `fixHam=true` reuses the saved G0; `dyson::memory_usage_bytes` counts every heap buffer with its real size (B32); the `initGMConvTensor` dlr ξ/r assert (death test, Debug only, skipped in Release); B1 B2 B3 B4 (B1, B2 fixed in WP3; B4 fixed in WP2; B3 fixed in WP-N: `get_*_tau_array` = pointwise accessors) |
 | `test_bosonic` | `51/t_resolvent.cpp`, new (WP3) | exact resolvent identity G_ε∗G_η = (G_ε−G_η)/(ε−η) for both ξ; B1 B2 B10 (fixed in WP3) and the Q2 relation; end-to-end system+bath run (dyson_mat → initGMConvTensor → dyson_start → dyson_timestep, drive after the bootstrap) vs the exact propagator, both ξ, order k+1 for k = 2, 4 in R, <, ⌉ |
 | `test_free_extrap` | `23/ta,tb,tc.cpp` | `green_from_H` exact (real and complex H, both ξ); `green_from_H_dm`; `extrapolate` order k+1 (and the `_2leg` variant, no-op on a second call); `gamma_integral` against a dense quadrature, order k+1; `gamma_integral(0)` = ξ·`gamma_integral_mat` (N_o = 1, 2); `green_from_H_dm` G^⌉(t,0) = G^<(t,0); B2 B10 (fixed in WP3) |
 | `test_hodlr_storage` | old `tests/linalg.cpp`, `52/s9.cpp`, `52/s1.cpp` | `mgs`, incremental TSVD; fill/archive/read-back round trips for 8 geometries; zero-first-row blocks (S9); checkpoint round trip; checkpoint `format_version` (new bosonic file silent, missing version warns on stderr, fermionic silent, not in `write_to_hdf5` output); copy semantics (WP4): `get/set_timestep_curr` leave the source bitwise unchanged (full checkpoint dump compared), give the destination the source window, tstp = −1 with different windows, window/geometry asserts (death test, Debug only); `operator=`/copy ctor deep copy, and a copy taken mid-run (dyson_mat → dyson_start → dyson_timestep) continues bitwise like the original; B9 B22 (fixed in WP4) B23 B26 B6 (fixed in WP4) |
@@ -65,6 +65,7 @@ about 90 s wall. The `slow` sweeps (21 tests) dominate in Debug at roughly 70 s 
 | `test_bootstrap` | `22/start_test.cpp`, `51/t_start*.cpp` | TTI and non-TTI bootstrap (horiz/diag, nobc, 2leg) against a dense reference that uses the **correct** continuation and the right-acting imp_tp0 system, plus order k+1 against the exact impurity+bath model; the imp_tp0 error estimate; B12 B13 B25 B31 (all fixed in WP1) |
 | `test_mpi_comm` | `31/commtest.cpp` | `mpi_comm` routing with P simulated ranks: MPI symbols interposed (incl. `MPI_Query_thread`), std::thread per rank, 1–5 ranks, spawn/nospawn, vector/reference_wrapper, high-level and lambda APIs; `_nospawn` in a `num_threads(2)` team and outside a region; trailing barrier of the set (H24); `my_first_t`/`my_Nt` (H30); thread-level warning (H28); B20 B21 (fixed in WP5; `OMP_NUM_THREADS=4`) |
 | `test_read_inputfile` | new | `find_param` for int/double/bool/cplx/vector; missing values throw; B15 |
+| `test_nessi_interop` | new (WP-N) | **only with `-DINCLUDE_NESSI=ON`**, label `nessi` (`ctest -L nessi`). The five `distance_norm2_*` overloads for `cntr::herm_matrix<double>` (doc 05): exact `green_from_H` in both libraries (roundoff for R/<, DLR error for tv/M; ξ = ±1, N_o = 1, 2), shared sign conventions, complex h (D1: mat distance = Im G^M), single-entry perturbations seen only by the matching function, checked preconditions, and full driven dyson runs (Σ = 0 and a fixed bath Σ, both ξ) in both libraries with order-k+1 convergence of the distance; B8 |
 | `test_read_inputfile_2tu` (link) | `52/ri1+ri2.cpp` | B19 |
 | `test_b6_operator_assign` (link) | new | B6 (fixed in WP4; ctest `OperatorAssignLinkAndDeepCopy_B6`, ordinary test) |
 | `KnownBug_B16_MpiExampleRestart` (example) | `agent_docs/32` §6.3 | runs `mpi_example` (L=4, Nt=64) uninterrupted, then stop (`__time_limit=0`) followed by restart; `obs.h5` must agree to 1e-10 |
@@ -78,10 +79,10 @@ XF means expected failure.
 |---|---|---|---|---|
 | B1 | `DlrBoson.TvItConvVsQuadrature`, `ResolventBoson.TvItConv`, `EndToEndBoson.MatStartTimestepVsExact`, `GMConvTensorDeathTest.DlrXiOrRankMismatchAsserts`, `HodlrCheckpoint.FormatVersion*` | pass | pass | **fixed in WP3** (was: bosonic `tv_it_conv` = −reference, rel. err 2.0). The death test is skipped in Release (assert off) |
 | B2 | `DlrBoson.GammaIntegralMixedTerm`, `ResolventBoson.GammaIntegralEquilibrium`, `ResolventBoson.GammaIntegralVsMat`, `GammaIntegralBoson.VsQuadrature`, `GammaIntegralBoson.EquilibriumVsMat`, `GammaIntegralBoson.EquilibriumVsMatSingleOrbital` | pass | pass | **fixed in WP3** (was: wrong sign of the bosonic mixed term, error 2.87; relation `gamma_integral = ξ·gamma_integral_mat` violated) |
-| B3 | `DlrArray.KnownBug_B3_GetMatTauArray`, `DlrArray.KnownBug_B3_GetTvTauArray` | XF | XF | child SIGSEGV |
+| B3 | `DlrArray.GetMatTauArray`, `DlrArray.GetTvTauArray` (formerly KnownBug_B3), `DlrArrayP.MatTauArrayEqualsPointwise/*`, `DlrArrayP.TvTauArrayEqualsPointwise/*` | pass | pass | **fixed in WP-N** (was: child SIGSEGV) |
 | B4 | `DysonMat.FixHamSecondCall`, `DysonMatFixHam.ReusesSavedG0/*` | pass | pass | **fixed in WP2** (was: rel. difference 1.10) |
 | B6 | `OperatorAssignLinkAndDeepCopy_B6` (link), `HodlrAssign.DeepCopyIndependent`, `HodlrAssign.CopyContinuesDysonIdentically` | pass | pass | **fixed in WP4** (was: undefined reference to `operator=`) |
-| B8 | — | | | not testable without a NESSi build (see below) |
+| B8 | `test_nessi_interop` (`NessiEq.*`, `NessiConventions.*`, `NessiEqComplexH.*`, `NessiPerturb.*`, `NessiPreconditions.*`, `NessiDynamics.*`; label `nessi`, built only with `-DINCLUDE_NESSI=ON`) | pass | pass | **fixed in WP-N** (was: block compiled out; did not compile with the macro) |
 | B9 | `HodlrCheckpoint.KnownBug_B9_TimingZeroWhenMissing` | XF | XF | uninitialised timing (malloc perturbation) |
 | B10 | `ResolventBoson.GreenFromHdm`, `GreenFromHdm.BosonExact` | pass | pass | **fixed in WP3** (was: bosonic G^< error 0.13 / 0.11; decision D-1: `rho` is the density matrix) |
 | B12 | `Bootstrap.NttiHorizSlotZero`, `…NttiDiagSlotZero`, `…TwoLegDiagSlotZero`, `BootstrapRetNtti.OrderSlotZero`, `Bootstrap.Slow_*SlotZeroSweep` | pass | pass | **fixed in WP1** (was: library ≠ correct reference (≈1e-3); order 2 instead of k+1) |
@@ -110,8 +111,6 @@ The B14 test also checks the correct boundary sign through its dense reference: 
 
 ### Not made into tests
 
-* **B8** (`INCLUDE_NESSI` block does not compile; the CMake option never defines the macro). Building it needs
-  NESSi (`cntr`) headers and a library, and none is installed yet (decision D-5, WP-N).
 * **B17** (`mpi_example` `jxt_iter_*` indexed past BootMaxIter+1). This is a silent heap overrun with no
   observable symptom unless the example is built with ASan or `_GLIBCXX_ASSERTIONS`, and the examples must not be
   modified or rebuilt differently in WP0.
@@ -123,8 +122,8 @@ The B14 test also checks the correct boundary sign through its dense reference: 
 
 ## Release vs Debug
 
-Both builds pass 100% (238 tests after WP4+WP5). Release has 10 expected failures and skips the Debug-only death tests
-(`GMConvTensorDeathTest`, `HodlrCopyDeathTest`); Debug has 10. The differences are:
+Both builds pass 100% (246 tests after WP-N; 259 with `-DINCLUDE_NESSI=ON`, which adds the 13 `nessi` tests). Release has
+8 expected failures and skips the Debug-only death tests (`GMConvTensorDeathTest`, `HodlrCopyDeathTest`); Debug has 8. The differences are:
 
 * Until WP4, `HodlrCopy.KnownBugDebug_B22_GetTimestepCurrMatsubara` (now `HodlrCopy.GetTimestepCurrMatsubara`) was an
   expected failure in Debug only: `assert(tstp>=tstpmk_)` fired before the `tstp==-1` branch (B22, fixed in WP4).

@@ -105,3 +105,4 @@ cmake-build-*/
 *.app
 
 build-debug/
+build-*/

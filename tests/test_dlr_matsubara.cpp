@@ -550,7 +550,9 @@ TEST(DysonMemory, CountsAllBuffers) {
     }
 }
 
-// ---------------------------------------------------------------- B3: vector eval_point (segfault)
+// ---------------------------------------------------------------- B3: vector eval_point (fixed in WP-N)
+// Formerly KnownBug_B3_*: the vector eval_point overloads wrote into an empty `taurel` and evaluated every point at
+// taurel[0] (child SIGSEGV).
 namespace {
 void b3_setup(int xi, int nao, dlr_info *&dlr, herm_matrix_hodlr *&G, FreeG *&g, ExpSum *&gf, double &beta) {
   beta = 10.;
@@ -565,40 +567,132 @@ void b3_setup(int xi, int nao, dlr_info *&dlr, herm_matrix_hodlr *&G, FreeG *&g,
   for (int i = 0; i < r; i++) G->set_mat(i, (*g)(dlr->it0B(i)));
   for (int i = 0; i < r; i++) G->set_tv(1, i, ZMatrix((*gf)(dlr->it0B(i))));
 }
+void b3_cleanup(dlr_info *dlr, herm_matrix_hodlr *G, FreeG *g, ExpSum *gf) {
+  delete dlr;
+  delete G;
+  delete g;
+  delete gf;
+}
+// tau points in [0, beta]: both endpoints, points within 1e-14..1e-6 of each endpoint, an equidistant grid
+// (NESSi's grid, 0..beta in ntau steps) and some random interior points.
+DColVector b3_taus(double beta) {
+  std::vector<double> t = {0., beta};
+  for (double d : {1e-14, 1e-12, 1e-9, 1e-6, 1e-3}) {
+    t.push_back(d * beta);
+    t.push_back(beta - d * beta);
+  }
+  int ntau = 50;
+  for (int i = 0; i <= ntau; i++) t.push_back(i * beta / ntau);
+  std::mt19937 rg(11);
+  std::uniform_real_distribution<double> u(0., beta);
+  for (int i = 0; i < 20; i++) t.push_back(u(rg));
+  DColVector taus(t.size());
+  for (size_t i = 0; i < t.size(); i++) taus(i) = t[i];
+  return taus;
+}
 }  // namespace
 
-TEST(DlrArray, KnownBug_B3_GetMatTauArray) {
-  hn_test::run_isolated([] {
-    int nao = 2;
-    dlr_info *dlr;
-    herm_matrix_hodlr *G;
-    FreeG *g;
-    ExpSum *gf;
-    double beta;
-    b3_setup(-1, nao, dlr, G, g, gf, beta);
-    DColVector taus(4);
-    taus << 0.0, 1.0, 2.5, 7.0;
-    std::vector<double> out(4 * nao * nao);
-    G->get_mat_tau_array(taus, *dlr, out.data());
-    for (int q = 0; q < 4; q++)
-      EXPECT_LT((DMatrixMap(out.data() + q * nao * nao, nao, nao) - (*g)(taus(q))).norm(), 1e-11) << "tau=" << taus(q);
-  });
+// The array accessors must agree pointwise with the scalar accessors (same arithmetic, so to roundoff),
+// and with the analytic function to the DLR accuracy; for both statistics and N_o = 1, 2.
+class DlrArrayP : public ::testing::TestWithParam<std::tuple<int, int>> {};
+
+TEST_P(DlrArrayP, MatTauArrayEqualsPointwise) {
+  int xi = std::get<0>(GetParam()), nao = std::get<1>(GetParam()), es = nao * nao;
+  dlr_info *dlr;
+  herm_matrix_hodlr *G;
+  FreeG *g;
+  ExpSum *gf;
+  double beta;
+  b3_setup(xi, nao, dlr, G, g, gf, beta);
+  DColVector taus = b3_taus(beta);
+  int nt = taus.size();
+  // all four output overloads
+  std::vector<double> outd(nt * es);
+  std::vector<C> outz(nt * es);
+  DMatrix outD(nt, es);
+  ZMatrix outZ(nt, es);
+  G->get_mat_tau_array(taus, *dlr, outd.data());
+  G->get_mat_tau_array(taus, *dlr, outz.data());
+  G->get_mat_tau_array(taus, *dlr, outD);
+  G->get_mat_tau_array(taus, *dlr, outZ);
+  double maxdiff = 0, maxexact = 0;
+  for (int q = 0; q < nt; q++) {
+    DMatrix M(nao, nao);
+    G->get_mat_tau(taus(q), *dlr, M);
+    double sc = 1. + M.norm();
+    maxdiff = std::max(maxdiff, (DMatrixMap(outd.data() + q * es, nao, nao) - M).norm() / sc);
+    maxdiff = std::max(maxdiff, (ZMatrixMap(outz.data() + q * es, nao, nao) - M.cast<C>()).norm() / sc);
+    maxdiff = std::max(maxdiff, (DMatrixMap(outD.data() + q * es, nao, nao) - M).norm() / sc);
+    maxdiff = std::max(maxdiff, (ZMatrixMap(outZ.data() + q * es, nao, nao) - M.cast<C>()).norm() / sc);
+    maxexact = std::max(maxexact, (DMatrixMap(outd.data() + q * es, nao, nao) - (*g)(taus(q))).norm());
+  }
+  EXPECT_LT(maxdiff, 1e-14) << "xi=" << xi << " nao=" << nao;
+  EXPECT_LT(maxexact, 1e-10) << "xi=" << xi << " nao=" << nao;
+  b3_cleanup(dlr, G, g, gf);
 }
 
-TEST(DlrArray, KnownBug_B3_GetTvTauArray) {
-  hn_test::run_isolated([] {
-    int nao = 2;
-    dlr_info *dlr;
-    herm_matrix_hodlr *G;
-    FreeG *g;
-    ExpSum *gf;
-    double beta;
-    b3_setup(-1, nao, dlr, G, g, gf, beta);
-    DColVector taus(3);
-    taus << 0.5, 3.0, 9.0;
-    std::vector<C> out(3 * nao * nao);
-    G->get_tv_tau_array(1, taus, *dlr, out.data());
-    for (int q = 0; q < 3; q++)
-      EXPECT_LT((ZMatrixMap(out.data() + q * nao * nao, nao, nao) - (*gf)(taus(q))).norm(), 1e-9) << "tau=" << taus(q);
-  });
+TEST_P(DlrArrayP, TvTauArrayEqualsPointwise) {
+  int xi = std::get<0>(GetParam()), nao = std::get<1>(GetParam()), es = nao * nao;
+  dlr_info *dlr;
+  herm_matrix_hodlr *G;
+  FreeG *g;
+  ExpSum *gf;
+  double beta;
+  b3_setup(xi, nao, dlr, G, g, gf, beta);
+  DColVector taus = b3_taus(beta);
+  int nt = taus.size();
+  std::vector<C> outz(nt * es);
+  ZMatrix outZ(nt, es);
+  G->get_tv_tau_array(1, taus, *dlr, outz.data());
+  G->get_tv_tau_array(1, taus, *dlr, outZ);
+  double maxdiff = 0, maxexact = 0;
+  for (int q = 0; q < nt; q++) {
+    ZMatrix M(nao, nao);
+    G->get_tv_tau(1, taus(q), *dlr, M);
+    double sc = 1. + M.norm();
+    maxdiff = std::max(maxdiff, (ZMatrixMap(outz.data() + q * es, nao, nao) - M).norm() / sc);
+    maxdiff = std::max(maxdiff, (ZMatrixMap(outZ.data() + q * es, nao, nao) - M).norm() / sc);
+    maxexact = std::max(maxexact, (ZMatrixMap(outz.data() + q * es, nao, nao) - (*gf)(taus(q))).norm() / sc);
+  }
+  EXPECT_LT(maxdiff, 1e-14) << "xi=" << xi << " nao=" << nao;
+  EXPECT_LT(maxexact, 1e-9) << "xi=" << xi << " nao=" << nao;
+  b3_cleanup(dlr, G, g, gf);
+}
+
+INSTANTIATE_TEST_SUITE_P(XiNao, DlrArrayP,
+                         ::testing::Combine(::testing::Values(-1, 1), ::testing::Values(1, 2)));
+
+// The original WP0 reproducers (formerly KnownBug_B3_*), kept as plain tests.
+TEST(DlrArray, GetMatTauArray) {
+  int nao = 2;
+  dlr_info *dlr;
+  herm_matrix_hodlr *G;
+  FreeG *g;
+  ExpSum *gf;
+  double beta;
+  b3_setup(-1, nao, dlr, G, g, gf, beta);
+  DColVector taus(4);
+  taus << 0.0, 1.0, 2.5, 7.0;
+  std::vector<double> out(4 * nao * nao);
+  G->get_mat_tau_array(taus, *dlr, out.data());
+  for (int q = 0; q < 4; q++)
+    EXPECT_LT((DMatrixMap(out.data() + q * nao * nao, nao, nao) - (*g)(taus(q))).norm(), 1e-11) << "tau=" << taus(q);
+  b3_cleanup(dlr, G, g, gf);
+}
+
+TEST(DlrArray, GetTvTauArray) {
+  int nao = 2;
+  dlr_info *dlr;
+  herm_matrix_hodlr *G;
+  FreeG *g;
+  ExpSum *gf;
+  double beta;
+  b3_setup(-1, nao, dlr, G, g, gf, beta);
+  DColVector taus(3);
+  taus << 0.5, 3.0, 9.0;
+  std::vector<C> out(3 * nao * nao);
+  G->get_tv_tau_array(1, taus, *dlr, out.data());
+  for (int q = 0; q < 3; q++)
+    EXPECT_LT((ZMatrixMap(out.data() + q * nao * nao, nao, nao) - (*gf)(taus(q))).norm(), 1e-9) << "tau=" << taus(q);
+  b3_cleanup(dlr, G, g, gf);
 }

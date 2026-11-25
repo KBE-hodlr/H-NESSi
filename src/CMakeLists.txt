@@ -48,7 +48,11 @@ target_link_libraries(h_nessi PUBLIC
 )
 
 if(INCLUDE_NESSI)
-  target_link_libraries(h_nessi PUBLIC cntr)
+  # BUGS B8: the option must define the INCLUDE_NESSI macro (PUBLIC, so that herm_matrix_hodlr.hpp declares the
+  # NESSi overloads for every consumer).  CNTR_USE_* must match the libcntr build (omp, hdf5, mpi = ON).
+  target_compile_definitions(h_nessi PUBLIC INCLUDE_NESSI CNTR_USE_HDF5 CNTR_USE_OMP CNTR_USE_MPI)
+  target_include_directories(h_nessi PUBLIC ${NESSI_CNTR_INCLUDE_DIR})
+  target_link_libraries(h_nessi PUBLIC ${NESSI_CNTR_LIBRARY} ${NESSI_CNTR_HDF5_LIBRARY})
 endif()
 
 # Grab the headers from the new directory structure (pointing to the project root -> include -> h_nessi)

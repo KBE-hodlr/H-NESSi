@@ -76,7 +76,7 @@ endfunction()
 
 # ------------------------------------------------------------------ gtest executables
 hn_add_test_exe(test_integration MODULE integration SOURCES test_integration.cpp)
-hn_add_test_exe(test_dlr_matsubara MODULE dlr SOURCES test_dlr_matsubara.cpp BUGS 3)
+hn_add_test_exe(test_dlr_matsubara MODULE dlr SOURCES test_dlr_matsubara.cpp)
 hn_add_test_exe(test_bosonic MODULE bosonic SOURCES test_bosonic.cpp)
 hn_add_test_exe(test_free_extrap MODULE free_extrap SOURCES test_free_extrap.cpp)
 hn_add_test_exe(test_hodlr_storage MODULE storage SOURCES test_hodlr_storage.cpp BUGS 9 23 26)
@@ -85,6 +85,11 @@ hn_add_test_exe(test_bootstrap MODULE bootstrap SOURCES test_bootstrap.cpp)
 
 hn_add_test_exe(test_mpi_comm MODULE mpi_comm SOURCES test_mpi_comm.cpp ENV "OMP_NUM_THREADS=4")
 hn_add_test_exe(test_read_inputfile MODULE read_inputfile SOURCES test_read_inputfile.cpp BUGS 15)
+
+# NESSi interoperability (WP-N, B8): only with -DINCLUDE_NESSI=ON; labels "unit;nessi" (ctest -L nessi).
+if(INCLUDE_NESSI)
+  hn_add_test_exe(test_nessi_interop MODULE nessi SOURCES test_nessi_interop.cpp)
+endif()
 
 # ------------------------------------------------------------------ helper tool: HDF5 dataset flattener
 add_executable(h5flat tools/h5flat.cpp)

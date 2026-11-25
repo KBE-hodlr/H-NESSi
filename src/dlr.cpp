@@ -101,13 +101,13 @@ void dlr_info::eval_point(DColVector &tau, double *Gtij, double *Mtij) {
   int one = 1;
   
   DColVector tau01 = tau/beta_;
-  DColVector taurel;
   int ntau = tau.size();
+  DColVector taurel(ntau);  // B3: c_abs2rel writes ntau entries
   c_abs2rel(&ntau, tau01.data(), taurel.data());
 
   DMatrixMap(Gijc_.data(), es, r_).noalias() = LU_.solve(DMatrixMap(Gtij, r_, es)).transpose();
   for(int i = 0; i < ntau; i++) {
-    c_dlr_it_eval(&r_, &size1_, dlrrf_.data(), Gijc_.data(), taurel.data(), res_.data());
+    c_dlr_it_eval(&r_, &size1_, dlrrf_.data(), Gijc_.data(), taurel.data()+i, res_.data());
     DMatrixMap(Mtij+i*es, size1_, size2_) = DMatrixMap(res_.data(), size1_, size2_);  
   }
 }
@@ -117,13 +117,13 @@ void dlr_info::eval_point(DColVector &tau, double *Gtij, cplx *Mtij) {
   int one = 1;
   
   DColVector tau01 = tau/beta_;
-  DColVector taurel;
   int ntau = tau.size();
+  DColVector taurel(ntau);  // B3: c_abs2rel writes ntau entries
   c_abs2rel(&ntau, tau01.data(), taurel.data());
 
   DMatrixMap(Gijc_.data(), es, r_).noalias() = LU_.solve(DMatrixMap(Gtij, r_, es)).transpose();
   for(int i = 0; i < ntau; i++) {
-    c_dlr_it_eval(&r_, &size1_, dlrrf_.data(), Gijc_.data(), taurel.data(), res_.data());
+    c_dlr_it_eval(&r_, &size1_, dlrrf_.data(), Gijc_.data(), taurel.data()+i, res_.data());
     ZMatrixMap(Mtij+i*es, size1_, size2_) = DMatrixMap(res_.data(), size1_, size2_);  
   }
 }
@@ -133,18 +133,18 @@ void dlr_info::eval_point(DColVector &tau, cplx *Gtij, cplx *Mtij) {
   int one = 1;
   
   DColVector tau01 = tau/beta_;
-  DColVector taurel;
   int ntau = tau.size();
+  DColVector taurel(ntau);  // B3: c_abs2rel writes ntau entries
   c_abs2rel(&ntau, tau01.data(), taurel.data());
 
   DMatrixMap(Gijc_.data(), es, r_).noalias() = LU_.solve(ZMatrixMap(Gtij, r_, es).real()).transpose();
   for(int i = 0; i < ntau; i++) {
-    c_dlr_it_eval(&r_, &size1_, dlrrf_.data(), Gijc_.data(), taurel.data(), res_.data());
+    c_dlr_it_eval(&r_, &size1_, dlrrf_.data(), Gijc_.data(), taurel.data()+i, res_.data());
     ZMatrixMap(Mtij+i*es, size1_, size2_) = DMatrixMap(res_.data(), size1_, size2_);  
   }
   DMatrixMap(Gijc_.data(), es, r_).noalias() = LU_.solve(ZMatrixMap(Gtij, r_, es).imag()).transpose();
   for(int i = 0; i < ntau; i++) {
-    c_dlr_it_eval(&r_, &size1_, dlrrf_.data(), Gijc_.data(), taurel.data(), res_.data());
+    c_dlr_it_eval(&r_, &size1_, dlrrf_.data(), Gijc_.data(), taurel.data()+i, res_.data());
     ZMatrixMap(Mtij+i*es, size1_, size2_) += cplx(0.,1.) * DMatrixMap(res_.data(), size1_, size2_);  
   }
 }
