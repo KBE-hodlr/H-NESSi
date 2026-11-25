@@ -12,6 +12,7 @@ be wrong (`agent_docs/BUGS.md`), the test is registered as an expected failure.
 cd H-NESSi/build && make -j16 && cd tests && ctest -j16
 # Debug (-O0 -g, asserts on)
 mkdir -p H-NESSi/build-debug && cd H-NESSi/build-debug && ../build-debug.sh && make -j16 && cd tests && ctest -j16
+# RelWithAsserts (since WP6a: -O2 -g, tier-1 asserts on, EIGEN_NO_DEBUG): as build.sh with -DCMAKE_BUILD_TYPE=RelWithAsserts
 
 ctest -LE slow             # everything except the long convergence sweeps (recommended for Debug)
 ctest -L slow              # only the sweeps
@@ -46,7 +47,7 @@ about 90 s wall. The `slow` sweeps (21 tests) dominate in Debug at roughly 70 s 
   For B16 and B19, delete `WILL_FAIL` (B6 was flipped this way in WP4: `WILL_FAIL FALSE`, label `unit`).
 * **Labels.** `gtest_discover_tests` flattens list-valued properties, so labels are attached by the generated ctest
   include file `hn_labels.cmake`.
-* **Link tests** (B6, fixed in WP4, and the known failure B19). The targets `test_b6_operator_assign` and `test_read_inputfile_2tu` are
+* **Link tests** (B6, fixed in WP4, and B19, fixed in WP6a). The targets `test_b6_operator_assign` and `test_read_inputfile_2tu` are
   `EXCLUDE_FROM_ALL`, so the default build does not break. The ctest builds the target with `cmake --build`
   (`link/build_and_run.cmake`) and then runs it. The test holds `RESOURCE_LOCK hn_build_tree`.
 * **`h5flat`** (`tools/h5flat.cpp`) flattens HDF5 files to text. The example test and
@@ -64,20 +65,21 @@ about 90 s wall. The `slow` sweeps (21 tests) dominate in Debug at roughly 70 s 
 | `test_timestep` | `20/rettv.cpp`, `21/les.cpp` | R/⌉ step against dense discrete equations (5 geometries), against svdtol, order k+1 (k = 1..5); < step against the dense system, the 8-region decomposition of `les_lesadv_int_0_tstp` and raw storage, both rho modes, 2-leg, closed-system N conservation, order k+1; B14 B28 |
 | `test_bootstrap` | `22/start_test.cpp`, `51/t_start*.cpp` | TTI and non-TTI bootstrap (horiz/diag, nobc, 2leg) against a dense reference that uses the **correct** continuation and the right-acting imp_tp0 system, plus order k+1 against the exact impurity+bath model; the imp_tp0 error estimate; B12 B13 B25 B31 (all fixed in WP1) |
 | `test_mpi_comm` | `31/commtest.cpp` | `mpi_comm` routing with P simulated ranks: MPI symbols interposed (incl. `MPI_Query_thread`), std::thread per rank, 1–5 ranks, spawn/nospawn, vector/reference_wrapper, high-level and lambda APIs; `_nospawn` in a `num_threads(2)` team and outside a region; trailing barrier of the set (H24); `my_first_t`/`my_Nt` (H30); thread-level warning (H28); B20 B21 (fixed in WP5; `OMP_NUM_THREADS=4`) |
-| `test_read_inputfile` | new | `find_param` for int/double/bool/cplx/vector; missing values throw; B15 |
+| `test_read_inputfile` | new | `find_param` for int/double/bool/cplx/vector; missing values throw; every error is a `std::runtime_error` with flag, token and file; B15 (fixed in WP6a) |
 | `test_nessi_interop` | new (WP-N) | **only with `-DINCLUDE_NESSI=ON`**, label `nessi` (`ctest -L nessi`). The five `distance_norm2_*` overloads for `cntr::herm_matrix<double>` (doc 05): exact `green_from_H` in both libraries (roundoff for R/<, DLR error for tv/M; ξ = ±1, N_o = 1, 2), shared sign conventions, complex h (D1: mat distance = Im G^M), single-entry perturbations seen only by the matching function, checked preconditions, and full driven dyson runs (Σ = 0 and a fixed bath Σ, both ξ) in both libraries with order-k+1 convergence of the distance; B8 |
+| `test_checks` | new (WP6a) | the check infrastructure (`checks.hpp`): exception types and message format, tier-1 behaviour, OpenMP policy (death tests: abort inside a user region; capture/rethrow in library regions); constructor validation (herm_matrix_hodlr HM-C*, Integrator KMAX, dlr_info DL-*, dyson DY-C*); dyson entry checks (geometry bundle, step synchronisation DY-T1, bootstrap window DY-S1, `green_from_H*` tmax/window H11, dlr pairing, extrapolate); finiteness (L9, DY-P1); ST-2 (stale convolution tensor, checkpoints incl. pre-v2 bosonic); ST-3 (saved G0); D-11 Hermiticity of h (throw before modifying, in-place symmetrisation + diagnostic, opt-out, warn once, complex h(−1), RHO_HORIZONTAL mean-field run); concurrent `dlr_info` construction (H3) |
 | `test_read_inputfile_2tu` (link) | `52/ri1+ri2.cpp` | B19 |
 | `test_b6_operator_assign` (link) | new | B6 (fixed in WP4; ctest `OperatorAssignLinkAndDeepCopy_B6`, ordinary test) |
 | `KnownBug_B16_MpiExampleRestart` (example) | `agent_docs/32` §6.3 | runs `mpi_example` (L=4, Nt=64) uninterrupted, then stop (`__time_limit=0`) followed by restart; `obs.h5` must agree to 1e-10 |
 
 ## BUG ID → test map
 
-Status is for the code as of WP0 (CLAUDE_dev = upstream 5c9706b), updated for the bugs fixed since (WP1: B12, B13, B25, B31; WP2: B4; WP3: B1, B2, B10; WP4: B22, B6; WP5: B20, B21).
+Status is for the code as of WP0 (CLAUDE_dev = upstream 5c9706b), updated for the bugs fixed since (WP1: B12, B13, B25, B31; WP2: B4; WP3: B1, B2, B10; WP4: B22, B6; WP5: B20, B21; WP6a: B15, B19, B23).
 XF means expected failure.
 
 | BUGS id | test(s) | Release | Debug | symptom seen by the test |
 |---|---|---|---|---|
-| B1 | `DlrBoson.TvItConvVsQuadrature`, `ResolventBoson.TvItConv`, `EndToEndBoson.MatStartTimestepVsExact`, `GMConvTensorDeathTest.DlrXiOrRankMismatchAsserts`, `HodlrCheckpoint.FormatVersion*` | pass | pass | **fixed in WP3** (was: bosonic `tv_it_conv` = −reference, rel. err 2.0). The death test is skipped in Release (assert off) |
+| B1 | `DlrBoson.TvItConvVsQuadrature`, `ResolventBoson.TvItConv`, `EndToEndBoson.MatStartTimestepVsExact`, `GMConvTensor.DlrXiOrRankMismatchThrows`, `HodlrCheckpoint.FormatVersion*` | pass | pass | **fixed in WP3** (was: bosonic `tv_it_conv` = −reference, rel. err 2.0). The ξ/r check is tier 2 since WP6a (was a Debug-only death test) |
 | B2 | `DlrBoson.GammaIntegralMixedTerm`, `ResolventBoson.GammaIntegralEquilibrium`, `ResolventBoson.GammaIntegralVsMat`, `GammaIntegralBoson.VsQuadrature`, `GammaIntegralBoson.EquilibriumVsMat`, `GammaIntegralBoson.EquilibriumVsMatSingleOrbital` | pass | pass | **fixed in WP3** (was: wrong sign of the bosonic mixed term, error 2.87; relation `gamma_integral = ξ·gamma_integral_mat` violated) |
 | B3 | `DlrArray.GetMatTauArray`, `DlrArray.GetTvTauArray` (formerly KnownBug_B3), `DlrArrayP.MatTauArrayEqualsPointwise/*`, `DlrArrayP.TvTauArrayEqualsPointwise/*` | pass | pass | **fixed in WP-N** (was: child SIGSEGV) |
 | B4 | `DysonMat.FixHamSecondCall`, `DysonMatFixHam.ReusesSavedG0/*` | pass | pass | **fixed in WP2** (was: rel. difference 1.10) |
@@ -88,15 +90,15 @@ XF means expected failure.
 | B12 | `Bootstrap.NttiHorizSlotZero`, `…NttiDiagSlotZero`, `…TwoLegDiagSlotZero`, `BootstrapRetNtti.OrderSlotZero`, `Bootstrap.Slow_*SlotZeroSweep` | pass | pass | **fixed in WP1** (was: library ≠ correct reference (≈1e-3); order 2 instead of k+1) |
 | B13 | `Bootstrap.NttiImpTp0`, `BootstrapRetNtti.OrderImpTp0TwoOrbitals`, `…OrderImpTp0TwoOrbitalsSlotZero`, `Bootstrap.Slow_NttiImpTp0SlotZeroSweep` | pass | pass | **fixed in WP1** (was: column-0 order 3 for k ≥ 3, N_o = 2) |
 | B14 | `LesNobc.KnownBug_B14_AccuracyAndBoundary` | XF | XF | `_nobc` G^< error 0.33; boundary mismatch 5.7e-3 |
-| B15 | `ReadInputfile.KnownBug_B15_EmptyBoolThrows` | XF | XF | child SIGSEGV instead of an exception |
+| B15 | `ReadInputfile.EmptyBoolThrows_B15` (formerly KnownBug_B15), `ReadInputfile.ErrorsAreRuntimeErrorsWithContext` | pass | pass | **fixed in WP6a** (was: child SIGSEGV instead of an exception) |
 | B16 | `KnownBug_B16_MpiExampleRestart` | XF | XF | restart run exits with 139 (segfault) |
 | B17 | — | | | not testable (see below) |
-| B19 | `KnownBug_B19_ReadInputfileTwoTULink` | XF | XF | multiple definition of `uncomment_line` … |
+| B19 | `ReadInputfileTwoTULink_B19` (link, formerly KnownBug_B19) | pass | pass | **fixed in WP6a** (was: multiple definition of `uncomment_line` …) |
 | B20 | `MpiCommChecks.TooFewComponentsHighLevel`, `MpiCommChecks.TooManyLambdas` (formerly KnownBug_B20), `MpiCommChecks.NospawnEveryThreadThrowsInsideRegion` | pass | pass | **fixed in WP5** (was: no exception; heap corruption, child SIGABRT) |
 | B21 | `MpiCommNospawn.TeamSmallerThanMaxThreads`, `MpiCommNospawn.CalledOutsideParallel` (formerly KnownBug_B21), `MpiCommNospawn.LambdaTeamSmallerThanMaxThreads`, `MpiCommNospawn.LambdaCalledOutsideParallel` | pass | pass | **fixed in WP5** (was: stale/unpacked buffer entries) |
 | B22 | `HodlrCopy.GetTimestepCurrWindow`, `HodlrCopy.GetTimestepCurrSourceUnchangedAndContinues`, `HodlrCopy.SetTimestepCurrSourceUnchanged`, `HodlrCopyDeathTest.WindowAndGeometryAsserts` | pass | pass | **fixed in WP4** (was: source tstpmk 8 → 0; destination window wrong). The death test is skipped in Release (assert off) |
 | B22 (assert part) | `HodlrCopy.GetTimestepCurrMatsubara` | pass | pass | **fixed in WP4** (was: Debug `assert(tstp>=tstpmk_)` fired before the `tstp==-1` branch) |
-| B23 | `HodlrGeometry.KnownBug_B23_NlvlZeroNoCrash` | XF | XF | child SIGSEGV in `init_shape` |
+| B23 | `HodlrGeometry.NlvlZeroRejected_B23` (formerly KnownBug_B23), `CtorChecks.HermMatrixHodlrGeometry` | pass | pass | **fixed in WP6a** (was: child SIGSEGV in `init_shape`; now `h_nessi::precondition_error`) |
 | B24 | — | | | not testable (see below) |
 | B25 | `Bootstrap2leg.FunctionOverloadForwardsImpTp0` | pass | pass | **fixed in WP1** (was: `function&` and pointer overloads differ when `imp_tp0=true`) |
 | B26 | `HodlrMemory.KnownBug_B26_MemoryReport` | XF | XF | reported memory ≠ true block storage |
@@ -120,7 +122,12 @@ The B14 test also checks the correct boundary sign through its dense reference: 
   and there is no deterministic reference to compare it against.
 * **B29** (notebook) and **B30** (comments) have no runtime behaviour.
 
-## Release vs Debug
+## Release vs Debug vs RelWithAsserts
+
+After WP-N + WP6a: Release, Debug and RelWithAsserts each pass 100% (277 tests including `slow`; 5 expected failures:
+B9 B14 B16 B26 B28); with `-DINCLUDE_NESSI=ON`, 290 tests. The tier-2 checks are identical in all builds; the death tests of tier-1 asserts
+(`HodlrCopyDeathTest`, `ChecksMacrosDeathTest.Tier1AssertAbortsOnlyWithoutNDEBUG` in its abort branch) run only
+with asserts on. Before WP6a:
 
 Both builds pass 100% (246 tests after WP-N; 259 with `-DINCLUDE_NESSI=ON`, which adds the 13 `nessi` tests). Release has
 8 expected failures and skips the Debug-only death tests (`GMConvTensorDeathTest`, `HodlrCopyDeathTest`); Debug has 8. The differences are:

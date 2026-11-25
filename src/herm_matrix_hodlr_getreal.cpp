@@ -10,6 +10,7 @@ void herm_matrix_hodlr::density_matrix(int tstp, dlr_info &dlr, DMatrix &M){
   assert(M.rows() == size1_ && M.cols() == size2_);
   assert(tstp >= -1 && tstp <= nt_);
     if (tstp == -1) {
+        check_dlr_("herm_matrix_hodlr::density_matrix", dlr);
         get_mat_tau(dlr.beta(),dlr,M);
         M *= (-1.0);
     } else {
@@ -24,6 +25,7 @@ void herm_matrix_hodlr::density_matrix(int tstp, dlr_info &dlr, ZMatrix &M){
   assert(M.rows() == size1_ && M.cols() == size2_);
   assert(tstp >= -1 && tstp <= nt_);
     if (tstp == -1) {
+        check_dlr_("herm_matrix_hodlr::density_matrix", dlr);
         get_mat_tau(dlr.beta(),dlr,M);
         M *= -1.;
     } else {

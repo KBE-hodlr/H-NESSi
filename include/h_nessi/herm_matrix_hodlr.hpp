@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 #include "block.hpp"
 #include "blocks_keldysh.hpp"
@@ -403,8 +404,17 @@ class herm_matrix_hodlr{
 
   // Mixed (Matsubara/real-time) convolution helpers
   /** Initialize the mixed-component convolution tensor using DLR info in `dlr`.
-   * This allocates and fills the internal GMConvTensMatrix_. */
+   * This allocates and fills the internal GMConvTensMatrix_. `dlr` must have the same xi, r and size as this object
+   * (tier 2, h_nessi::precondition_error). It must be called after the last change of G^M (after the last
+   * dyson_mat): the solvers check (ST-2) that the tensor belongs to the current G^M and throw h_nessi::state_error
+   * otherwise. */
   void initGMConvTensor(dlr_info &dlr);
+  /** 64-bit hash (FNV-1a over the bit patterns) of the G^M data; O(r*size1*size2). */
+  std::uint64_t mat_hash() const;
+  /** ST-2: true if the convolution tensor was built by initGMConvTensor from the current G^M. */
+  bool gmconv_current() const;
+  /** ST-2: throws h_nessi::state_error unless gmconv_current(); `where` names the calling routine. */
+  void require_gmconv_current(const char *where, bool check_hash = true) const;
 
   // I/O and diagnostics
   /** Version written as `label/format_version` by write_checkpoint_hdf5.
@@ -580,6 +590,15 @@ class herm_matrix_hodlr{
     /// @private
     /** \brief <b> whether or not the object can be extrapolated.  Extrapolation overwrites the last direct slices, so it can only be called immediately after block update </b> */
     bool can_extrap_;
+    /// @private ST-2: GMConvTensMatrix_ was built by initGMConvTensor (false for a pre-v2 bosonic checkpoint)
+    bool gmconv_valid_ = false;
+    /// @private ST-2: mat_hash() of the G^M the tensor was built from
+    std::uint64_t gmconv_hash_ = 0;
+    /// @private dlr pairing check (tier 2)
+    void check_dlr_(const char *where, const dlr_info &dlr) const;
+    /// @private HM-C1..C7 constructor validation
+    static void check_geometry_(const char *where, int nt, int r, int nlvl, double svdtol, int size1, int size2, int sig,
+                                int k);
 };
 
 double distance_norm2_curr(int tstp, herm_matrix_hodlr &g1, herm_matrix_hodlr &g2);

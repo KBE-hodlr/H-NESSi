@@ -79,12 +79,13 @@ hn_add_test_exe(test_integration MODULE integration SOURCES test_integration.cpp
 hn_add_test_exe(test_dlr_matsubara MODULE dlr SOURCES test_dlr_matsubara.cpp)
 hn_add_test_exe(test_bosonic MODULE bosonic SOURCES test_bosonic.cpp)
 hn_add_test_exe(test_free_extrap MODULE free_extrap SOURCES test_free_extrap.cpp)
-hn_add_test_exe(test_hodlr_storage MODULE storage SOURCES test_hodlr_storage.cpp BUGS 9 23 26)
+hn_add_test_exe(test_hodlr_storage MODULE storage SOURCES test_hodlr_storage.cpp BUGS 9 26)
 hn_add_test_exe(test_timestep MODULE timestep SOURCES test_timestep.cpp BUGS 14 28)
 hn_add_test_exe(test_bootstrap MODULE bootstrap SOURCES test_bootstrap.cpp)
 
 hn_add_test_exe(test_mpi_comm MODULE mpi_comm SOURCES test_mpi_comm.cpp ENV "OMP_NUM_THREADS=4")
-hn_add_test_exe(test_read_inputfile MODULE read_inputfile SOURCES test_read_inputfile.cpp BUGS 15)
+hn_add_test_exe(test_read_inputfile MODULE read_inputfile SOURCES test_read_inputfile.cpp)
+hn_add_test_exe(test_checks MODULE checks SOURCES test_checks.cpp)
 
 # NESSi interoperability (WP-N, B8): only with -DINCLUDE_NESSI=ON; labels "unit;nessi" (ctest -L nessi).
 if(INCLUDE_NESSI)
@@ -95,15 +96,15 @@ endif()
 add_executable(h5flat tools/h5flat.cpp)
 target_link_libraries(h5flat PRIVATE ${HDF5_LIBRARIES})
 
-# ------------------------------------------------------------------ link tests (B6 fixed in WP4; B19 known bug)
+# ------------------------------------------------------------------ link tests (B6 fixed in WP4; B19 fixed in WP6a)
 # These targets are excluded from ALL and built by the ctest itself (cmake --build ... --target X, then run X).
-# B19 cannot link today: WILL_FAIL, so a fix shows up as an unexpected pass.  B6 (operator=) links since WP4 and is
-# an ordinary test.
+# Both are ordinary tests now: B6 (operator=) links since WP4, B19 (read_inputfile.hpp in two translation units)
+# since WP6a.
 add_executable(test_read_inputfile_2tu EXCLUDE_FROM_ALL link/ri_tu1.cpp link/ri_tu2.cpp)
 target_link_libraries(test_read_inputfile_2tu PRIVATE h_nessi ${COMMON_LIBS})
 add_executable(test_b6_operator_assign EXCLUDE_FROM_ALL link/b6_assign.cpp)
 target_link_libraries(test_b6_operator_assign PRIVATE h_nessi ${COMMON_LIBS})
-foreach(pair "B19;test_read_inputfile_2tu;KnownBug_B19_ReadInputfileTwoTULink;TRUE;known_bug"
+foreach(pair "B19;test_read_inputfile_2tu;ReadInputfileTwoTULink_B19;FALSE;unit"
              "B6;test_b6_operator_assign;OperatorAssignLinkAndDeepCopy_B6;FALSE;unit")
   list(GET pair 0 bug)
   list(GET pair 1 tgt)

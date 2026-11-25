@@ -4,6 +4,16 @@ project("h_nessi")
 set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CMAKE_COMMAND} -E time")
 
 set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
+
+# ~~ Build type RelWithAsserts (decision D-6): optimised (-O2 -g) with the tier-1 checks (assert, HNESSI_ASSERT) on,
+#    i.e. without NDEBUG. Eigen's own internal asserts are switched off (EIGEN_NO_DEBUG), they slow hot loops. ~~
+set(CMAKE_CXX_FLAGS_RELWITHASSERTS "-O2 -g -DEIGEN_NO_DEBUG" CACHE STRING
+    "C++ flags for the RelWithAsserts build type (no NDEBUG: tier-1 asserts on)" FORCE)
+set(CMAKE_C_FLAGS_RELWITHASSERTS "-O2 -g" CACHE STRING "C flags for the RelWithAsserts build type" FORCE)
+set(CMAKE_EXE_LINKER_FLAGS_RELWITHASSERTS "" CACHE STRING "" FORCE)
+set(CMAKE_SHARED_LINKER_FLAGS_RELWITHASSERTS "" CACHE STRING "" FORCE)
+mark_as_advanced(CMAKE_CXX_FLAGS_RELWITHASSERTS CMAKE_C_FLAGS_RELWITHASSERTS
+                 CMAKE_EXE_LINKER_FLAGS_RELWITHASSERTS CMAKE_SHARED_LINKER_FLAGS_RELWITHASSERTS)
 set(COMMON_LIBS "")
 
 # ~~ Add OpenMP ~~

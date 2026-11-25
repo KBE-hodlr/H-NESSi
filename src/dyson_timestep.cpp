@@ -7,6 +7,10 @@ namespace h_nessi {
 
 double dyson::dyson_timestep_ret(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma,
                                Integration::Integrator &I, double h){
+  call_scope cs(api_depth_);
+  const char *where = "dyson::dyson_timestep_ret";
+  if(cs.outer()) enter_timestep_(where, tstp, G, Sigma, I, h, mu, H, 0, tstp-1, false);
+
 
   std::chrono::time_point<std::chrono::system_clock> retstart, retend, intstart, intend;
   std::chrono::duration<double, std::micro> retdur(0), intdur(0), intcurrdur(0), intblkdur(0), intcorrdur(0), intdirdur(0), intdircorrdur(0);
@@ -205,11 +209,15 @@ double dyson::dyson_timestep_ret(int tstp, herm_matrix_hodlr &G, double mu, cplx
   if(profile_) timing(tstp, 5) = intdircorrdur.count();
   if(profile_) timing(tstp, 6) = intcorrdur.count();
 
-  return err;
+  return cs.outer() ? ensure_finite_(err, where) : err;
 }
 
 double dyson::dyson_timestep_les_nobc(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma,
                                Integration::Integrator &I, double h){
+  call_scope cs(api_depth_);
+  const char *where = "dyson::dyson_timestep_les_nobc";
+  if(cs.outer()) enter_timestep_(where, tstp, G, Sigma, I, h, mu, H, 0, tstp, false);
+
   assert(tstp > I.get_k());
   assert(Sigma.nt() > tstp);
 
@@ -513,11 +521,15 @@ double dyson::dyson_timestep_les_nobc(int tstp, herm_matrix_hodlr &G, double mu,
   if(profile_) timing(tstp, 23) = int3dur_curr.count();
   if(profile_) timing(tstp, 24) = int3dur_corr.count();
 
-  return err;
+  return cs.outer() ? ensure_finite_(err, where) : err;
 }
 
 double dyson::dyson_timestep_les_2leg(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma,
                                Integration::Integrator &I, double h){
+  call_scope cs(api_depth_);
+  const char *where = "dyson::dyson_timestep_les_2leg";
+  if(cs.outer()) enter_timestep_(where, tstp, G, Sigma, I, h, mu, H, 0, tstp, false);
+
   assert(tstp > I.get_k());
   assert(Sigma.nt() > tstp);
 
@@ -821,11 +833,15 @@ double dyson::dyson_timestep_les_2leg(int tstp, herm_matrix_hodlr &G, double mu,
   if(profile_) timing(tstp, 23) = int3dur_curr.count();
   if(profile_) timing(tstp, 24) = int3dur_corr.count();
 
-  return err;
+  return cs.outer() ? ensure_finite_(err, where) : err;
 }
 
 double dyson::dyson_timestep_les(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma,
                                Integration::Integrator &I, double h){
+  call_scope cs(api_depth_);
+  const char *where = "dyson::dyson_timestep_les";
+  if(cs.outer()) enter_timestep_(where, tstp, G, Sigma, I, h, mu, H, 0, tstp, false);
+
   assert(tstp > I.get_k());
   assert(Sigma.nt() > tstp);
 
@@ -1068,11 +1084,15 @@ double dyson::dyson_timestep_les(int tstp, herm_matrix_hodlr &G, double mu, cplx
   if(profile_) timing(tstp, 23) = int3dur_curr.count();
   if(profile_) timing(tstp, 24) = int3dur_corr.count();
 
-  return err;
+  return cs.outer() ? ensure_finite_(err, where) : err;
 }
 
 double dyson::dyson_timestep_tv(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma,
                                Integration::Integrator &I, double h){
+  call_scope cs(api_depth_);
+  const char *where = "dyson::dyson_timestep_tv";
+  if(cs.outer()) enter_timestep_(where, tstp, G, Sigma, I, h, mu, H, tstp, tstp, true);
+
   assert(tstp > I.get_k());
   assert(Sigma.nt() > tstp);
 
@@ -1148,7 +1168,7 @@ double dyson::dyson_timestep_tv(int tstp, herm_matrix_hodlr &G, double mu, cplx 
   if(profile_) timing(tstp, 8) = int1dur.count();
   if(profile_) timing(tstp, 9) = int2dur.count();
 
-  return err;
+  return cs.outer() ? ensure_finite_(err, where) : err;
 }
 
 } // namespace

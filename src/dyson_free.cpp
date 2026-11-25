@@ -1,5 +1,6 @@
 #include "h_nessi/dyson.hpp"
 #include <iomanip>
+#include <cmath>
 
 using namespace std::chrono;
 
@@ -101,6 +102,13 @@ DColVector bose_exp(double beta,double tau,DColVector &omega){
 
 
 void dyson::green_from_H_mat(double *g0, double mu, ZMatrix H) {
+  call_scope cs(api_depth_);
+  const char *where = "dyson::green_from_H_mat";
+  if(cs.outer()) {
+    HNESSI_REQUIRE(H.rows() == nao_ && H.cols() == nao_ && std::isfinite(mu), where, HNESSI_KV(H.rows()),
+                   HNESSI_KV(H.cols()), HNESSI_KV(nao_), HNESSI_KV(mu));
+    hermitize_(H.data() + es_, -1, -1, where);   // D-11 on the local copy (H is passed by value), recorded as h(-1)
+  }
   double tau;
   // Make Hamiltonian and solve eigen problem
   ZMatrix Hmu = mu * ZMatrixMap(iden_.data(), nao_, nao_) - H;
@@ -123,7 +131,30 @@ void dyson::green_from_H_mat(double *g0, double mu, ZMatrix H) {
 }
 
 
+// DY-F1..DY-F5 (tier 2; H11: tmax <= k and G.tstpmk() == 0, the rows 0..tmax live in the circular window)
+void dyson::check_free_args_(const char *where, herm_matrix_hodlr &G, double mu, const ZMatrix &H, double h, int tmax) {
+  HNESSI_REQUIRE(G.sig() == xi_, where, HNESSI_KV(G.sig()), HNESSI_KV(xi_),
+                 detail::note{"Fermion/Boson xi of G does not agree with the dlr_info of this dyson"});
+  HNESSI_REQUIRE(G.r() == r_, where, HNESSI_KV(G.r()), HNESSI_KV(r_),
+                 detail::note{"Ntau of G does not agree with r of libdlr"});
+  HNESSI_REQUIRE(G.size1() == nao_ && G.size2() == nao_ && H.rows() == nao_ && H.cols() == nao_, where,
+                 HNESSI_KV(G.size1()), HNESSI_KV(H.rows()), HNESSI_KV(H.cols()), HNESSI_KV(nao_));
+  HNESSI_REQUIRE(0 <= tmax && tmax <= k_ && tmax < G.nt(), where, HNESSI_KV(tmax), HNESSI_KV(k_), HNESSI_KV(G.nt()),
+                 detail::note{"green_from_H* fills only the bootstrap rows 0..tmax <= k (circular buffers, ISSUES H11); "
+                              "for later times propagate with dyson_timestep"});
+  HNESSI_REQUIRE_STATE(G.tstpmk() == 0, where, HNESSI_KV(G.tstpmk()),
+                       detail::note{"green_from_H* writes rows 0..tmax as if the window were 0..k"});
+  HNESSI_REQUIRE(std::isfinite(h) && h > 0 && std::isfinite(mu), where, HNESSI_KV(h), HNESSI_KV(mu));
+}
+
 void dyson::green_from_H(herm_matrix_hodlr &G, double mu, function &H, double h, int tmax, bool inc_mat) {
+  call_scope cs(api_depth_);
+  const char *where = "dyson::green_from_H";
+  if(cs.outer()) {
+    check_function_(where, H, -1);
+    check_free_args_(where, G, mu, H.get_map(-1), h, tmax);
+    hermitize_(H.ptr(0), -1, -1, where);   // D-11, in place on slice -1 of the user's function
+  }
   green_from_H( G, mu, H.get_map(-1), h, tmax, inc_mat);
 }
 
@@ -133,12 +164,11 @@ void dyson::green_from_H(herm_matrix_hodlr &G, double mu, function &H, double h,
 // G^R(n,j) = -iU_{n,j} = U_{n,0} (U_{j,0})^\dagger
 // G^L(j,n) = -siU_{j,0} f_s(h-mu) (U_{n,0})^\dagger
 void dyson::green_from_H(herm_matrix_hodlr &G, double mu, ZMatrix H, double h, int tmax, bool inc_mat) {
-  if( G.sig() != xi_ ) {
-    throw std::invalid_argument("Fermion/Boson xi does not agree");
-  }
-  if( G.r() != r_ ) {
-    std::cout<<G.r() << " "<< r_<<std::endl;
-    throw std::invalid_argument("Ntau of G does not agree with r of libdlr");
+  call_scope cs(api_depth_);
+  const char *where = "dyson::green_from_H";
+  if(cs.outer()) {
+    check_free_args_(where, G, mu, H, h, tmax);
+    hermitize_(H.data() + es_, -1, -1, where);   // D-11 on the local copy (H is passed by value), recorded as h(-1)
   }
 
   int sign = G.sig();
@@ -213,12 +243,13 @@ void dyson::green_from_H(herm_matrix_hodlr &G, double mu, ZMatrix H, double h, i
 }
 
 void dyson::green_from_H_dm(herm_matrix_hodlr &G, double mu, ZMatrix H, ZMatrix &rho, double h, int tmax) {
-  if( G.sig() != xi_ ) {
-    throw std::invalid_argument("Fermion/Boson xi does not agree");
-  }
-  if( G.r() != r_ ) {
-    std::cout<<G.r() << " "<< r_<<std::endl;
-    throw std::invalid_argument("Ntau of G does not agree with r of libdlr");
+  call_scope cs(api_depth_);
+  const char *where = "dyson::green_from_H_dm";
+  if(cs.outer()) {
+    check_free_args_(where, G, mu, H, h, tmax);
+    HNESSI_REQUIRE(rho.rows() == nao_ && rho.cols() == nao_, where, HNESSI_KV(rho.rows()), HNESSI_KV(rho.cols()),
+                   HNESSI_KV(nao_));
+    hermitize_(H.data() + es_, -1, -1, where);   // D-11 on the local copy (H is passed by value), recorded as h(-1)
   }
 
   int sign = G.sig();
@@ -278,6 +309,13 @@ void dyson::extrapolate_2leg(herm_matrix_hodlr &G, Integration::Integrator &I) {
   int l, j, jcut;
 
   if(G.can_extrap()) {
+    // DY-X1, DY-X2 (tier 2)
+    HNESSI_REQUIRE(G.k() == k_ && I.k() == k_ && G.size1() == nao_ && G.size2() == nao_ && G.r() == r_ &&
+                   G.nt() <= nt_, "dyson::extrapolate_2leg", HNESSI_KV(G.k()), HNESSI_KV(I.k()), HNESSI_KV(k_),
+                   HNESSI_KV(G.size1()), HNESSI_KV(nao_), HNESSI_KV(G.r()), HNESSI_KV(r_), HNESSI_KV(G.nt()),
+                   HNESSI_KV(nt_));
+    HNESSI_REQUIRE_STATE(k_+1 <= tstp && tstp < G.nt(), "dyson::extrapolate_2leg", HNESSI_KV(tstp), HNESSI_KV(k_),
+                         HNESSI_KV(G.nt()), detail::note{"there is no row tstp = G.tstpmk()+k to extrapolate to"});
     //retarded
     memset(Q_.data(), 0, (tstp+1)*es_*sizeof(cplx));
     for(l=0; l<tstp-k_; l++) {
@@ -338,6 +376,13 @@ void dyson::extrapolate(herm_matrix_hodlr &G, Integration::Integrator &I) {
   int l, j, jcut;
 
   if(G.can_extrap()) {
+    // DY-X1, DY-X2 (tier 2)
+    HNESSI_REQUIRE(G.k() == k_ && I.k() == k_ && G.size1() == nao_ && G.size2() == nao_ && G.r() == r_ &&
+                   G.nt() <= nt_, "dyson::extrapolate", HNESSI_KV(G.k()), HNESSI_KV(I.k()), HNESSI_KV(k_),
+                   HNESSI_KV(G.size1()), HNESSI_KV(nao_), HNESSI_KV(G.r()), HNESSI_KV(r_), HNESSI_KV(G.nt()),
+                   HNESSI_KV(nt_));
+    HNESSI_REQUIRE_STATE(k_+1 <= tstp && tstp < G.nt(), "dyson::extrapolate", HNESSI_KV(tstp), HNESSI_KV(k_),
+                         HNESSI_KV(G.nt()), detail::note{"there is no row tstp = G.tstpmk()+k to extrapolate to"});
     //right mixing
     memset(G.tvptr(tstp,0), 0, es_*ntau_*sizeof(cplx));
     memset(G.tvptr_trans(tstp,0), 0, es_*ntau_*sizeof(cplx));

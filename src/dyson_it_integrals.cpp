@@ -60,7 +60,23 @@ void dyson::tv_it_conv(cplx *Sigma, cplx *res, double *GMConvTens) {
   }
 }
 
+// DY-I2 + ST-2 + dlr pairing (tier 2) for the public tv_it_conv/les_it_int entry points
+void dyson::check_it_args_(const char *where, int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G) {
+  HNESSI_REQUIRE(G.size1() == nao_ && G.size2() == nao_ && Sigma.size1() == nao_ && Sigma.size2() == nao_, where,
+                 HNESSI_KV(G.size1()), HNESSI_KV(Sigma.size1()), HNESSI_KV(nao_));
+  HNESSI_REQUIRE(G.r() == r_ && Sigma.r() == r_ && G.sig() == xi_ && Sigma.sig() == xi_, where, HNESSI_KV(G.r()),
+                 HNESSI_KV(Sigma.r()), HNESSI_KV(r_), HNESSI_KV(G.sig()), HNESSI_KV(Sigma.sig()), HNESSI_KV(xi_),
+                 detail::note{"G and Sigma must match the dlr_info of this dyson"});
+  HNESSI_REQUIRE(0 <= tstp && tstp < Sigma.nt() && tstp < G.nt(), where, HNESSI_KV(tstp), HNESSI_KV(Sigma.nt()),
+                 HNESSI_KV(G.nt()));
+}
+
 void dyson::tv_it_conv(int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G, cplx *res) {
+  call_scope cs(api_depth_);
+  if(cs.outer()) {
+    check_it_args_("dyson::tv_it_conv", tstp, Sigma, G);
+    G.require_gmconv_current("dyson::tv_it_conv");   // ST-2
+  }
   dyson::tv_it_conv(Sigma.tvptr_trans(tstp,0), res, G.GMConvTens());
 }
 
@@ -72,6 +88,13 @@ void dyson::tv_it_conv(int m, cplx *Sigma, cplx *res,double *GMConvTens) {
 }
 
 void dyson::tv_it_conv(int m, int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G, cplx *res) {
+  call_scope cs(api_depth_);
+  if(cs.outer()) {
+    check_it_args_("dyson::tv_it_conv", tstp, Sigma, G);
+    HNESSI_REQUIRE(0 <= m && m < r_, "dyson::tv_it_conv", HNESSI_KV(m), HNESSI_KV(r_));
+    // ST-2: only the O(1) validity flag here; hashing G^M (O(r*es)) would cost as much as this single-node call
+    G.require_gmconv_current("dyson::tv_it_conv", false);
+  }
   dyson::tv_it_conv(m, Sigma.tvptr_trans(tstp,0), res, G.GMConvTens());
 }
 
@@ -81,6 +104,8 @@ void dyson::tv_it_conv(int m, int tstp, herm_matrix_hodlr &Sigma, herm_matrix_ho
 // Result goes into res VIA INCREMENT
 // Integral is transposed in ij indicies
 void dyson::les_it_int(int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G, cplx* res) {
+  call_scope cs(api_depth_);
+  if(cs.outer()) check_it_args_("dyson::les_it_int", tstp, Sigma, G);   // DY-I3
   assert(tstp <= G.nt());
   assert(tstp <= Sigma.nt());
   assert(tstp <= nt_);
@@ -111,6 +136,11 @@ void dyson::les_it_int(int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G,
 // Result goes into res VIA INCREMENT
 // Integral is transposed in ij indicies
 void dyson::les_it_int(int t, int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G, cplx* res) {
+  call_scope cs(api_depth_);
+  if(cs.outer()) {   // DY-I4
+    check_it_args_("dyson::les_it_int", tstp, Sigma, G);
+    HNESSI_REQUIRE(0 <= t && t < Sigma.nt(), "dyson::les_it_int", HNESSI_KV(t), HNESSI_KV(Sigma.nt()));
+  }
   assert(tstp <= G.nt());
   assert(tstp <= Sigma.nt());
   assert(tstp <= nt_);

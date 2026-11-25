@@ -3,6 +3,7 @@
 #include <string>
 
 #include "h_nessi/herm_matrix_hodlr.hpp"
+#include "h_nessi/checks.hpp"
 
 namespace h_nessi {
 
@@ -20,6 +21,11 @@ herm_matrix_hodlr::herm_matrix_hodlr(h5e::File &in, std::string label) :
   tstpmk_ = in.getDataSet(label + std::string("/tstpmk")).read<int>();
   built_blocks_ = in.getDataSet(label + std::string("/built_blocks")).read<int>();
   can_extrap_ = in.getDataSet(label + std::string("/can_extrap")).read<bool>();
+  // HM-C11 (scalar part, tier 2): the stored geometry must be one the constructor accepts
+  check_geometry_("herm_matrix_hodlr::herm_matrix_hodlr(h5e::File&,label)", nt_, r_, nlvl_, svdtol_, size1_, size2_,
+                  sig_, k_);
+  HNESSI_REQUIRE(0 <= tstpmk_ && tstpmk_ <= nt_, "herm_matrix_hodlr::herm_matrix_hodlr(h5e::File&,label)",
+                 HNESSI_KV(tstpmk_), HNESSI_KV(nt_));
   
   mat_.resize(r_ * size1_ * size2_);
   DMatrixMap(mat_.data(), r_, size1_*size2_) = in.getDataSet(label + std::string("/mat")).read<DMatrix>();
@@ -36,6 +42,15 @@ herm_matrix_hodlr::herm_matrix_hodlr(h5e::File &in, std::string label) :
               << " < 2. Its GMConvTensMatrix was written before the bosonic-sign fix and is wrong;"
               << " rebuild it with initGMConvTensor(dlr) before time stepping." << std::endl;
   }
+  // ST-2: the stored tensor is accepted for the stored G^M unless it is a pre-v2 bosonic tensor (wrong sign) or the
+  // writer recorded it as not built for its G^M (gmconv_valid = 0, written since WP6); the solvers refuse an invalid
+  // tensor until initGMConvTensor is called.
+  bool stored_valid = true;
+  if(in.exist(label + std::string("/gmconv_valid"))) {
+    stored_valid = in.getDataSet(label + std::string("/gmconv_valid")).read<int>() != 0;
+  }
+  gmconv_valid_ = stored_valid && !(format_version < 2 && sig_ == 1);
+  gmconv_hash_ = mat_hash();
 
   curr_timestep_ret_ = in.getDataSet(label + std::string("/curr_timestep_ret")).read<std::vector<cplx>>();
   curr_timestep_les_ = in.getDataSet(label + std::string("/curr_timestep_les")).read<std::vector<cplx>>();
@@ -132,6 +147,7 @@ void herm_matrix_hodlr::write_checkpoint_hdf5(h5e::File &out, std::string label)
   // Matsubara data
   h5e::dump(out, label + std::string("/mat"), DMatrixMap(mat_.data(), r_, size1_*size2_));
   h5e::dump(out, label + std::string("/GMConvTensMatrix"), GMConvTensMatrix_);
+  h5e::dump(out, label + std::string("/gmconv_valid"), int(gmconv_current() ? 1 : 0));
 
   // Current timestep data
   h5e::dump(out, label + std::string("/curr_timestep_ret"), curr_timestep_ret_);

@@ -18,6 +18,7 @@
 #include <Eigen/Eigen>
 
 #include "utils.hpp"
+#include "checks.hpp"
 #include <vector>
 
 /**
@@ -111,14 +112,16 @@ namespace Integration {
 
 		/**
 		 * @brief Construct an Integrator for order k.
-		 * @param k Order used to compute tables and weights (must be >= 0).
+		 * @param k Order used to compute tables and weights (0 <= k <= h_nessi::KMAX = 6).
 		 *
-		 * The constructor allocates and populates internal tables. It will abort the program if k < 0.
+		 * The constructor allocates and populates internal tables. It throws h_nessi::precondition_error if k is
+		 * out of range.
 		 */
 
 		Integrator(int k){
 			int k1=k+1;
-			if(k<0){std::cout << "Integrator: k out of range"<<std::endl; abort();}
+			// IN-1 / LX-17 (tier 2): 0 <= k <= KMAX; throws h_nessi::precondition_error (was: print + abort for k < 0 only)
+			HNESSI_REQUIRE(0 <= k && k <= h_nessi::KMAX, "Integration::Integrator::Integrator", HNESSI_KV(k), HNESSI_KV(h_nessi::KMAX));
 			poly_interp_.resize(k1*k1);
 			poly_diff_.resize(k1*k1);
 			poly_integ_.resize(k1*k1*k1);

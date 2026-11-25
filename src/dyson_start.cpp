@@ -6,6 +6,10 @@ using namespace std::chrono;
 namespace h_nessi {
 
 double dyson::dyson_start_tv(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h) {
+  call_scope cs(api_depth_);
+  const char *where = "dyson::dyson_start_tv";
+  if(cs.outer()) enter_start_(where, G, Sigma, I, h, mu, H, true, true);
+
   // We also enforce TTI for 0 <= t <= k
   // This is guaranteed using checks in the dyson_start() routine as well
   int m, l, n, i;
@@ -94,10 +98,14 @@ double dyson::dyson_start_tv(herm_matrix_hodlr &G, double mu, cplx *H, herm_matr
     }
   }
 
-  return err;
+  return cs.outer() ? ensure_finite_(err, where) : err;
 }
 
 double dyson::dyson_start_ret(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h) {
+  call_scope cs(api_depth_);
+  const char *where = "dyson::dyson_start_ret";
+  if(cs.outer()) enter_start_(where, G, Sigma, I, h, mu, H, false, false);
+
   // We enforce TTI for 0 <= t <= k
   // This is guaranteed using checks in the dyson_start() routine
 
@@ -120,10 +128,14 @@ double dyson::dyson_start_ret(herm_matrix_hodlr &G, double mu, cplx *H, herm_mat
   }
   
  
-  return err;
+  return cs.outer() ? ensure_finite_(err, where) : err;
 }
 
 double dyson::dyson_start_ret_ntti(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h, bool imp_tp0) {
+  call_scope cs(api_depth_);
+  const char *where = "dyson::dyson_start_ret_ntti";
+  if(cs.outer()) enter_start_(where, G, Sigma, I, h, mu, H, true, false);
+
   // Counters
   int m, l, n, i;
 
@@ -199,11 +211,15 @@ double dyson::dyson_start_ret_ntti(herm_matrix_hodlr &G, double mu, cplx *H, her
     }
   }
 
-  return err;
+  return cs.outer() ? ensure_finite_(err, where) : err;
 }
 
 
 double dyson::dyson_start_les(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h) {
+  call_scope cs(api_depth_);
+  const char *where = "dyson::dyson_start_les";
+  if(cs.outer()) enter_start_(where, G, Sigma, I, h, mu, H, true, false);
+
   // We enforce TTI for 0 <= t <= k
   // This is guaranteed using checks in the dyson_start() routine
   double err = 0;
@@ -215,11 +231,15 @@ double dyson::dyson_start_les(herm_matrix_hodlr &G, double mu, cplx *H, herm_mat
     }
   }
 
-  return err;
+  return cs.outer() ? ensure_finite_(err, where) : err;
 }
 
 
 double dyson::dyson_start_les_ntti(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h) {
+  call_scope cs(api_depth_);
+  const char *where = "dyson::dyson_start_les_ntti";
+  if(cs.outer()) enter_start_(where, G, Sigma, I, h, mu, H, true, false);
+
   double err = 0;
   for(int tp = 0; tp <= k_; tp++) {
     G.get_tv_tau(tp, 0, dlr_, M_.data());
@@ -332,11 +352,15 @@ double dyson::dyson_start_les_ntti(herm_matrix_hodlr &G, double mu, cplx *H, her
     }
   }
 
-  return err;
+  return cs.outer() ? ensure_finite_(err, where) : err;
 }
 
 
 double dyson::dyson_start_les_ntti_nobc(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h) {
+  call_scope cs(api_depth_);
+  const char *where = "dyson::dyson_start_les_ntti_nobc";
+  if(cs.outer()) enter_start_(where, G, Sigma, I, h, mu, H, true, false);
+
   cplx cplxi = cplx(0,1);
 
   ZMatrix QIC = ZMatrix::Zero(k_*nao_, nao_);
@@ -484,10 +508,14 @@ double dyson::dyson_start_les_ntti_nobc(herm_matrix_hodlr &G, double mu, cplx *H
     }
   }
 
-  return err;
+  return cs.outer() ? ensure_finite_(err, where) : err;
 }
 
 double dyson::dyson_start_les_2leg(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h) {
+  call_scope cs(api_depth_);
+  const char *where = "dyson::dyson_start_les_2leg";
+  if(cs.outer()) enter_start_(where, G, Sigma, I, h, mu, H, true, false);
+
   cplx cplxi = cplx(0,1);
 
   ZMatrix QIC = ZMatrix::Zero(k_*nao_, nao_);
@@ -635,7 +663,7 @@ double dyson::dyson_start_les_2leg(herm_matrix_hodlr &G, double mu, cplx *H, her
     }
   }
 
-  return err;
+  return cs.outer() ? ensure_finite_(err, where) : err;
 }
 
 } // namespace

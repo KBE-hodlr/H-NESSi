@@ -551,32 +551,36 @@ TEST(HodlrAssign, CopyContinuesDysonIdentically) {
 }
 
 // ------------------------------------------------------------------------------------------------ B23
-// nlvl = 0 must not crash: either it is rejected with an exception or it works (no compression).
-TEST(HodlrGeometry, KnownBug_B23_NlvlZeroNoCrash) {
+// B23 (fixed in WP6a): nlvl = 0 used to segfault in init_shape. The constructor now rejects every geometry with an
+// empty HODLR segment (HM-C2: 1 <= nlvl and 2^nlvl <= nt) with h_nessi::precondition_error; nlvl = 1 still works.
+TEST(HodlrGeometry, NlvlZeroRejected_B23) {
   hn_test::run_isolated([] {
+    int nt = 20, k = 2;
+    EXPECT_THROW(herm_matrix_hodlr(nt, 4, 0, 1e-10, 1, 1, -1, k), h_nessi::precondition_error);
+    EXPECT_THROW(herm_matrix_hodlr(nt, 4, 5, 1e-10, 1, 1, -1, k), h_nessi::precondition_error);  // 2^5 = 32 > nt
     try {
-      int nt = 20, k = 2;
-      Integration::Integrator I(k);
       herm_matrix_hodlr G(nt, 4, 0, 1e-10, 1, 1, -1, k);
-      auto f = [](int T, int tp) { return cplx(T, tp); };
-      for (int T = 0; T < nt; T++) {
-        if (T > k) G.update_blocks(I);
-        for (int tp = 0; tp <= T; tp++) {
-          ZMatrix Y(1, 1);
-          Y(0, 0) = f(T, tp);
-          G.set_ret_curr(T, tp, Y);
-        }
-      }
-      for (int i = 0; i <= k; i++) G.update_blocks(I);
-      ZMatrix M(1, 1);
-      for (int t = 0; t < nt; t++)
-        for (int tp = 0; tp <= t; tp++) {
-          G.get_ret(t, tp, M);
-          EXPECT_LT(std::abs(M(0, 0) - f(t, tp)), 1e-10);
-        }
-    } catch (...) {
-      // rejecting nlvl = 0 with an exception is acceptable
+    } catch (const std::invalid_argument &e) {  // the std base class catches it too
+      EXPECT_NE(std::string(e.what()).find("nlvl >= 1"), std::string::npos) << e.what();
     }
+    Integration::Integrator I(k);
+    herm_matrix_hodlr G(nt, 4, 1, 1e-10, 1, 1, -1, k);
+    auto f = [](int T, int tp) { return cplx(T, tp); };
+    for (int T = 0; T < nt; T++) {
+      if (T > k) G.update_blocks(I);
+      for (int tp = 0; tp <= T; tp++) {
+        ZMatrix Y(1, 1);
+        Y(0, 0) = f(T, tp);
+        G.set_ret_curr(T, tp, Y);
+      }
+    }
+    for (int i = 0; i <= k; i++) G.update_blocks(I);
+    ZMatrix M(1, 1);
+    for (int t = 0; t < nt; t++)
+      for (int tp = 0; tp <= t; tp++) {
+        G.get_ret(t, tp, M);
+        EXPECT_LT(std::abs(M(0, 0) - f(t, tp)), 1e-10);
+      }
   });
 }
 

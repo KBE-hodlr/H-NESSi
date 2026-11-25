@@ -593,6 +593,38 @@ TEST(MpiCommChecks, NospawnEveryThreadThrowsInsideRegion) {
   });
 }
 
+// WP6a OpenMP error policy, item 3: an error raised inside a library-owned parallel region of a _spawn routine (a
+// library check, or an exception from a user lambda) is captured and rethrown on the calling thread, so it is
+// catchable; afterwards the object still works.
+TEST(MpiCommChecks, SpawnRegionErrorIsRethrownCatchable) {
+  hn_test::run_isolated([] {
+    launch(1, [&]() {
+      int nao = 1, Nk = 5, k = 2, nt = 8, r = 0, T = 2;
+      dlr_info dlr(r, LAMBDA, EPSDLR, BETA, nao, XI);
+      int r2 = 0;
+      dlr_info dlr2(r2, LAMBDA, 1e-6, BETA, nao, XI);  // another DLR rank: get_tv_reversed's dlr pairing check fails
+      ASSERT_NE(r, r2);
+      mpi_comm comm(Nk, nt, r, nao, 2);
+      std::vector<herm_matrix_hodlr> G;
+      for (int i = 0; i < comm.my_Nk; i++) G.emplace_back(nt, r, 1, 1e-10, nao, nao, XI, k);
+      try {
+        comm.mpi_get_and_comm_spawn(T, G, dlr2);
+        ADD_FAILURE() << "no exception";
+      } catch (const h_nessi::precondition_error &e) {
+        EXPECT_NE(std::string(e.what()).find("h_nessi::herm_matrix_hodlr::get_tv_reversed: dlr.r() == r_"), std::string::npos)
+            << e.what();
+      }
+      EXPECT_THROW(comm.mpi_get_and_comm_spawn(-1, G, dlr2), h_nessi::precondition_error);
+      std::vector<std::function<cplx(int, int, int)>> bad = {[](int, int, int) -> cplx { throw std::out_of_range("user lambda"); }};
+      auto g1 = make_gets(1);
+      EXPECT_THROW(comm.mpi_get_and_comm_spawn(T, bad, g1), std::out_of_range);
+      EXPECT_THROW(comm.mpi_get_and_comm_spawn(T, g1, bad), std::out_of_range);
+      EXPECT_NO_THROW(comm.mpi_get_and_comm_spawn(T, G, dlr));
+      EXPECT_NO_THROW(comm.mpi_comm_and_set_spawn(T, G));
+    });
+  });
+}
+
 // H24 (fixed in WP5): mpi_comm_and_set_nospawn ends with a barrier. The set lambda of the last local k-point
 // (handled by the last thread) is slowed down; thread 0 checks right after the call, without its own barrier.
 TEST(MpiCommNospawn, SetLambdaEndsWithBarrier) {

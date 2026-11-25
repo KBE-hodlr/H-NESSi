@@ -19,6 +19,7 @@
 #include "integration.hpp"
 #include "utils.hpp"
 #include "dlr.hpp"
+#include "checks.hpp"
 
 extern "C"
 {
@@ -38,6 +39,12 @@ namespace h_nessi {
  * @brief Solves quantum many-body Dyson equations using HODLR and DLR representations.
  *
  * The dyson class manages all routines for constructing and evolving Green's functions, performing time-stepping, bootstrapping, and convolutions in quantum many-body calculations. It supports both fermionic and bosonic statistics, and interfaces with hierarchical matrix and DLR basis representations.
+ *
+ * Checks (checks.hpp): every public entry point validates its arguments and the call order (geometry of G and Sigma,
+ * pairing with the dlr_info, I.k(), the time step against G.tstpmk()/Sigma.tstpmk(), the G^M convolution tensor, ...)
+ * and throws h_nessi::precondition_error / state_error / numerical_error (inside a user OpenMP parallel region it prints
+ * the message and aborts instead). **The h argument is modified:** every slice h(t) a call reads is replaced in place by
+ * its Hermitian part (h+h^dagger)/2 (decision D-11; see set_hermiticity_tolerances, set_hermitian_symmetrization).
  */
 class dyson {
 private:
@@ -101,6 +108,46 @@ private:
   bool profile_;
   DMatrix timing;         
 
+  // ---- WP6 checks (checks.hpp) -------------------------------------------------------------------------------
+  int api_depth_ = 0;          /**< nesting depth of public calls: entry checks run only in the outermost call */
+  // D-11: Hermiticity of h(t)
+  double herm_warn_tol_ = 1e-4;  /**< warn once when the relative anti-Hermitian part of a slice of h exceeds this */
+  double herm_err_tol_ = 1e-2;   /**< throw h_nessi::precondition_error when it exceeds this */
+  bool herm_symmetrize_ = true;  /**< replace each slice of h read by (h+h^dagger)/2 in place (false: check only) */
+  bool herm_warned_ = false;     /**< the warning has been printed (once per dyson object) */
+  double herm_last_ = 0;         /**< largest relative anti-Hermitian part found by the last call */
+  std::vector<double> herm_diag_; /**< herm_diag_[t+1], -1<=t<nt: largest relative anti-Hermitian part of h(t) found
+                                       before symmetrisation (per-step diagnostic, size nt+1) */
+  // ST-3: dyson_mat(fixHam=true) needs the G0 saved by an earlier fixHam=false call (not checkpointed)
+  bool g0_valid_ = false;
+
+  /** RAII guard counting the nesting of public calls (dispatchers call public components). */
+  struct call_scope {
+    int &depth;
+    explicit call_scope(int &d) : depth(d) { ++depth; }
+    ~call_scope() { --depth; }
+    bool outer() const { return depth == 1; }
+  };
+  void check_solver_args_(const char *where, herm_matrix_hodlr &G, herm_matrix_hodlr &Sigma, Integration::Integrator &I,
+                          double h, double mu);
+  void check_step_(const char *where, int tstp, herm_matrix_hodlr &G, herm_matrix_hodlr &Sigma);
+  void check_boot_(const char *where, herm_matrix_hodlr &G, herm_matrix_hodlr &Sigma);
+  void check_function_(const char *where, function &H, int tlast);
+  double hermitize_(cplx *H0, int t0, int t1, const char *where);
+  double hermitize_real_(DMatrix &H, const char *where);
+  void require_real_(const cplx *h, const char *where);
+  double ensure_finite_(double err, const char *where);
+  void enter_timestep_(const char *where, int tstp, herm_matrix_hodlr &G, herm_matrix_hodlr &Sigma,
+                       Integration::Integrator &I, double h, double mu, cplx *H, int hlo, int hhi, bool uses_tv);
+  void enter_start_(const char *where, herm_matrix_hodlr &G, herm_matrix_hodlr &Sigma, Integration::Integrator &I,
+                    double h, double mu, cplx *H, bool reads_h, bool uses_tv);
+  void check_dyson_ctor_(const char *where, int nt, int nao, int k, dlr_info &dlr);
+  void check_mat_args_(const char *where, herm_matrix_hodlr &G, herm_matrix_hodlr &Sigma, double mu, double alpha,
+                       bool fixHam);
+  void ensure_mat_finite_(const char *where);
+  void check_it_args_(const char *where, int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G);
+  void check_free_args_(const char *where, herm_matrix_hodlr &G, double mu, const ZMatrix &H, double h, int tmax);
+
 public:
 
   /**
@@ -128,6 +175,31 @@ public:
   int ntau() {return ntau_;}
   /** @brief Returns particle statistics (+1 for bosons, -1 for fermions). */
   int xi(){return xi_;};
+
+  /**
+   * @name Hermiticity of h(t) (decision D-11)
+   * Every dyson_* entry point and green_from_H* checks each slice of h it reads. By default it also replaces the slice,
+   * **in place in the caller's function object or buffer**, by its Hermitian part (h+h^dagger)/2, so that all code
+   * paths (which use H^T and conj(H)) see the same Hermitian h. The relative anti-Hermitian part
+   * ||h(t)-h(t)^dagger||_F / ||h(t)||_F of each slice is recorded (before symmetrisation) per slice; a warning is
+   * printed once per dyson object above the warning tolerance (default 1e-4) and h_nessi::precondition_error is
+   * thrown above the error tolerance (default 1e-2), before the slice is modified.
+   * @{
+   */
+  void set_hermiticity_tolerances(double warn_tol, double err_tol);
+  double hermiticity_warn_tol() const { return herm_warn_tol_; }
+  double hermiticity_err_tol() const { return herm_err_tol_; }
+  /** true (default): symmetrise h in place; false: check only (h is not modified; for debugging). */
+  void set_hermitian_symmetrization(bool on) { herm_symmetrize_ = on; }
+  bool hermitian_symmetrization() const { return herm_symmetrize_; }
+  /** Largest relative anti-Hermitian part of h found by the last call that read h. */
+  double last_antihermiticity() const { return herm_last_; }
+  /** Per-slice diagnostic: element t+1 (-1 <= t < nt) is the largest relative anti-Hermitian part of h(t) seen. */
+  const std::vector<double> &antihermiticity_per_slice() const { return herm_diag_; }
+  /** @} */
+
+  /** ST-3: true if dyson_mat(fixHam=false) has saved a G0 in this object (fixHam=true needs it). */
+  bool g0_valid() const { return g0_valid_; }
 
   /**
    * @brief Provides a small report on memory usage

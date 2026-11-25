@@ -8,6 +8,7 @@ add_library(h_nessi SHARED
   herm_matrix_hodlr_update.cpp
   herm_matrix_hodlr_write.cpp
   utils.cpp
+  checks.cpp
   function.cpp
   block.cpp
   bubble.cpp
@@ -19,7 +20,6 @@ add_library(h_nessi SHARED
   dyson_start.cpp
   dyson_timestep.cpp
   integration.cpp
-  read_inputfile.cpp
   dlr.cpp
   mpi_comm.cpp
   mpi_comm_utils.cpp

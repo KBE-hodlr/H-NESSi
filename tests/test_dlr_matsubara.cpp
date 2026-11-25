@@ -393,25 +393,25 @@ TEST(DlrBoson, GammaIntegralMixedTerm) {
   });
 }
 
-// ---------------------------------------------------------------- initGMConvTensor dlr consistency (WP3)
-// initGMConvTensor needs a dlr_info with the same xi (Phi carries it) and r as G: assert(dlr.xi()==sig_ && dlr.r()==r_).
-// Tier-1 check (Debug only, WP6 makes it always-on): in Debug the call aborts; in Release the xi mismatch is not
-// detected (the result is silently wrong by O(1), doc 04 §10.4), so only the Debug expectation is tested there.
-TEST(GMConvTensorDeathTest, DlrXiOrRankMismatchAsserts) {
-  GTEST_FLAG_SET(death_test_style, "threadsafe");
+// ---------------------------------------------------------------- initGMConvTensor dlr consistency (WP3, WP6a)
+// initGMConvTensor needs a dlr_info with the same xi (Phi carries it) and r as G. Tier 2 since WP6a (was a Debug-only
+// assert): h_nessi::precondition_error in every build.
+TEST(GMConvTensor, DlrXiOrRankMismatchThrows) {
   int rf = 0, rb = 0;
   dlr_info dlrf(rf, 50., 1e-12, 5., 1, -1), dlrb(rb, 50., 1e-12, 5., 1, +1);
   herm_matrix_hodlr Gf(4, rf, 1, 1e-12, 1, 1, -1, 2), Gb(4, rb, 1, 1e-12, 1, 1, +1, 2);
   Gf.initGMConvTensor(dlrf);  // consistent: fine in every build
   Gb.initGMConvTensor(dlrb);
-#ifndef NDEBUG
-  EXPECT_DEATH(Gb.initGMConvTensor(dlrf), "dlr.xi\\(\\)==sig_");
-  EXPECT_DEATH(Gf.initGMConvTensor(dlrb), "dlr.xi\\(\\)==sig_");
+  EXPECT_THROW(Gb.initGMConvTensor(dlrf), h_nessi::precondition_error);
+  EXPECT_THROW(Gf.initGMConvTensor(dlrb), h_nessi::precondition_error);
   herm_matrix_hodlr Gr(4, rf - 1, 1, 1e-12, 1, 1, -1, 2);  // r mismatch
-  EXPECT_DEATH(Gr.initGMConvTensor(dlrf), "dlr.r\\(\\)==r_");
-#else
-  GTEST_SKIP() << "asserts are off (NDEBUG): the dlr consistency check is Debug-only (tier 1)";
-#endif
+  try {
+    Gr.initGMConvTensor(dlrf);
+    FAIL() << "no exception";
+  } catch (const h_nessi::precondition_error &e) {
+    EXPECT_NE(std::string(e.what()).find("h_nessi::herm_matrix_hodlr::initGMConvTensor: dlr.xi()==sig_ && dlr.r()==r_ violated"),
+              std::string::npos) << e.what();
+  }
 }
 
 // ---------------------------------------------------------------- dyson_mat buffers and fixHam (B4, H29; fixed in WP2)
@@ -539,7 +539,7 @@ TEST(DysonMemory, CountsAllBuffers) {
       double g0 = Db * r * es, g0conv = Db * r * r * es;                    // DG0_, DG0ConvMat_
       double matmul = Zb * 2 * ((nt + 1) / 2) * nao;                        // epsnao_tmp_, epsnao_tmp_2_
       double solver = Zb * (2 * (nt + 1) * es + (k + 1) * k * es + 2 * es);  // Q_, X_, M_, iden_, bound_
-      double tim = Db * (prof ? nt : 0) * 25;                               // timing
+      double tim = Db * (prof ? nt : 0) * 25 + Db * (nt + 1);               // timing + Hermiticity diagnostic (D-11)
       EXPECT_EQ(m[0], dlrbuf);
       EXPECT_EQ(m[1], g0);
       EXPECT_EQ(m[2], g0conv);

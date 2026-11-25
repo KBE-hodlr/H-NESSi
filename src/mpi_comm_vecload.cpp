@@ -1,4 +1,5 @@
 #include "h_nessi/mpi_comm.hpp"
+#include "h_nessi/checks.hpp"
 #include "h_nessi/utils.hpp"
 
 namespace h_nessi {
@@ -68,8 +69,11 @@ void mpi_comm::mpi_get_and_comm_spawn
     my_first_t = init_tp_per_rank[mpi_rank];
     my_Nt = Ntp_per_rank[mpi_rank];
 
-    #pragma omp parallel for schedule(static)
-    for(int tpi=0; tpi<tp_size; tpi++){
+    {
+      detail::omp_exception_collector omp_errs;   // library-owned region: capture, rethrow after it
+      #pragma omp parallel for schedule(static)
+      for(int tpi=0; tpi<tp_size; tpi++){
+        omp_errs.run([&] {
       for (int krank = 0; krank<my_Nk; krank++){
         // first retarded compi=0
         int index = alltp_buff_index(my_Nk,tpi,krank,0);
@@ -78,6 +82,9 @@ void mpi_comm::mpi_get_and_comm_spawn
         index = alltp_buff_index(my_Nk,tpi,krank,nao_*nao_);
         std::copy_n(hmh_vec[krank].curr_timestep_les_ptr(tpi,ti), nao_*nao_, t_alltp_buff.begin() + index);
       }
+        });
+      }
+      omp_errs.rethrow();
     }
 
     for(int mpii=0; mpii<mpi_size; mpii++){
@@ -98,8 +105,11 @@ void mpi_comm::mpi_get_and_comm_spawn
   }
 
   if(ti >= 0) { // tau array is filled using tv
-    #pragma omp parallel for schedule(static)
-    for (int krank = 0; krank<my_Nk; krank++){
+    {
+      detail::omp_exception_collector omp_errs;   // library-owned region: capture, rethrow after it
+      #pragma omp parallel for schedule(static)
+      for (int krank = 0; krank<my_Nk; krank++){
+        omp_errs.run([&] {
       hmh_vec[krank].get_tv_reversed(ti, dlr, hmh_vec[krank].tvptr_trans(ti,0));
       for(int taui=0; taui<r_; taui++){
         // only do tv, so compi = 0
@@ -109,11 +119,17 @@ void mpi_comm::mpi_get_and_comm_spawn
         index = alltp_buff_index(my_Nk,taui,krank,nao_*nao_);
         std::copy_n(hmh_vec[krank].tvptr_trans(ti,taui), nao_*nao_, tau_alltp_buff.begin() + index);
       }
+        });
+      }
+      omp_errs.rethrow();
     }
   }
   else { // tau array filled using mat
-    #pragma omp parallel for schedule(static)
-    for (int krank = 0; krank<my_Nk; krank++){
+    {
+      detail::omp_exception_collector omp_errs;   // library-owned region: capture, rethrow after it
+      #pragma omp parallel for schedule(static)
+      for (int krank = 0; krank<my_Nk; krank++){
+        omp_errs.run([&] {
       hmh_vec[krank].get_mat_reversed(dlr, hmh_vec[krank].tvptr_trans(0,0));
       for(int taui=0; taui<r_; taui++){
         // only do mat, so compi = 0
@@ -123,6 +139,9 @@ void mpi_comm::mpi_get_and_comm_spawn
         index = alltp_buff_index(my_Nk,taui,krank,nao_*nao_);
         std::copy_n(hmh_vec[krank].tvptr_trans(0,taui), nao_*nao_, tau_alltp_buff.begin() + index);
       }
+        });
+      }
+      omp_errs.rethrow();
     }
   }
 
@@ -169,8 +188,11 @@ void mpi_comm::mpi_get_and_comm_spawn
     my_first_t = init_tp_per_rank[mpi_rank];
     my_Nt = Ntp_per_rank[mpi_rank];
 
-    #pragma omp parallel for schedule(static)
-    for(int tpi=0; tpi<tp_size; tpi++){
+    {
+      detail::omp_exception_collector omp_errs;   // library-owned region: capture, rethrow after it
+      #pragma omp parallel for schedule(static)
+      for(int tpi=0; tpi<tp_size; tpi++){
+        omp_errs.run([&] {
       for (int krank = 0; krank<my_Nk; krank++){
         // first retarded compi=0
         int index = alltp_buff_index(my_Nk,tpi,krank,0);
@@ -179,6 +201,9 @@ void mpi_comm::mpi_get_and_comm_spawn
         index = alltp_buff_index(my_Nk,tpi,krank,nao_*nao_);
         std::copy_n(hmh_vec[krank].get().curr_timestep_les_ptr(tpi,ti), nao_*nao_, t_alltp_buff.begin() + index);
       }
+        });
+      }
+      omp_errs.rethrow();
     }
 
     for(int mpii=0; mpii<mpi_size; mpii++){
@@ -200,8 +225,11 @@ void mpi_comm::mpi_get_and_comm_spawn
 
 
   if(ti >= 0) { // tau array is filled using tv
-    #pragma omp parallel for schedule(static)
-    for (int krank = 0; krank<my_Nk; krank++){
+    {
+      detail::omp_exception_collector omp_errs;   // library-owned region: capture, rethrow after it
+      #pragma omp parallel for schedule(static)
+      for (int krank = 0; krank<my_Nk; krank++){
+        omp_errs.run([&] {
       hmh_vec[krank].get().get_tv_reversed(ti, dlr, hmh_vec[krank].get().tvptr_trans(ti,0));
       for(int taui=0; taui<r_; taui++){
         // only do tv, so compi = 0
@@ -211,11 +239,17 @@ void mpi_comm::mpi_get_and_comm_spawn
         index = alltp_buff_index(my_Nk,taui,krank,nao_*nao_);
         std::copy_n(hmh_vec[krank].get().tvptr_trans(ti,taui), nao_*nao_, tau_alltp_buff.begin() + index);
       }
+        });
+      }
+      omp_errs.rethrow();
     }
   }
   else { // tau array filled using mat
-    #pragma omp parallel for schedule(static)
-    for (int krank = 0; krank<my_Nk; krank++){
+    {
+      detail::omp_exception_collector omp_errs;   // library-owned region: capture, rethrow after it
+      #pragma omp parallel for schedule(static)
+      for (int krank = 0; krank<my_Nk; krank++){
+        omp_errs.run([&] {
       hmh_vec[krank].get().get_mat_reversed(dlr, hmh_vec[krank].get().tvptr_trans(0,0));
       for(int taui=0; taui<r_; taui++){
         // only do mat, so compi = 0
@@ -225,6 +259,9 @@ void mpi_comm::mpi_get_and_comm_spawn
         index = alltp_buff_index(my_Nk,taui,krank,nao_*nao_);
         std::copy_n(hmh_vec[krank].get().tvptr_trans(0,taui), nao_*nao_, tau_alltp_buff.begin() + index);
       }
+        });
+      }
+      omp_errs.rethrow();
     }
   }
 
@@ -541,8 +578,11 @@ void mpi_comm::mpi_comm_and_set_spawn
                   t_alltp_buff.data(), t_send_counts.data(), t_send_displs.data(), MPI_CXX_DOUBLE_COMPLEX,
                   MPI_COMM_WORLD);
 
-    #pragma omp parallel for schedule(static)
-    for (int krank = 0; krank<my_Nk; krank++){
+    {
+      detail::omp_exception_collector omp_errs;   // library-owned region: capture, rethrow after it
+      #pragma omp parallel for schedule(static)
+      for (int krank = 0; krank<my_Nk; krank++){
+        omp_errs.run([&] {
       std::vector<std::complex<double>> Stmp(tp_size * nao_*nao_);
       //first we do ret, which is compi=0
       for(int mpi_id = 0; mpi_id<mpi_size; mpi_id++){
@@ -562,6 +602,9 @@ void mpi_comm::mpi_comm_and_set_spawn
         }
       }
       std::copy_n(Stmp.begin(), tp_size * nao_*nao_, hmh_vec[krank].curr_timestep_les_ptr(0,ti));
+        });
+      }
+      omp_errs.rethrow();
     }
   }
 
@@ -571,8 +614,11 @@ void mpi_comm::mpi_comm_and_set_spawn
                 MPI_COMM_WORLD);
 
   if(ti >= 0) { // fill with tv
-    #pragma omp parallel for schedule(static)
-    for (int krank = 0; krank<my_Nk; krank++){
+    {
+      detail::omp_exception_collector omp_errs;   // library-owned region: capture, rethrow after it
+      #pragma omp parallel for schedule(static)
+      for (int krank = 0; krank<my_Nk; krank++){
+        omp_errs.run([&] {
       std::vector<std::complex<double>> Stmp(r_ * nao_*nao_);
       for(int mpi_id = 0; mpi_id<mpi_size; mpi_id++){
         for(int taui=0; taui<Ntau_per_rank[mpi_id]; taui++){
@@ -582,11 +628,17 @@ void mpi_comm::mpi_comm_and_set_spawn
         }
       }
       std::copy_n(Stmp.begin(), r_ * nao_*nao_, hmh_vec[krank].tvptr(ti,0));
+        });
+      }
+      omp_errs.rethrow();
     }
   }
   else { // fill with mat
-    #pragma omp parallel for schedule(static)
-    for (int krank = 0; krank<my_Nk; krank++){
+    {
+      detail::omp_exception_collector omp_errs;   // library-owned region: capture, rethrow after it
+      #pragma omp parallel for schedule(static)
+      for (int krank = 0; krank<my_Nk; krank++){
+        omp_errs.run([&] {
       std::vector<std::complex<double>> Stmp(r_ * nao_*nao_);
       for(int mpi_id = 0; mpi_id<mpi_size; mpi_id++){
         for(int taui=0; taui<Ntau_per_rank[mpi_id]; taui++){
@@ -597,6 +649,9 @@ void mpi_comm::mpi_comm_and_set_spawn
       }
       // cant use copy_n because we are copying into a real array
       for(int i = 0; i < r_ * nao_*nao_; i++) hmh_vec[krank].matptr(0)[i] = Stmp[i].real();
+        });
+      }
+      omp_errs.rethrow();
     }
   }
 };
@@ -627,8 +682,11 @@ void mpi_comm::mpi_comm_and_set_spawn
                   t_alltp_buff.data(), t_send_counts.data(), t_send_displs.data(), MPI_CXX_DOUBLE_COMPLEX,
                   MPI_COMM_WORLD);
 
-    #pragma omp parallel for schedule(static)
-    for (int krank = 0; krank<my_Nk; krank++){
+    {
+      detail::omp_exception_collector omp_errs;   // library-owned region: capture, rethrow after it
+      #pragma omp parallel for schedule(static)
+      for (int krank = 0; krank<my_Nk; krank++){
+        omp_errs.run([&] {
       std::vector<std::complex<double>> Stmp(tp_size * nao_*nao_);
       //first we do ret, which is compi=0
       for(int mpi_id = 0; mpi_id<mpi_size; mpi_id++){
@@ -648,6 +706,9 @@ void mpi_comm::mpi_comm_and_set_spawn
         }
       }
       std::copy_n(Stmp.begin(), tp_size * nao_*nao_, hmh_vec[krank].get().curr_timestep_les_ptr(0,ti));
+        });
+      }
+      omp_errs.rethrow();
     }
   }
 
@@ -657,8 +718,11 @@ void mpi_comm::mpi_comm_and_set_spawn
                 MPI_COMM_WORLD);
 
   if(ti >= 0) { // fill with tv
-    #pragma omp parallel for schedule(static)
-    for (int krank = 0; krank<my_Nk; krank++){
+    {
+      detail::omp_exception_collector omp_errs;   // library-owned region: capture, rethrow after it
+      #pragma omp parallel for schedule(static)
+      for (int krank = 0; krank<my_Nk; krank++){
+        omp_errs.run([&] {
       std::vector<std::complex<double>> Stmp(r_ * nao_*nao_);
       for(int mpi_id = 0; mpi_id<mpi_size; mpi_id++){
         for(int taui=0; taui<Ntau_per_rank[mpi_id]; taui++){
@@ -668,11 +732,17 @@ void mpi_comm::mpi_comm_and_set_spawn
         }
       }
       std::copy_n(Stmp.begin(), r_ * nao_*nao_, hmh_vec[krank].get().tvptr(ti,0));
+        });
+      }
+      omp_errs.rethrow();
     }
   }
   else { // fill with mat
-    #pragma omp parallel for schedule(static)
-    for (int krank = 0; krank<my_Nk; krank++){
+    {
+      detail::omp_exception_collector omp_errs;   // library-owned region: capture, rethrow after it
+      #pragma omp parallel for schedule(static)
+      for (int krank = 0; krank<my_Nk; krank++){
+        omp_errs.run([&] {
       std::vector<std::complex<double>> Stmp(r_ * nao_*nao_);
       for(int mpi_id = 0; mpi_id<mpi_size; mpi_id++){
         for(int taui=0; taui<Ntau_per_rank[mpi_id]; taui++){
@@ -683,6 +753,9 @@ void mpi_comm::mpi_comm_and_set_spawn
       }
       // cant use copy_n because we are copying into a real array
       for(int i = 0; i < r_ * nao_*nao_; i++) hmh_vec[krank].get().matptr(0)[i] = Stmp[i].real();
+        });
+      }
+      omp_errs.rethrow();
     }
   }
 };

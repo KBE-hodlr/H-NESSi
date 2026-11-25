@@ -4,6 +4,10 @@
 #include <cassert>
 
 #include "h_nessi/herm_matrix_hodlr.hpp"
+#include "h_nessi/checks.hpp"
+
+#include <cmath>
+#include <cstring>
 
 
 namespace h_nessi {
@@ -61,7 +65,7 @@ herm_matrix_hodlr::herm_matrix_hodlr() {
 
 herm_matrix_hodlr::herm_matrix_hodlr(int nt,int r,int nlvl,double svdtol,int size1,int size2,int sig,int k)
 {
-    assert(nt >= 0 && nlvl >= 0 && svdtol > 0);
+    check_geometry_("herm_matrix_hodlr::herm_matrix_hodlr", nt, r, nlvl, svdtol, size1, size2, sig, k);
     nt_=nt;
     nlvl_=nlvl;
     svdtol_=svdtol;
@@ -102,6 +106,49 @@ herm_matrix_hodlr::herm_matrix_hodlr(int nt,int r,int nlvl,double svdtol,int siz
     // timing
     timing = DMatrix::Zero(nt_, 22);
 
+}
+
+// HM-C1..HM-C7 (tier 2, LX-2, B23, D2): the geometry every constructor must satisfy.
+void herm_matrix_hodlr::check_geometry_(const char *where, int nt, int r, int nlvl, double svdtol, int size1, int size2,
+                                        int sig, int k) {
+    HNESSI_REQUIRE(1 <= k && k <= KMAX, where, HNESSI_KV(k), HNESSI_KV(KMAX));
+    HNESSI_REQUIRE(nt >= k+1, where, HNESSI_KV(nt), HNESSI_KV(k),
+                   detail::note{"the bootstrap rows 0..k must exist"});
+    HNESSI_REQUIRE(nlvl >= 1 && nlvl < 31 && (1<<nlvl) <= nt, where, HNESSI_KV(nlvl), HNESSI_KV(nt),
+                   detail::note{"every HODLR segment needs at least one row: 1 <= nlvl and 2^nlvl <= nt"});
+    HNESSI_REQUIRE(std::isfinite(svdtol) && svdtol > 0, where, HNESSI_KV(svdtol));
+    HNESSI_REQUIRE(r >= 1, where, HNESSI_KV(r));
+    HNESSI_REQUIRE(size1 >= 1 && size1 == size2, where, HNESSI_KV(size1), HNESSI_KV(size2),
+                   detail::note{"only square orbital matrices are supported (ISSUES D2)"});
+    HNESSI_REQUIRE(sig == -1 || sig == 1, where, HNESSI_KV(sig));
+}
+
+// 64-bit FNV-1a over the bit patterns of G^M (ST-2): O(r*es), one multiply per double.
+std::uint64_t herm_matrix_hodlr::mat_hash() const {
+    std::uint64_t h = 1469598103934665603ULL;
+    for(double x : mat_) {
+        std::uint64_t w;
+        std::memcpy(&w, &x, sizeof(w));
+        h ^= w;
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
+
+bool herm_matrix_hodlr::gmconv_current() const {
+    return gmconv_valid_ && GMConvTensMatrix_.size() == (Eigen::Index)r_*r_*size1_*size2_ && gmconv_hash_ == mat_hash();
+}
+
+// ST-2 (tier 2): the convolution tensor must have been built by initGMConvTensor from the current G^M.
+void herm_matrix_hodlr::require_gmconv_current(const char *where, bool check_hash) const {
+    HNESSI_REQUIRE_STATE(gmconv_valid_, where, HNESSI_KV(gmconv_valid_),
+        detail::note{"the G^M convolution tensor of G was never built for its current G^M (or comes from a pre-v2 "
+                     "bosonic checkpoint): call G.initGMConvTensor(dlr) after the last change of G^M (after the last "
+                     "dyson_mat)"});
+    if(!check_hash) return;
+    HNESSI_REQUIRE_STATE(gmconv_hash_ == mat_hash(), where,
+        detail::note{"G^M changed after the last initGMConvTensor (e.g. another dyson_mat, set_mat, map_mat, "
+                     "green_from_H(...,inc_mat=true) or an MPI set): call G.initGMConvTensor(dlr) again"});
 }
 
 void herm_matrix_hodlr::init_shape(int nt,int nlvl){
@@ -273,7 +320,11 @@ int herm_matrix_hodlr::getbkl_indices(){
 // The first part is the same for each integral, so we construct C once.
 // dlr must have been built with the same xi (phi carries it) and r as this object.
 void herm_matrix_hodlr::initGMConvTensor(dlr_info &dlr){
-    assert(dlr.xi()==sig_ && dlr.r()==r_);
+    // HM-I7 (tier 2, was a WP3 assert): a xi-mismatched dlr gives O(1)-wrong results, an r mismatch reads out of bounds
+    HNESSI_REQUIRE(dlr.xi()==sig_ && dlr.r()==r_, "herm_matrix_hodlr::initGMConvTensor", HNESSI_KV(dlr.xi()),
+                   HNESSI_KV(sig_), HNESSI_KV(dlr.r()), HNESSI_KV(r_));
+    HNESSI_REQUIRE(dlr.size1()==size1_ && dlr.size2()==size2_, "herm_matrix_hodlr::initGMConvTensor",
+                   HNESSI_KV(dlr.size1()), HNESSI_KV(size1_));
     GMConvTensMatrix_.resize(r_*size1_*size2_, r_);
 
     std::vector<double> G1(r_ * size1_ * size2_);
@@ -294,8 +345,7 @@ void herm_matrix_hodlr::initGMConvTensor(dlr_info &dlr){
     // (the nodes are not symmetric, so this is not an index reversal); it2cf then gives the DLR coefficients of g_{jk}
     for(int i = 0; i<es; i++) {
         c_dlr_it2itr(&r_, &one, dlr.it2itr(), G2.data()+i*r_, G1.data()+i*r_);
-        // c_dlr_it2cf only reads the LU factors in dlr and is reentrant; this critical section is not required (harmless)
-        #pragma omp critical
+        // c_dlr_it2cf only reads the LU factors in dlr and is reentrant: no critical section needed (H3)
         c_dlr_it2cf(&r_,&one, dlr.it2cf(), dlr.it2cfp(), G1.data()+i*r_, G2.data()+i*r_);
     }
 
@@ -311,6 +361,10 @@ void herm_matrix_hodlr::initGMConvTensor(dlr_info &dlr){
     }
 
     // G1 and G2 are managed by std::vector and will be freed automatically
+
+    // ST-2: the tensor now belongs to the current G^M
+    gmconv_valid_ = true;
+    gmconv_hash_ = mat_hash();
 }
 
 int herm_matrix_hodlr::time2direct_col(int t1,int t2){

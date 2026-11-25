@@ -1,4 +1,5 @@
 #include "h_nessi/mpi_comm.hpp"
+#include "h_nessi/checks.hpp"
 #include "h_nessi/utils.hpp"
 
 #include <stdexcept>
@@ -223,14 +224,20 @@ void mpi_comm::mpi_get_and_comm_spawn
     int my_Ntp = Ntp_per_rank[mpi_rank];
     set_my_t_block_(ti, mpi_rank, mpi_size);
 
-    #pragma omp parallel for schedule(static)
-    for(int tpi=0; tpi<tp_size; tpi++){
+    {
+      detail::omp_exception_collector omp_errs;   // library-owned region: capture, rethrow after it
+      #pragma omp parallel for schedule(static)
+      for(int tpi=0; tpi<tp_size; tpi++){
+        omp_errs.run([&] {
       for (int krank = 0; krank<my_Nk; krank++){
         for (int compi = 0; compi < getsLG_size; compi++){     
             int index = alltp_buff_index(my_Nk,tpi,krank,compi);
             t_alltp_buff[index] = getsLG[compi](krank, ti, tpi);
         }
       }
+        });
+      }
+      omp_errs.rethrow();
     }
 
     for(int mpii=0; mpii<mpi_size; mpii++){
@@ -252,14 +259,20 @@ void mpi_comm::mpi_get_and_comm_spawn
 
   int getstv_size = getstv.size();
 
-  #pragma omp parallel for schedule(static)
-  for(int taui=0; taui<r_; taui++){
+  {
+    detail::omp_exception_collector omp_errs;   // library-owned region: capture, rethrow after it
+    #pragma omp parallel for schedule(static)
+    for(int taui=0; taui<r_; taui++){
+      omp_errs.run([&] {
     for (int krank = 0; krank<my_Nk; krank++){
       for (int compi = 0; compi < getstv_size; compi++){     
           int index = alltp_buff_index(my_Nk,taui,krank,compi);
           tau_alltp_buff[index] = getstv[compi](krank, ti, taui);
       }
     }
+      });
+    }
+    omp_errs.rethrow();
   }
 
   for(int mpii=0; mpii<mpi_size; mpii++){
@@ -420,8 +433,11 @@ void mpi_comm::mpi_comm_and_set_spawn
                   t_alltp_buff.data(), t_send_counts.data(), t_send_displs.data(), MPI_CXX_DOUBLE_COMPLEX,
                   MPI_COMM_WORLD);
 
-    #pragma omp parallel for schedule(static)
-    for (int krank = 0; krank<my_Nk; krank++){
+    {
+      detail::omp_exception_collector omp_errs;   // library-owned region: capture, rethrow after it
+      #pragma omp parallel for schedule(static)
+      for (int krank = 0; krank<my_Nk; krank++){
+        omp_errs.run([&] {
       std::vector<std::complex<double>> Stmp(tp_size);
       for (int compi = 0; compi<setsLR_size; compi++){
         for(int mpi_id = 0; mpi_id<mpi_size; mpi_id++){
@@ -434,6 +450,9 @@ void mpi_comm::mpi_comm_and_set_spawn
         }
         setsLR[compi](krank, ti, Stmp);
       }
+        });
+      }
+      omp_errs.rethrow();
     }
   }
 
@@ -443,8 +462,11 @@ void mpi_comm::mpi_comm_and_set_spawn
                 tau_alltp_buff.data(), tau_send_counts.data(), tau_send_displs.data(), MPI_CXX_DOUBLE_COMPLEX,
                 MPI_COMM_WORLD);
 
-  #pragma omp parallel for schedule(static)
-  for (int krank = 0; krank<my_Nk; krank++){
+  {
+    detail::omp_exception_collector omp_errs;   // library-owned region: capture, rethrow after it
+    #pragma omp parallel for schedule(static)
+    for (int krank = 0; krank<my_Nk; krank++){
+      omp_errs.run([&] {
     std::vector<std::complex<double>> Stmp(r_);
     for (int compi = 0; compi<setstv_size; compi++){
       for(int mpi_id = 0; mpi_id<mpi_size; mpi_id++){
@@ -456,6 +478,9 @@ void mpi_comm::mpi_comm_and_set_spawn
       }
       setstv[compi](krank, ti, Stmp);
     }
+      });
+    }
+    omp_errs.rethrow();
   }
 };
 
