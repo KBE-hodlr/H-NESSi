@@ -1,12 +1,17 @@
 // mpi_comm routing (doc 31) with simulated ranks.  Ported from agent_scratch/31/commtest.cpp.
-// The four MPI symbols used by libh_nessi's mpi_comm (MPI_Comm_size, MPI_Comm_rank, MPI_Alltoallv, MPI_Reduce)
-// are interposed by definitions in this executable; P "ranks" run as std::threads in one process, so the
-// library's multi-rank Alltoallv routing is exercised unchanged without an MPI launcher.
-// Known bugs: B21 (_nospawn partitions work with omp_get_max_threads), B20 (no component-count check).
+// The MPI symbols used by libh_nessi's mpi_comm (MPI_Comm_size, MPI_Comm_rank, MPI_Alltoallv, MPI_Reduce,
+// MPI_Query_thread) are interposed by definitions in this executable; P "ranks" run as std::threads in one process,
+// so the library's multi-rank Alltoallv routing is exercised unchanged without an MPI launcher.
+// Regression tests for B21 (_nospawn partitioned work with omp_get_max_threads), B20 (component-count checks),
+// H24 (trailing barrier of mpi_comm_and_set_nospawn), H30 (my_first_t/my_Nt), H28 (thread-level warning); all
+// fixed in WP5.
 #include <gtest/gtest.h>
 
 #include <atomic>
 #include <barrier>
+#include <chrono>
+#include <memory>
+#include <stdexcept>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -29,7 +34,9 @@ struct A2A { const char *sb; const int *sc; const int *sd; char *rb; const int *
 static std::vector<A2A> g_a2a;
 static std::vector<double> g_red;
 static std::atomic<long> g_cnt_mismatch{0};
+static int g_thread_level = MPI_THREAD_FUNNELED;  // what MPI_Query_thread reports (H28 test changes it)
 extern "C" {
+int MPI_Query_thread(int *provided) { *provided = g_thread_level; return 0; }
 int MPI_Comm_size(MPI_Comm, int *s) { *s = g_P; return 0; }
 int MPI_Comm_rank(MPI_Comm, int *r) { *r = g_rank; return 0; }
 int MPI_Alltoallv(const void *sb, const int sc[], const int sd[], MPI_Datatype st, void *rb, const int rc[], const int rd[],
@@ -285,7 +292,9 @@ void run_rank(int Nk, int nao, int k, int mode, std::vector<Err> &errs_out) {
 }
 
 // low-level lambda API
-void run_rank_lambda(int Nk, int nao, int T, bool nospawn, std::vector<Err> &errs_out) {
+// mode: 0 spawn, 1 nospawn in a full team, 2 nospawn in a num_threads(2) team, 3 nospawn OUTSIDE omp parallel
+// E[4] checks my_first_t/my_Nt (H30): -1/0 before any get with ti >= 0, then the rank's t' block.
+void run_rank_lambda(int Nk, int nao, int T, int mode, std::vector<Err> &errs_out) {
   const int rank = g_rank, P = g_P;
   const int nt = 12, r = 7, ncomp = 1;
   mpi_comm comm(Nk, nt, r, nao, ncomp);
@@ -303,10 +312,14 @@ void run_rank_lambda(int Nk, int nao, int T, bool nospawn, std::vector<Err> &err
     setsLR.push_back([&recvLR, c, nc](int kl, int, std::vector<cplx> &v) { recvLR[kl * nc + c] = v; });
     setstv.push_back([&recvTV, c, nc](int kl, int, std::vector<cplx> &v) { recvTV[kl * nc + c] = v; });
   }
-  std::vector<Err> E(4);
+  std::vector<Err> E(5);
+  E[4].chk(comm.my_first_t, -1, 0);
+  E[4].chk(comm.my_Nt, 0, 0);
   auto body = [&]() {
     if (T >= 0) {
       auto ti = get_my_index(rank, P, T + 1, 0);
+      E[4].chk(comm.my_first_t, ti[0], 0);
+      E[4].chk(comm.my_Nt, ti[2], 0);
       for (int tl = 0; tl < ti[2]; tl++)
         for (int kg = 0; kg < Nk; kg++)
           for (int c = 0; c < nc; c++) {
@@ -324,12 +337,16 @@ void run_rank_lambda(int Nk, int nao, int T, bool nospawn, std::vector<Err> &err
           E[1].chk(x, h1(c + 10, kg, T, comm.my_first_tau + nl), 0);
           x = h3(c + 10, kg, T, comm.my_first_tau + nl);
         }
+    if (T < 0) {  // a ti = -1 get leaves the t' block unchanged
+      E[4].chk(comm.my_first_t, -1, 0);
+      E[4].chk(comm.my_Nt, 0, 0);
+    }
   };
-  if (!nospawn) {
+  if (mode == 0) {
     comm.mpi_get_and_comm_spawn(T, getsLG, getstv);
     body();
     comm.mpi_comm_and_set_spawn(T, setsLR, setstv);
-  } else {
+  } else if (mode == 1) {
 #pragma omp parallel
     {
       g_rank = rank;
@@ -340,6 +357,20 @@ void run_rank_lambda(int Nk, int nao, int T, bool nospawn, std::vector<Err> &err
       comm.mpi_comm_and_set_nospawn(T, setsLR, setstv);
 #pragma omp barrier
     }
+  } else if (mode == 2) {
+#pragma omp parallel num_threads(2)
+    {
+      g_rank = rank;
+      comm.mpi_get_and_comm_nospawn(T, getsLG, getstv);
+#pragma omp master
+      body();
+#pragma omp barrier
+      comm.mpi_comm_and_set_nospawn(T, setsLR, setstv);
+    }
+  } else {
+    comm.mpi_get_and_comm_nospawn(T, getsLG, getstv);
+    body();
+    comm.mpi_comm_and_set_nospawn(T, setsLR, setstv);
   }
   for (int kl = 0; kl < comm.my_Nk; kl++)
     for (int c = 0; c < nc; c++) {
@@ -354,7 +385,7 @@ void run_rank_lambda(int Nk, int nao, int T, bool nospawn, std::vector<Err> &err
       for (int n = 0; n < r && n < (int)w.size(); n++) E[3].chk(w[n], h3(c + 10, kg, T, n), 0);
     }
   std::lock_guard<std::mutex> lk(g_print);
-  for (int e = 0; e < 4; e++) {
+  for (int e = 0; e < 5; e++) {
     errs_out[e].nbad += E[e].nbad;
     errs_out[e].nchk += E[e].nchk;
     errs_out[e].maxdiff = std::max(errs_out[e].maxdiff, E[e].maxdiff);
@@ -401,36 +432,77 @@ INSTANTIATE_TEST_SUITE_P(CommMoreRanks, MpiCommHighLevel,
                                            std::make_tuple(2, 9, 1, 1, 3), std::make_tuple(5, 3, 2, 2, 0), std::make_tuple(5, 3, 2, 2, 2)));
 
 class MpiCommLambda : public ::testing::TestWithParam<std::tuple<int, int, int>> {};
-TEST_P(MpiCommLambda, Routing) {
-  auto [P, nao, nospawn] = GetParam();
+void check_lambda(int P, int nao, int mode) {
   for (int T = -1; T <= 4; T++) {
-    std::vector<Err> errs(4);
-    launch(P, [&]() { run_rank_lambda(7, nao, T, nospawn, errs); });
-    for (int e = 0; e < 4; e++) EXPECT_EQ(errs[e].nbad, 0) << "T=" << T << " check " << e;
+    std::vector<Err> errs(5);
+    g_cnt_mismatch = 0;
+    launch(P, [&]() { run_rank_lambda(7, nao, T, mode, errs); });
+    for (int e = 0; e < 5; e++) EXPECT_EQ(errs[e].nbad, 0) << "T=" << T << " check " << e << " (maxdiff " << errs[e].maxdiff << ")";
+    EXPECT_GT(errs[4].nchk, 0);
+    EXPECT_EQ(g_cnt_mismatch.load(), 0) << "Alltoallv send/recv count mismatch";
   }
+}
+TEST_P(MpiCommLambda, Routing) {
+  auto [P, nao, mode] = GetParam();
+  check_lambda(P, nao, mode);
 }
 INSTANTIATE_TEST_SUITE_P(Comm, MpiCommLambda,
                          ::testing::Combine(::testing::Values(1, 3), ::testing::Values(1, 2), ::testing::Values(0, 1)));
 
-// B21: _nospawn in a team smaller than omp_get_max_threads() (OMP_NUM_THREADS=4 for this executable).
-TEST(MpiCommNospawn, KnownBug_B21_TeamSmallerThanMaxThreads) {
+// B21 (fixed in WP5): _nospawn in a team smaller than omp_get_max_threads() (OMP_NUM_THREADS=4 for this
+// executable), and _nospawn called outside any parallel region (team of 1: the caller does all the work; supported).
+TEST(MpiCommNospawn, TeamSmallerThanMaxThreads) {
   hn_test::run_isolated([] {
     ASSERT_GE(omp_get_max_threads(), 3) << "test needs OMP_NUM_THREADS >= 3";
     check_highlevel(3, 7, 2, 2, 5);
   });
 }
-TEST(MpiCommNospawn, KnownBug_B21_CalledOutsideParallel) {
+TEST(MpiCommNospawn, CalledOutsideParallel) {
   hn_test::run_isolated([] {
     ASSERT_GE(omp_get_max_threads(), 2) << "test needs OMP_NUM_THREADS >= 2";
     check_highlevel(3, 7, 2, 2, 4);
   });
 }
+TEST(MpiCommNospawn, LambdaTeamSmallerThanMaxThreads) {
+  ASSERT_GE(omp_get_max_threads(), 3) << "test needs OMP_NUM_THREADS >= 3";
+  check_lambda(3, 2, 2);
+}
+TEST(MpiCommNospawn, LambdaCalledOutsideParallel) {
+  ASSERT_GE(omp_get_max_threads(), 2) << "test needs OMP_NUM_THREADS >= 2";
+  check_lambda(3, 2, 3);
+}
 
-// B20: the paper (App. C) promises an error when more components are sent than the buffers hold.
-// (a) high-level API with ncomponents = 1 (it always writes component index nao^2): must throw.
-TEST(MpiCommChecks, KnownBug_B20_TooFewComponentsHighLevel) {
+// B20 (fixed in WP5): the paper (App. C) promises an error when more components are sent than the buffers hold.
+// The checks run at entry, before any parallel work or barrier, and throw std::invalid_argument.
+namespace {
+using GetF = std::function<cplx(int, int, int)>;
+using SetF = std::function<void(int, int, std::vector<cplx> &)>;
+std::vector<GetF> make_gets(int n) {
+  std::vector<GetF> v;
+  for (int c = 0; c < n; c++) v.push_back([c](int kl, int, int tp) { return cplx(c + kl, tp); });
+  return v;
+}
+std::vector<SetF> make_sets(int n) {
+  std::vector<SetF> v;
+  for (int c = 0; c < n; c++) v.push_back([](int, int, std::vector<cplx> &) {});
+  return v;
+}
+// calls f and records whether it threw std::invalid_argument (and its message)
+void expect_invalid(const std::function<void()> &f, int &nthrow, std::string &msg) {
+  try {
+    f();
+  } catch (const std::invalid_argument &e) {
+    nthrow++;
+    msg = e.what();
+  }
+}
+}  // namespace
+
+// (a) high-level API with ncomponents = 1 (it always writes component index nao^2): every entry point throws.
+TEST(MpiCommChecks, TooFewComponentsHighLevel) {
   hn_test::run_isolated([] {
-    bool threw = false;
+    int nthrow = 0, ncalls = 0;
+    std::string msg;
     launch(1, [&]() {
       int nao = 2, Nk = 3, k = 2, nt = 8, r = 0;
       dlr_info dlr(r, LAMBDA, EPSDLR, BETA, nao, XI);
@@ -440,34 +512,262 @@ TEST(MpiCommChecks, KnownBug_B20_TooFewComponentsHighLevel) {
         G.emplace_back(nt, r, 1, 1e-10, nao, nao, XI, k);
         S.emplace_back(nt, r, 1, 1e-10, nao, nao, XI, k);
       }
-      try {
-        comm.mpi_get_and_comm_spawn(1, G, dlr);
-        comm.mpi_comm_and_set_spawn(1, S);
-      } catch (...) {
-        threw = true;
+      std::vector<std::reference_wrapper<herm_matrix_hodlr>> Gr(G.begin(), G.end()), Sr(S.begin(), S.end());
+      // the _nospawn calls are made outside a parallel region (team of 1), where the exception is catchable
+      std::vector<std::function<void()>> calls = {
+          [&] { comm.mpi_get_and_comm_spawn(1, G, dlr); },  [&] { comm.mpi_get_and_comm_spawn(1, Gr, dlr); },
+          [&] { comm.mpi_get_and_comm_spawn(-1, G, dlr); }, [&] { comm.mpi_get_and_comm_nospawn(1, G, dlr); },
+          [&] { comm.mpi_get_and_comm_nospawn(1, Gr, dlr); }, [&] { comm.mpi_comm_and_set_spawn(1, S); },
+          [&] { comm.mpi_comm_and_set_spawn(-1, Sr); },     [&] { comm.mpi_comm_and_set_nospawn(1, S); },
+          [&] { comm.mpi_comm_and_set_nospawn(1, Sr); }};
+      for (auto &c : calls) {
+        ncalls++;
+        expect_invalid(c, nthrow, msg);
       }
     });
-    EXPECT_TRUE(threw) << "no error for ncomponents=1 with the high-level API";
+    EXPECT_EQ(nthrow, ncalls) << "not every high-level entry point rejects ncomponents=1";
+    EXPECT_NE(msg.find("ncomponents >= 2"), std::string::npos) << msg;
   });
 }
-// (b) lambda API with more lambdas than ncomponents*nao^2: must throw.
-TEST(MpiCommChecks, KnownBug_B20_TooManyLambdas) {
+
+// (b) lambda API with more lambdas than ncomponents*nao^2: get and set, spawn and nospawn, both vectors.
+TEST(MpiCommChecks, TooManyLambdas) {
   hn_test::run_isolated([] {
-    bool threw = false;
+    int nthrow = 0, ncalls = 0, nok_throw = 0;
+    std::string msg, msg_ok;
     launch(1, [&]() {
       int nao = 1, Nk = 3, nt = 8, r = 5, T = 2;
       mpi_comm comm(Nk, nt, r, nao, 1);  // room for 1 component
-      std::vector<std::function<cplx(int, int, int)>> gets, getstv;
-      for (int c = 0; c < 3; c++) {
-        gets.push_back([c](int, int, int tp) { return cplx(c, tp); });
-        getstv.push_back([c](int, int, int n) { return cplx(c, n); });
+      auto g1 = make_gets(1), g3 = make_gets(3);
+      auto s1 = make_sets(1), s3 = make_sets(3);
+      std::vector<std::function<void()>> calls = {
+          [&] { comm.mpi_get_and_comm_spawn(T, g3, g1); },   [&] { comm.mpi_get_and_comm_spawn(T, g1, g3); },
+          [&] { comm.mpi_get_and_comm_spawn(-1, g1, g3); },  [&] { comm.mpi_get_and_comm_nospawn(T, g3, g1); },
+          [&] { comm.mpi_get_and_comm_nospawn(T, g1, g3); }, [&] { comm.mpi_comm_and_set_spawn(T, s3, s1); },
+          [&] { comm.mpi_comm_and_set_spawn(T, s1, s3); },   [&] { comm.mpi_comm_and_set_nospawn(T, s3, s1); },
+          [&] { comm.mpi_comm_and_set_nospawn(T, s1, s3); }};
+      for (auto &c : calls) {
+        ncalls++;
+        expect_invalid(c, nthrow, msg);
       }
-      try {
-        comm.mpi_get_and_comm_spawn(T, gets, getstv);
-      } catch (...) {
-        threw = true;
+      // getsLG/setsLR are not used for ti = -1, so their size is not checked there
+      expect_invalid([&] { comm.mpi_get_and_comm_spawn(-1, g3, g1); }, nok_throw, msg_ok);
+      expect_invalid([&] { comm.mpi_comm_and_set_spawn(-1, s3, s1); }, nok_throw, msg_ok);
+      // exactly max_component_size_ lambdas is fine
+      expect_invalid([&] { comm.mpi_get_and_comm_spawn(T, g1, g1); }, nok_throw, msg_ok);
+      expect_invalid([&] { comm.mpi_comm_and_set_spawn(T, s1, s1); }, nok_throw, msg_ok);
+    });
+    EXPECT_EQ(nthrow, ncalls) << "not every lambda entry point rejects 3 lambdas with max_component_size 1";
+    EXPECT_NE(msg.find("exceeds max_component_size_"), std::string::npos) << msg;
+    EXPECT_EQ(nok_throw, 0) << msg_ok;
+  });
+}
+
+// (c) inside a user parallel region every thread of the team throws the same exception (no thread is left waiting
+// at a barrier), so a per-thread catch inside the region works.
+TEST(MpiCommChecks, NospawnEveryThreadThrowsInsideRegion) {
+  hn_test::run_isolated([] {
+    std::atomic<int> nthrow{0};
+    int team = 0;
+    launch(1, [&]() {
+      int nao = 1, Nk = 5, k = 2, nt = 8, r = 0, T = 2;
+      dlr_info dlr(r, LAMBDA, EPSDLR, BETA, nao, XI);
+      mpi_comm comm(Nk, nt, r, nao, 1);
+      std::vector<herm_matrix_hodlr> G;
+      for (int i = 0; i < comm.my_Nk; i++) G.emplace_back(nt, r, 1, 1e-10, nao, nao, XI, k);
+      auto g3 = make_gets(3), g1 = make_gets(1);
+      auto s3 = make_sets(3), s1 = make_sets(1);
+#pragma omp parallel
+      {
+        g_rank = 0;
+#pragma omp master
+        team = omp_get_num_threads();
+        try { comm.mpi_get_and_comm_nospawn(T, G, dlr); } catch (const std::invalid_argument &) { nthrow++; }
+        try { comm.mpi_comm_and_set_nospawn(T, G); } catch (const std::invalid_argument &) { nthrow++; }
+        try { comm.mpi_get_and_comm_nospawn(T, g3, g1); } catch (const std::invalid_argument &) { nthrow++; }
+        try { comm.mpi_comm_and_set_nospawn(T, s1, s3); } catch (const std::invalid_argument &) { nthrow++; }
       }
     });
-    EXPECT_TRUE(threw) << "no error for 3 lambdas with max_component_size 1";
+    EXPECT_GE(team, 2);
+    EXPECT_EQ(nthrow.load(), 4 * team);
   });
+}
+
+// H24 (fixed in WP5): mpi_comm_and_set_nospawn ends with a barrier. The set lambda of the last local k-point
+// (handled by the last thread) is slowed down; thread 0 checks right after the call, without its own barrier.
+TEST(MpiCommNospawn, SetLambdaEndsWithBarrier) {
+  ASSERT_GE(omp_get_max_threads(), 2) << "test needs OMP_NUM_THREADS >= 2";
+  std::atomic<long> nbad{0}, nchk{0};
+  launch(1, [&]() {
+    const int nao = 1, Nk = 8, nt = 8, r = 5, T = 3;
+    mpi_comm comm(Nk, nt, r, nao, 1);
+    const int myNk = comm.my_Nk;
+    std::unique_ptr<std::atomic<int>[]> doneLR(new std::atomic<int>[myNk]), doneTV(new std::atomic<int>[myNk]);
+    for (int i = 0; i < myNk; i++) doneLR[i] = doneTV[i] = 0;
+    auto g1 = make_gets(1);
+    std::vector<SetF> sLR = {[&](int kl, int, std::vector<cplx> &) {
+      if (kl == myNk - 1) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      doneLR[kl].store(1, std::memory_order_release);
+    }};
+    std::vector<SetF> sTV = {[&](int kl, int, std::vector<cplx> &) {
+      if (kl == myNk - 1) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      doneTV[kl].store(1, std::memory_order_release);
+    }};
+#pragma omp parallel
+    {
+      g_rank = 0;
+      comm.mpi_get_and_comm_nospawn(T, g1, g1);
+      comm.mpi_comm_and_set_nospawn(T, sLR, sTV);
+      // no barrier here on purpose
+      for (int kl = 0; kl < myNk; kl++) {
+        nchk++;
+        if (doneLR[kl].load(std::memory_order_acquire) != 1 || doneTV[kl].load(std::memory_order_acquire) != 1) nbad++;
+      }
+    }
+  });
+  EXPECT_GT(nchk.load(), 0);
+  EXPECT_EQ(nbad.load(), 0) << "a thread returned from mpi_comm_and_set_nospawn before all set lambdas finished";
+}
+
+// H24, high-level API: right after mpi_comm_and_set_nospawn (no barrier of its own) every thread reads every local
+// k-point of S, including those written by other threads, and must see the final data (both ti >= 0 and ti = -1).
+TEST(MpiCommNospawn, HighLevelSetEndsWithBarrier) {
+  ASSERT_GE(omp_get_max_threads(), 2) << "test needs OMP_NUM_THREADS >= 2";
+  std::atomic<long> nbad{0}, nchk{0};
+  launch(1, [&]() {
+    const int nao = 2, Nk = 8, nt = 8, k = 2, es = nao * nao;
+    const double tol = 1e-12;  // values are computed in different code locations (FMA contraction may differ)
+    int r = 0;
+    dlr_info dlr(r, LAMBDA, EPSDLR, BETA, nao, XI);
+    mpi_comm comm(Nk, nt, r, nao);
+    std::vector<herm_matrix_hodlr> G, S;
+    for (int i = 0; i < comm.my_Nk; i++) {
+      G.emplace_back(nt, r, 1, 1e-10, nao, nao, XI, k);
+      S.emplace_back(nt, r, 1, 1e-10, nao, nao, XI, k);
+    }
+    for (int T : {-1, 2}) {
+#pragma omp parallel
+      {
+        g_rank = 0;
+        comm.mpi_get_and_comm_nospawn(T, G, dlr);
+#pragma omp master
+        for (int kg = 0; kg < Nk; kg++) {
+          if (T >= 0) {
+            for (int t = 0; t <= T; t++)
+              for (int i = 0; i < nao; i++)
+                for (int j = 0; j < nao; j++) {
+                  comm.map_ret(kg, t)(i, j) = gR(kg, T, t, i, j);
+                  comm.map_les(kg, t)(i, j) = gL(kg, T, t, i, j);
+                }
+            for (int n = 0; n < r; n++)
+              for (int i = 0; i < nao; i++)
+                for (int j = 0; j < nao; j++) comm.map_tv(kg, n)(i, j) = gTV(kg, T, n, i, j);
+          } else {
+            for (int n = 0; n < r; n++)
+              for (int i = 0; i < nao; i++)
+                for (int j = 0; j < nao; j++) comm.map_mat(kg, n)(i, j) = gM(kg, n, i, j);
+          }
+        }
+#pragma omp barrier
+        comm.mpi_comm_and_set_nospawn(T, S);
+        // no barrier here on purpose
+        for (int kl = 0; kl < comm.my_Nk; kl++) {
+          int kg = comm.my_global_k_list[kl];
+          for (int e = 0; e < es; e++) {
+            int i = e / nao, j = e % nao;
+            nchk++;
+            if (T >= 0) {
+              for (int t = 0; t <= T; t++)
+                if (std::abs(S[kl].curr_timestep_ret_ptr(T, t)[e] - gR(kg, T, t, i, j)) > tol ||
+                    std::abs(S[kl].curr_timestep_les_ptr(t, T)[e] - gL(kg, T, t, i, j)) > tol)
+                  nbad++;
+              for (int n = 0; n < r; n++)
+                if (std::abs(S[kl].tvptr(T, n)[e] - gTV(kg, T, n, i, j)) > tol) nbad++;
+            } else {
+              for (int n = 0; n < r; n++)
+                if (std::abs(S[kl].matptr(n)[e] - gM(kg, n, i, j).real()) > tol) nbad++;
+            }
+          }
+        }
+#pragma omp barrier
+      }
+    }
+  });
+  EXPECT_GT(nchk.load(), 0);
+  EXPECT_EQ(nbad.load(), 0);
+}
+
+// H30 (fixed in WP5): my_first_t/my_Nt are -1/0 after construction (both constructors), are set by every get with
+// ti >= 0 (high-level and lambda, spawn and nospawn) to the rank's t' block, and are unchanged by a ti = -1 get.
+TEST(MpiCommState, TBlockMembers) {
+  {
+    mpi_comm c0;
+    EXPECT_EQ(c0.my_first_t, -1);
+    EXPECT_EQ(c0.my_Nt, 0);
+  }
+  for (int P : {1, 3}) {
+    std::atomic<long> nbad{0};
+    launch(P, [&]() {
+      const int rank = g_rank;
+      auto expect_block = [&](mpi_comm &c, int ti) {
+        int f = -1, n = 0;
+        if (ti >= 0) {
+          auto b = get_my_index(rank, P, ti + 1, 0);
+          f = b[0];
+          n = b[2];
+        }
+        if (c.my_first_t != f || c.my_Nt != n) nbad++;
+      };
+      mpi_comm comm(7, 12, 5, 1, 2);
+      expect_block(comm, -1);
+      auto g1 = make_gets(1);
+      comm.mpi_get_and_comm_spawn(-1, g1, g1);
+      expect_block(comm, -1);
+      comm.mpi_get_and_comm_spawn(4, g1, g1);
+      expect_block(comm, 4);
+      comm.mpi_get_and_comm_spawn(-1, g1, g1);
+      expect_block(comm, 4);
+      comm.mpi_get_and_comm_nospawn(6, g1, g1);  // outside a region
+      expect_block(comm, 6);
+#pragma omp parallel
+      {
+        g_rank = rank;
+        comm.mpi_get_and_comm_nospawn(2, g1, g1);
+        expect_block(comm, 2);  // every thread, right after the call
+      }
+      // high-level API
+      int r = 0, nao = 1, nt = 8, k = 2;
+      dlr_info dlr(r, LAMBDA, EPSDLR, BETA, nao, XI);
+      mpi_comm ch(7, nt, r, nao);
+      expect_block(ch, -1);
+      std::vector<herm_matrix_hodlr> G;
+      for (int i = 0; i < ch.my_Nk; i++) G.emplace_back(nt, r, 1, 1e-10, nao, nao, XI, k);
+      ch.mpi_get_and_comm_spawn(-1, G, dlr);
+      expect_block(ch, -1);
+      ch.mpi_get_and_comm_spawn(1, G, dlr);
+      expect_block(ch, 1);
+#pragma omp parallel
+      {
+        g_rank = rank;
+        ch.mpi_get_and_comm_nospawn(2, G, dlr);
+        expect_block(ch, 2);
+      }
+    });
+    EXPECT_EQ(nbad.load(), 0) << "P=" << P;
+  }
+}
+
+// H28 (WP5): the constructor warns once (rank 0, stderr) if MPI_Query_thread reports less than MPI_THREAD_FUNNELED.
+TEST(MpiCommThreadLevel, WarnsBelowFunneled) {
+  for (int level : {MPI_THREAD_SINGLE, MPI_THREAD_FUNNELED, MPI_THREAD_MULTIPLE}) {
+    g_thread_level = level;
+    testing::internal::CaptureStderr();
+    launch(3, [&]() { mpi_comm comm(7, 12, 5, 1); });
+    std::string err = testing::internal::GetCapturedStderr();
+    size_t n = 0;
+    for (size_t pos = err.find("h_nessi::mpi_comm warning"); pos != std::string::npos; pos = err.find("h_nessi::mpi_comm warning", pos + 1)) n++;
+    EXPECT_EQ(n, level < MPI_THREAD_FUNNELED ? 1u : 0u) << "level " << level << ": " << err;
+    if (level < MPI_THREAD_FUNNELED) EXPECT_NE(err.find("MPI_Init_thread"), std::string::npos) << err;
+  }
+  g_thread_level = MPI_THREAD_FUNNELED;
 }

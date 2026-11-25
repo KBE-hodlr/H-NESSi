@@ -1,6 +1,9 @@
 #include "h_nessi/mpi_comm.hpp"
 #include "h_nessi/utils.hpp"
 
+#include <stdexcept>
+#include <string>
+
 namespace h_nessi {
 
 mpi_comm::mpi_comm(){};
@@ -16,6 +19,17 @@ mpi_comm::mpi_comm
   int mpi_rank, mpi_size;
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
   MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
+
+  // H28: the _nospawn routines call MPI from thread 0 inside an OpenMP parallel region, which requires at least
+  // MPI_THREAD_FUNNELED. Warn (do not fail: programs that use only the _spawn routines are fine with MPI_Init).
+  int thread_level = MPI_THREAD_SINGLE;
+  MPI_Query_thread(&thread_level);
+  if(thread_level < MPI_THREAD_FUNNELED && mpi_rank==0){
+    std::cerr << "h_nessi::mpi_comm warning: the MPI thread support level is below MPI_THREAD_FUNNELED. "
+                 "The *_nospawn routines call MPI from inside an OpenMP parallel region and need at least "
+                 "MPI_THREAD_FUNNELED: initialise MPI with MPI_Init_thread(..., MPI_THREAD_FUNNELED, &provided). "
+                 "The *_spawn routines are not affected.\n";
+  }
 
   tau_send_displs = std::vector<int>(mpi_size);
   tau_send_counts = std::vector<int>(mpi_size);
@@ -129,17 +143,43 @@ double mpi_comm::memory_usage() const
   bytes += kindex_rank.capacity() * sizeof(int);
   bytes += k_rank_map.capacity() * sizeof(int);
 
-  // bytes += init_k_per_rank.capacity() * sizeof(int);
-  // bytes += end_k_per_rank.capacity() * sizeof(int);
+  bytes += init_k_per_rank.capacity() * sizeof(int);
   bytes += Nk_per_rank.capacity() * sizeof(int);
+  bytes += my_global_k_list.capacity() * sizeof(int);
 
   bytes += init_tau_per_rank.capacity() * sizeof(int);
-  // bytes += end_tau_per_rank.capacity() * sizeof(int);
   bytes += Ntau_per_rank.capacity() * sizeof(int);
 
   // convert to MiB
   double mib = static_cast<double>(bytes) / (1024.0 * 1024.0);
   return mib;
+}
+
+void mpi_comm::check_component_count_(std::size_t ncomp, const char *what, const char *func) const
+{
+  if(ncomp > static_cast<std::size_t>(max_component_size_)){
+    throw std::invalid_argument(std::string("h_nessi::mpi_comm::") + func + ": " + what + ".size() = "
+                                + std::to_string(ncomp) + " exceeds max_component_size_ = ncomponents*nao*nao = "
+                                + std::to_string(max_component_size_)
+                                + " (construct mpi_comm with a larger ncomponents)");
+  }
+}
+
+void mpi_comm::check_highlevel_components_(const char *func) const
+{
+  if(max_component_size_ < 2*nao_*nao_){
+    throw std::invalid_argument(std::string("h_nessi::mpi_comm::") + func
+                                + ": the herm_matrix_hodlr API uses 2*nao*nao = " + std::to_string(2*nao_*nao_)
+                                + " components per slot but max_component_size_ = ncomponents*nao*nao = "
+                                + std::to_string(max_component_size_) + " (construct mpi_comm with ncomponents >= 2)");
+  }
+}
+
+void mpi_comm::set_my_t_block_(int ti, int mpi_rank, int mpi_size)
+{
+  std::array<int,3> indxs = get_my_index(mpi_rank,mpi_size,ti+1,0);
+  my_first_t = indxs[0];
+  my_Nt = indxs[2];
 }
 
 int mpi_comm::alltp_buff_index(int loc_Nk, int tpi, int local_ki, int compi)
@@ -164,6 +204,9 @@ void mpi_comm::mpi_get_and_comm_spawn
  std::vector<std::function<std::complex<double>(int, int, int)>> &getstv
 )
 {
+  if(ti>=0) check_component_count_(getsLG.size(), "getsLG", "mpi_get_and_comm_spawn");
+  check_component_count_(getstv.size(), "getstv", "mpi_get_and_comm_spawn");
+
   int mpi_rank, mpi_size;
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
   MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
@@ -178,7 +221,7 @@ void mpi_comm::mpi_get_and_comm_spawn
       Ntp_per_rank[mpii] = indxs[2];
     }
     int my_Ntp = Ntp_per_rank[mpi_rank];
-    
+    set_my_t_block_(ti, mpi_rank, mpi_size);
 
     #pragma omp parallel for schedule(static)
     for(int tpi=0; tpi<tp_size; tpi++){
@@ -243,12 +286,17 @@ void mpi_comm::mpi_get_and_comm_nospawn
  std::vector<std::function<std::complex<double>(int, int, int)>> &getstv
 )
 {
+  // checks before any barrier; identical on every thread (shared arguments), so all threads throw together
+  if(ti>=0) check_component_count_(getsLG.size(), "getsLG", "mpi_get_and_comm_nospawn");
+  check_component_count_(getstv.size(), "getstv", "mpi_get_and_comm_nospawn");
+
   int mpi_rank, mpi_size;
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
   MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
 
+  // B21: partition over the current team (1 outside a parallel region), not omp_get_max_threads()
   int thread_id = omp_get_thread_num();
-  int nthreads = omp_get_max_threads();
+  int nthreads = omp_get_num_threads();
 
   if(ti>=0){
     int tp_size = ti+1;
@@ -280,6 +328,7 @@ void mpi_comm::mpi_get_and_comm_nospawn
     #pragma omp barrier
 
     if(thread_id==0){
+      set_my_t_block_(ti, mpi_rank, mpi_size);
       for(int mpii=0; mpii<mpi_size; mpii++){
         t_send_counts[mpii] = max_component_size_*Ntp_per_rank[mpii]*my_Nk;
         t_recv_counts[mpii] = max_component_size_*my_Ntp*Nk_per_rank[mpii];
@@ -347,6 +396,9 @@ void mpi_comm::mpi_comm_and_set_spawn
  std::vector<std::function<void(int, int, std::vector<std::complex<double>>&)>> &setstv
 )
 {
+  if(ti>=0) check_component_count_(setsLR.size(), "setsLR", "mpi_comm_and_set_spawn");
+  check_component_count_(setstv.size(), "setstv", "mpi_comm_and_set_spawn");
+
   int mpi_rank, mpi_size;
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
   MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
@@ -413,12 +465,17 @@ void mpi_comm::mpi_comm_and_set_nospawn
  std::vector<std::function<void(int, int, std::vector<std::complex<double>>&)>> &setstv
 )
 {
+  // checks before any barrier; identical on every thread (shared arguments), so all threads throw together
+  if(ti>=0) check_component_count_(setsLR.size(), "setsLR", "mpi_comm_and_set_nospawn");
+  check_component_count_(setstv.size(), "setstv", "mpi_comm_and_set_nospawn");
+
   int mpi_rank, mpi_size;
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
   MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
 
+  // B21: partition over the current team (1 outside a parallel region), not omp_get_max_threads()
   int thread_id = omp_get_thread_num();
-  int nthreads = omp_get_max_threads();
+  int nthreads = omp_get_num_threads();
 
   if(ti>=0){
     int tp_size = ti+1;
@@ -500,6 +557,9 @@ void mpi_comm::mpi_comm_and_set_nospawn
       }
     }
   }
+
+  // H24: the set lambdas of other threads must have finished before any thread uses their results
+  #pragma omp barrier
 };
 
 } // namespace

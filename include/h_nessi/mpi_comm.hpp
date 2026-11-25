@@ -29,6 +29,27 @@ namespace h_nessi {
  *
  * The class manages different buffers, using them as needed depending on the type of data required at each step of the calculation.
  * It also handles buffer management, data indexing, and communication patterns for distributed arrays, abstracting away MPI/OpenMP details from the user.
+ *
+ * Threading contract:
+ *   - `*_spawn` routines must be called outside an OpenMP parallel region; they open their own `omp parallel for`.
+ *   - `*_nospawn` routines must be called by **every** thread of the current team (they contain orphaned
+ *     `#pragma omp barrier`s). Work is partitioned over the current team (`omp_get_num_threads()`), so any team
+ *     size works, including a `num_threads(n)` team and a call outside any parallel region (team of 1, the
+ *     calling thread does all the work). MPI is called only by thread 0 of the team, between barriers, so MPI
+ *     must provide at least `MPI_THREAD_FUNNELED` and thread 0 must be the thread that initialised MPI (true for
+ *     a non-nested region started from the main thread). The constructor warns on rank 0 if
+ *     `MPI_Query_thread` reports a lower level. Every `_nospawn` routine ends with a barrier, so on return all
+ *     threads see all data written by the routine (buffers and herm_matrix_hodlr objects).
+ *
+ * Errors: the component-count checks (see below) throw `std::invalid_argument` at entry, before any parallel
+ * work or barrier, and they depend only on shared arguments, so in a `_nospawn` call every thread of the team
+ * throws the same exception. Catch it inside the parallel region (on every thread) or not at all: an exception
+ * that leaves an OpenMP region calls `std::terminate` (libstdc++ prints the message first).
+ *
+ * Component counts: each (time, k) slot holds `max_component_size_ = ncomponents*nao*nao` complex numbers.
+ * The high-level (herm_matrix_hodlr) API uses components `[0, 2*nao*nao)` and therefore requires
+ * `ncomponents >= 2`. The lambda API requires `getsLG.size()`, `getstv.size()`, `setsLR.size()`,
+ * `setstv.size() <= max_component_size_` (getsLG/setsLR are checked only when ti >= 0, where they are used).
  */
 class mpi_comm{
 public:
@@ -195,7 +216,7 @@ public:
   );
 
 
-  // Easy access to arrays.  Only give access to *_allk_buff, as that is what the user needs to modify
+  // Easy access to arrays.  map_ret/map_les use my_first_t: valid only after a get with ti >= 0.  Only give access to *_allk_buff, as that is what the user needs to modify
   ZMatrixMap map_ret(int k_global, int t_global);
   ZMatrixMap map_les(int k_global, int t_global);
   ZMatrixMap map_tv(int k_global, int tau_global);
@@ -229,22 +250,34 @@ public:
   /// Distribution of tau indices per rank
   std::vector<int> init_tau_per_rank;
   std::vector<int> Ntau_per_rank;
-  int my_Ntau;
-  int my_first_tau;
-  int my_Nt;
-  int my_first_t;
-  int my_Nk;
+  int my_Ntau = 0;
+  int my_first_tau = 0;
+  /// Block of real-time points t' = my_first_t .. my_first_t+my_Nt-1 that this rank holds in t_allk_buff.
+  /// Set (identically) by every get with ti >= 0, high-level and lambda API: the block of
+  /// get_my_index(rank, mpi_size, ti+1, 0). Before the first such get: my_first_t = -1, my_Nt = 0.
+  /// A get with ti = -1 leaves them unchanged.
+  int my_Nt = 0;
+  int my_first_t = -1;
+  int my_Nk = 0;
   std::vector<int> my_global_k_list;
 
   /// Parameters for buffer and communication sizing
-  int Nk_;
-  int Nt_;
+  int Nk_ = 0;
+  int Nt_ = 0;
   /// Number of representative tau points in the DLR representation
-  int r_;
+  int r_ = 0;
   /// Maximum number of components of herm_matrix_hodlr objects to be communicated, can also be orbital components
-  int max_component_size_;
-  /// Number of orbitals, max_component_size_ = 2*nao*nao
-  int nao_;
+  int max_component_size_ = 0;
+  /// Number of orbitals, max_component_size_ = ncomponents*nao*nao
+  int nao_ = 0;
+
+private:
+  /// Throws std::invalid_argument if ncomp > max_component_size_ (lambda API; B20).
+  void check_component_count_(std::size_t ncomp, const char *what, const char *func) const;
+  /// Throws std::invalid_argument if max_component_size_ < 2*nao_*nao_ (high-level API needs ncomponents >= 2; B20).
+  void check_highlevel_components_(const char *func) const;
+  /// Sets my_first_t/my_Nt to this rank's t' block for timestep ti >= 0 (H30).
+  void set_my_t_block_(int ti, int mpi_rank, int mpi_size);
 };
 
 } // namespace

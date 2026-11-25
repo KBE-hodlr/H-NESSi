@@ -49,6 +49,8 @@ void mpi_comm::mpi_get_and_comm_spawn
  dlr_info &dlr
 )
 {
+  check_highlevel_components_("mpi_get_and_comm_spawn");
+
   int mpi_rank, mpi_size;
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
   MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
@@ -148,6 +150,8 @@ void mpi_comm::mpi_get_and_comm_spawn
  dlr_info &dlr
 )
 {
+  check_highlevel_components_("mpi_get_and_comm_spawn");
+
   int mpi_rank, mpi_size;
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
   MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
@@ -248,12 +252,16 @@ void mpi_comm::mpi_get_and_comm_nospawn
  dlr_info &dlr
 )
 {
+  // check before any barrier; identical on every thread (shared state), so all threads throw together
+  check_highlevel_components_("mpi_get_and_comm_nospawn");
+
   int mpi_rank, mpi_size;
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
   MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
 
+  // B21: partition over the current team (1 outside a parallel region), not omp_get_max_threads()
   int thread_id = omp_get_thread_num();
-  int nthreads = omp_get_max_threads();
+  int nthreads = omp_get_num_threads();
 
   if(ti>=0){
     int tp_size = ti+1;
@@ -265,8 +273,6 @@ void mpi_comm::mpi_get_and_comm_nospawn
       init_tp_per_rank[mpii] = indxs[0];
       Ntp_per_rank[mpii] = indxs[2];
     }
-    my_first_t = init_tp_per_rank[mpi_rank];
-    my_Nt = Ntp_per_rank[mpi_rank];
 
     std::array<int,3> indxs = get_my_index(thread_id,nthreads,tp_size,0);
     int th_my_init_tp = indxs[0];
@@ -289,6 +295,9 @@ void mpi_comm::mpi_get_and_comm_nospawn
     #pragma omp barrier
 
     if(thread_id==0){
+      // only thread 0 writes the shared members (the barriers below publish them to the team)
+      my_first_t = init_tp_per_rank[mpi_rank];
+      my_Nt = Ntp_per_rank[mpi_rank];
       for(int mpii=0; mpii<mpi_size; mpii++){
         t_send_counts[mpii] = max_component_size_*Ntp_per_rank[mpii]    *my_Nk;
         t_recv_counts[mpii] = max_component_size_*Ntp_per_rank[mpi_rank]*Nk_per_rank[mpii];
@@ -374,12 +383,16 @@ void mpi_comm::mpi_get_and_comm_nospawn
  dlr_info &dlr
 )
 {
+  // check before any barrier; identical on every thread (shared state), so all threads throw together
+  check_highlevel_components_("mpi_get_and_comm_nospawn");
+
   int mpi_rank, mpi_size;
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
   MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
 
+  // B21: partition over the current team (1 outside a parallel region), not omp_get_max_threads()
   int thread_id = omp_get_thread_num();
-  int nthreads = omp_get_max_threads();
+  int nthreads = omp_get_num_threads();
 
   if(ti>=0){
     int tp_size = ti+1;
@@ -391,8 +404,6 @@ void mpi_comm::mpi_get_and_comm_nospawn
       init_tp_per_rank[mpii] = indxs[0];
       Ntp_per_rank[mpii] = indxs[2];
     }
-    my_first_t = init_tp_per_rank[mpi_rank];
-    my_Nt = Ntp_per_rank[mpi_rank];
 
     std::array<int,3> indxs = get_my_index(thread_id,nthreads,tp_size,0);
     int th_my_init_tp = indxs[0];
@@ -415,6 +426,9 @@ void mpi_comm::mpi_get_and_comm_nospawn
     #pragma omp barrier
 
     if(thread_id==0){
+      // only thread 0 writes the shared members (the barriers below publish them to the team)
+      my_first_t = init_tp_per_rank[mpi_rank];
+      my_Nt = Ntp_per_rank[mpi_rank];
       for(int mpii=0; mpii<mpi_size; mpii++){
         t_send_counts[mpii] = max_component_size_*Ntp_per_rank[mpii]    *my_Nk;
         t_recv_counts[mpii] = max_component_size_*Ntp_per_rank[mpi_rank]*Nk_per_rank[mpii];
@@ -506,6 +520,8 @@ void mpi_comm::mpi_comm_and_set_spawn
  std::vector<herm_matrix_hodlr> &hmh_vec
 )
 {
+  check_highlevel_components_("mpi_comm_and_set_spawn");
+
   int mpi_rank, mpi_size;
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
   MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
@@ -590,6 +606,8 @@ void mpi_comm::mpi_comm_and_set_spawn
  std::vector<std::reference_wrapper<herm_matrix_hodlr>> &hmh_vec
 )
 {
+  check_highlevel_components_("mpi_comm_and_set_spawn");
+
   int mpi_rank, mpi_size;
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
   MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
@@ -675,12 +693,16 @@ void mpi_comm::mpi_comm_and_set_nospawn
  std::vector<herm_matrix_hodlr> &hmh_vec
 )
 {
+  // check before any barrier; identical on every thread (shared state), so all threads throw together
+  check_highlevel_components_("mpi_comm_and_set_nospawn");
+
   int mpi_rank, mpi_size;
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
   MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
 
+  // B21: partition over the current team (1 outside a parallel region), not omp_get_max_threads()
   int thread_id = omp_get_thread_num();
-  int nthreads = omp_get_max_threads();
+  int nthreads = omp_get_num_threads();
 
   if(ti>=0){
     int tp_size = ti+1;
@@ -781,6 +803,9 @@ void mpi_comm::mpi_comm_and_set_nospawn
       }
     }
   }
+
+  // H24: other threads' k-points must be fully written before any thread reads them
+  #pragma omp barrier
 };
 
 void mpi_comm::mpi_comm_and_set_nospawn
@@ -788,12 +813,16 @@ void mpi_comm::mpi_comm_and_set_nospawn
  std::vector<std::reference_wrapper<herm_matrix_hodlr>> &hmh_vec
 )
 {
+  // check before any barrier; identical on every thread (shared state), so all threads throw together
+  check_highlevel_components_("mpi_comm_and_set_nospawn");
+
   int mpi_rank, mpi_size;
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
   MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
 
+  // B21: partition over the current team (1 outside a parallel region), not omp_get_max_threads()
   int thread_id = omp_get_thread_num();
-  int nthreads = omp_get_max_threads();
+  int nthreads = omp_get_num_threads();
 
   if(ti>=0){
     int tp_size = ti+1;
@@ -894,6 +923,9 @@ void mpi_comm::mpi_comm_and_set_nospawn
       }
     }
   }
+
+  // H24: other threads' k-points must be fully written before any thread reads them
+  #pragma omp barrier
 };
 
 } // namespace 

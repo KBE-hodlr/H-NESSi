@@ -26,7 +26,7 @@ Run the gtest executables through ctest. Each test then gets its own process. If
 `--gtest_filter`. Known-bug bodies `fork()`, and libgomp is not fork-safe once an earlier test has started its
 thread pool.
 
-Timings (Perlmutter login node, `-j16`, all 226 tests including `slow`): Release about 6 s wall, Debug (-O0)
+Timings (Perlmutter login node, `-j16`, all 231 tests including `slow`): Release about 6 s wall, Debug (-O0)
 about 90 s wall. The `slow` sweeps (21 tests) dominate in Debug at roughly 70 s each.
 
 ## Labels and naming convention
@@ -43,10 +43,10 @@ about 90 s wall. The `slow` sweeps (21 tests) dominate in Debug at roughly 70 s 
   because `WILL_FAIL` does not invert crashes. It also means a crashing test cannot take down other tests.
 * **When a bug is fixed**, its tests turn into `Failed` (an "unexpected pass"). To flip them, remove the bug id from
   the `BUGS`/`DEBUG_BUGS` list of the executable in `CMakeLists.txt`, and rename `KnownBug_B<id>_` to a normal name.
-  For B6, B16 and B19, delete `WILL_FAIL`.
+  For B16 and B19, delete `WILL_FAIL` (B6 was flipped this way in WP4: `WILL_FAIL FALSE`, label `unit`).
 * **Labels.** `gtest_discover_tests` flattens list-valued properties, so labels are attached by the generated ctest
   include file `hn_labels.cmake`.
-* **Link-failure tests** (B6, B19). The targets `test_b6_operator_assign` and `test_read_inputfile_2tu` are
+* **Link tests** (B6, fixed in WP4, and the known failure B19). The targets `test_b6_operator_assign` and `test_read_inputfile_2tu` are
   `EXCLUDE_FROM_ALL`, so the default build does not break. The ctest builds the target with `cmake --build`
   (`link/build_and_run.cmake`) and then runs it. The test holds `RESOURCE_LOCK hn_build_tree`.
 * **`h5flat`** (`tools/h5flat.cpp`) flattens HDF5 files to text. The example test and
@@ -60,18 +60,18 @@ about 90 s wall. The `slow` sweeps (21 tests) dominate in Debug at roughly 70 s 
 | `test_dlr_matsubara` | `03/test_dlr.cpp`, `51/t_mat.cpp` | DLR maps, `get_mat_tau`, `density_matrix`, reversed/tv accessors, `tv_it_conv`, `les_it_int`, `gamma_integral(_mat)` against quadrature; `dyson_mat` against the exact hybridised G^M (μ shift, mixing, return value); `dyson_mat` leaves Σ and both conv tensors untouched, `fixHam=true` reuses the saved G0; `dyson::memory_usage_bytes` counts every heap buffer with its real size (B32); the `initGMConvTensor` dlr ξ/r assert (death test, Debug only, skipped in Release); B1 B2 B3 B4 (B1, B2 fixed in WP3; B4 fixed in WP2) |
 | `test_bosonic` | `51/t_resolvent.cpp`, new (WP3) | exact resolvent identity G_ε∗G_η = (G_ε−G_η)/(ε−η) for both ξ; B1 B2 B10 (fixed in WP3) and the Q2 relation; end-to-end system+bath run (dyson_mat → initGMConvTensor → dyson_start → dyson_timestep, drive after the bootstrap) vs the exact propagator, both ξ, order k+1 for k = 2, 4 in R, <, ⌉ |
 | `test_free_extrap` | `23/ta,tb,tc.cpp` | `green_from_H` exact (real and complex H, both ξ); `green_from_H_dm`; `extrapolate` order k+1 (and the `_2leg` variant, no-op on a second call); `gamma_integral` against a dense quadrature, order k+1; `gamma_integral(0)` = ξ·`gamma_integral_mat` (N_o = 1, 2); `green_from_H_dm` G^⌉(t,0) = G^<(t,0); B2 B10 (fixed in WP3) |
-| `test_hodlr_storage` | old `tests/linalg.cpp`, `52/s9.cpp`, `52/s1.cpp` | `mgs`, incremental TSVD; fill/archive/read-back round trips for 8 geometries; zero-first-row blocks (S9); checkpoint round trip; checkpoint `format_version` (new bosonic file silent, missing version warns on stderr, fermionic silent, not in `write_to_hdf5` output); B9 B22 B23 B26 |
+| `test_hodlr_storage` | old `tests/linalg.cpp`, `52/s9.cpp`, `52/s1.cpp` | `mgs`, incremental TSVD; fill/archive/read-back round trips for 8 geometries; zero-first-row blocks (S9); checkpoint round trip; checkpoint `format_version` (new bosonic file silent, missing version warns on stderr, fermionic silent, not in `write_to_hdf5` output); copy semantics (WP4): `get/set_timestep_curr` leave the source bitwise unchanged (full checkpoint dump compared), give the destination the source window, tstp = −1 with different windows, window/geometry asserts (death test, Debug only); `operator=`/copy ctor deep copy, and a copy taken mid-run (dyson_mat → dyson_start → dyson_timestep) continues bitwise like the original; B9 B22 (fixed in WP4) B23 B26 B6 (fixed in WP4) |
 | `test_timestep` | `20/rettv.cpp`, `21/les.cpp` | R/⌉ step against dense discrete equations (5 geometries), against svdtol, order k+1 (k = 1..5); < step against the dense system, the 8-region decomposition of `les_lesadv_int_0_tstp` and raw storage, both rho modes, 2-leg, closed-system N conservation, order k+1; B14 B28 |
 | `test_bootstrap` | `22/start_test.cpp`, `51/t_start*.cpp` | TTI and non-TTI bootstrap (horiz/diag, nobc, 2leg) against a dense reference that uses the **correct** continuation and the right-acting imp_tp0 system, plus order k+1 against the exact impurity+bath model; the imp_tp0 error estimate; B12 B13 B25 B31 (all fixed in WP1) |
-| `test_mpi_comm` | `31/commtest.cpp` | `mpi_comm` routing with P simulated ranks: MPI symbols interposed, std::thread per rank, 1–5 ranks, spawn/nospawn, vector/reference_wrapper, high-level and lambda APIs; B20 B21 (`OMP_NUM_THREADS=4`) |
+| `test_mpi_comm` | `31/commtest.cpp` | `mpi_comm` routing with P simulated ranks: MPI symbols interposed (incl. `MPI_Query_thread`), std::thread per rank, 1–5 ranks, spawn/nospawn, vector/reference_wrapper, high-level and lambda APIs; `_nospawn` in a `num_threads(2)` team and outside a region; trailing barrier of the set (H24); `my_first_t`/`my_Nt` (H30); thread-level warning (H28); B20 B21 (fixed in WP5; `OMP_NUM_THREADS=4`) |
 | `test_read_inputfile` | new | `find_param` for int/double/bool/cplx/vector; missing values throw; B15 |
 | `test_read_inputfile_2tu` (link) | `52/ri1+ri2.cpp` | B19 |
-| `test_b6_operator_assign` (link) | new | B6 |
+| `test_b6_operator_assign` (link) | new | B6 (fixed in WP4; ctest `OperatorAssignLinkAndDeepCopy_B6`, ordinary test) |
 | `KnownBug_B16_MpiExampleRestart` (example) | `agent_docs/32` §6.3 | runs `mpi_example` (L=4, Nt=64) uninterrupted, then stop (`__time_limit=0`) followed by restart; `obs.h5` must agree to 1e-10 |
 
 ## BUG ID → test map
 
-Status is for the code as of WP0 (CLAUDE_dev = upstream 5c9706b), updated for the bugs fixed since (WP1: B12, B13, B25, B31; WP2: B4; WP3: B1, B2, B10).
+Status is for the code as of WP0 (CLAUDE_dev = upstream 5c9706b), updated for the bugs fixed since (WP1: B12, B13, B25, B31; WP2: B4; WP3: B1, B2, B10; WP4: B22, B6; WP5: B20, B21).
 XF means expected failure.
 
 | BUGS id | test(s) | Release | Debug | symptom seen by the test |
@@ -80,7 +80,7 @@ XF means expected failure.
 | B2 | `DlrBoson.GammaIntegralMixedTerm`, `ResolventBoson.GammaIntegralEquilibrium`, `ResolventBoson.GammaIntegralVsMat`, `GammaIntegralBoson.VsQuadrature`, `GammaIntegralBoson.EquilibriumVsMat`, `GammaIntegralBoson.EquilibriumVsMatSingleOrbital` | pass | pass | **fixed in WP3** (was: wrong sign of the bosonic mixed term, error 2.87; relation `gamma_integral = ξ·gamma_integral_mat` violated) |
 | B3 | `DlrArray.KnownBug_B3_GetMatTauArray`, `DlrArray.KnownBug_B3_GetTvTauArray` | XF | XF | child SIGSEGV |
 | B4 | `DysonMat.FixHamSecondCall`, `DysonMatFixHam.ReusesSavedG0/*` | pass | pass | **fixed in WP2** (was: rel. difference 1.10) |
-| B6 | `KnownBug_B6_OperatorAssignLinkAndDeepCopy` | XF | XF | undefined reference to `operator=` |
+| B6 | `OperatorAssignLinkAndDeepCopy_B6` (link), `HodlrAssign.DeepCopyIndependent`, `HodlrAssign.CopyContinuesDysonIdentically` | pass | pass | **fixed in WP4** (was: undefined reference to `operator=`) |
 | B8 | — | | | not testable without a NESSi build (see below) |
 | B9 | `HodlrCheckpoint.KnownBug_B9_TimingZeroWhenMissing` | XF | XF | uninitialised timing (malloc perturbation) |
 | B10 | `ResolventBoson.GreenFromHdm`, `GreenFromHdm.BosonExact` | pass | pass | **fixed in WP3** (was: bosonic G^< error 0.13 / 0.11; decision D-1: `rho` is the density matrix) |
@@ -91,10 +91,10 @@ XF means expected failure.
 | B16 | `KnownBug_B16_MpiExampleRestart` | XF | XF | restart run exits with 139 (segfault) |
 | B17 | — | | | not testable (see below) |
 | B19 | `KnownBug_B19_ReadInputfileTwoTULink` | XF | XF | multiple definition of `uncomment_line` … |
-| B20 | `MpiCommChecks.KnownBug_B20_TooFewComponentsHighLevel`, `MpiCommChecks.KnownBug_B20_TooManyLambdas` | XF | XF | no exception; heap corruption (child SIGABRT) |
-| B21 | `MpiCommNospawn.KnownBug_B21_TeamSmallerThanMaxThreads`, `MpiCommNospawn.KnownBug_B21_CalledOutsideParallel` | XF | XF | stale/unpacked buffer entries |
-| B22 | `HodlrCopy.KnownBug_B22_GetTimestepCurrWindow` | XF | XF | source tstpmk 8 → 0; destination window wrong |
-| B22 (assert part) | `HodlrCopy.KnownBugDebug_B22_GetTimestepCurrMatsubara` | pass | XF | Debug: `assert(tstp>=tstpmk_)` fires before the `tstp==-1` branch |
+| B20 | `MpiCommChecks.TooFewComponentsHighLevel`, `MpiCommChecks.TooManyLambdas` (formerly KnownBug_B20), `MpiCommChecks.NospawnEveryThreadThrowsInsideRegion` | pass | pass | **fixed in WP5** (was: no exception; heap corruption, child SIGABRT) |
+| B21 | `MpiCommNospawn.TeamSmallerThanMaxThreads`, `MpiCommNospawn.CalledOutsideParallel` (formerly KnownBug_B21), `MpiCommNospawn.LambdaTeamSmallerThanMaxThreads`, `MpiCommNospawn.LambdaCalledOutsideParallel` | pass | pass | **fixed in WP5** (was: stale/unpacked buffer entries) |
+| B22 | `HodlrCopy.GetTimestepCurrWindow`, `HodlrCopy.GetTimestepCurrSourceUnchangedAndContinues`, `HodlrCopy.SetTimestepCurrSourceUnchanged`, `HodlrCopyDeathTest.WindowAndGeometryAsserts` | pass | pass | **fixed in WP4** (was: source tstpmk 8 → 0; destination window wrong). The death test is skipped in Release (assert off) |
+| B22 (assert part) | `HodlrCopy.GetTimestepCurrMatsubara` | pass | pass | **fixed in WP4** (was: Debug `assert(tstp>=tstpmk_)` fired before the `tstp==-1` branch) |
 | B23 | `HodlrGeometry.KnownBug_B23_NlvlZeroNoCrash` | XF | XF | child SIGSEGV in `init_shape` |
 | B24 | — | | | not testable (see below) |
 | B25 | `Bootstrap2leg.FunctionOverloadForwardsImpTp0` | pass | pass | **fixed in WP1** (was: `function&` and pointer overloads differ when `imp_tp0=true`) |
@@ -123,11 +123,11 @@ The B14 test also checks the correct boundary sign through its dense reference: 
 
 ## Release vs Debug
 
-Both builds pass 100% (226 tests after WP3). Release has 16 expected failures (plus 1 skipped: the Debug-only
-`GMConvTensorDeathTest`) and Debug has 17. The difference is:
+Both builds pass 100% (238 tests after WP4+WP5). Release has 10 expected failures and skips the Debug-only death tests
+(`GMConvTensorDeathTest`, `HodlrCopyDeathTest`); Debug has 10. The differences are:
 
-* `HodlrCopy.KnownBugDebug_B22_GetTimestepCurrMatsubara` passes in Release. In Debug it is an expected failure:
-  `assert(tstp>=tstpmk_)` at `herm_matrix_hodlr.cpp:339` fires before the `tstp==-1` branch (B22).
+* Until WP4, `HodlrCopy.KnownBugDebug_B22_GetTimestepCurrMatsubara` (now `HodlrCopy.GetTimestepCurrMatsubara`) was an
+  expected failure in Debug only: `assert(tstp>=tstpmk_)` fired before the `tstp==-1` branch (B22, fixed in WP4).
 * Until WP1, the B13 and B25 tests also aborted in Debug on an Eigen assertion at `dyson_start.cpp:197` (BUGS B31,
   fixed in WP1 together with B13 and B25).
 * All other known-bug tests fail the same way in both builds, and no ordinary test asserts in Debug.

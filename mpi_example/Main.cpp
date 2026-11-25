@@ -38,9 +38,19 @@ int main(int argc, char *argv[]) {
   //                             MPI INITIALIZATION
   //============================================================================
 
-  MPI_Init(&argc,&argv);
+  // The time loop calls the mpi_comm *_nospawn routines, which call MPI from thread 0 of an OpenMP
+  // parallel region: this needs at least MPI_THREAD_FUNNELED.
+  int mpi_thread_provided = MPI_THREAD_SINGLE;
+  MPI_Init_thread(&argc, &argv, MPI_THREAD_FUNNELED, &mpi_thread_provided);
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
   MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
+  if(mpi_thread_provided < MPI_THREAD_FUNNELED){
+    if(mpi_rank==0){
+      std::cerr << "Error: MPI provides thread level " << mpi_thread_provided
+                << " < MPI_THREAD_FUNNELED, which this program needs (MPI calls from inside OpenMP regions)\n";
+    }
+    MPI_Abort(MPI_COMM_WORLD, 1);
+  }
   mpi_root=0;
   if(mpi_rank==mpi_root){
     std::cout << "mpi_size = " << mpi_size << "\n";

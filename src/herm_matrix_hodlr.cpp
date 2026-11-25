@@ -336,11 +336,15 @@ int herm_matrix_hodlr::time2block(int t1,int t2){
     return -1;
 }
 
+// Copy timestep tstp FROM *this INTO G (*this is not modified).
+// tstp == -1: Matsubara component; tstp >= 0: tstp must be in the current window of both objects.
 void herm_matrix_hodlr::get_timestep_curr(int tstp,herm_matrix_hodlr &G){
-    assert(tstp>=tstpmk_ && tstp <= tstpmk_+k_);
+    assert(G.nt()==nt_ && G.r()==r_ && G.size1()==size1_ && G.size2()==size2_ && G.k()==k_);
+    assert(tstp >= -1 && tstp <= nt_);
     if(tstp==-1){
         memcpy(G.mat(), mat_.data(), r_ * size1_ * size2_ * sizeof(double));
     }else{ // set last kt timesteps together
+        assert(tstp>=tstpmk_ && tstp <= tstpmk_+k_ && tstp>=G.tstpmk() && tstp <= G.tstpmk()+k_);
         memcpy(G.curr_timestep_ret_ptr(tstp,0),this->curr_timestep_ret_ptr(tstp,0),(nt_ +1) * size1_ * size2_* sizeof(cplx));
         memcpy(G.curr_timestep_les_ptr(0,tstp),this->curr_timestep_les_ptr(0,tstp),(nt_ +1) * size1_ * size2_ * sizeof(cplx));
         memcpy(G.tvptr(tstp,0),this->tvptr(tstp,0),r_ * size1_ * size2_ * sizeof(cplx));
@@ -348,21 +352,24 @@ void herm_matrix_hodlr::get_timestep_curr(int tstp,herm_matrix_hodlr &G){
     }
 }
 
-// Copy last kt timesteps
+// Copy the current window (last k+1 timesteps) FROM *this INTO G and give G the same window.
+// Only the window is copied, not the archived history (use operator= for a full copy).
 void herm_matrix_hodlr::get_timestep_curr(herm_matrix_hodlr &G){
-    tstpmk_=G.tstpmk();
+    G.set_tstpmk(tstpmk_);
     for(int i=tstpmk_;i<=tstpmk_+k_;i++){
         get_timestep_curr(i,G);
     }
 }
 
+// Copy timestep tstp FROM G INTO *this (G is not modified); same preconditions as get_timestep_curr.
 // set is only a reasonable operation for directly stored timesteps
 void herm_matrix_hodlr::set_timestep_curr(int tstp,herm_matrix_hodlr &G){
-    assert(tstp >= -1 && tstp <= nt_ && tstpmk_==G.tstpmk());
+    assert(G.nt()==nt_ && G.r()==r_ && G.size1()==size1_ && G.size2()==size2_ && G.k()==k_);
+    assert(tstp >= -1 && tstp <= nt_);
     if(tstp==-1){
         memcpy(mat_.data(), G.mat(), r_ * size1_ * size2_ * sizeof(double));
     }else{
-        assert(tstp>=tstpmk_ && tstp <= tstpmk_+k_);
+        assert(tstp>=tstpmk_ && tstp <= tstpmk_+k_ && tstp>=G.tstpmk() && tstp <= G.tstpmk()+k_);
         memcpy(this->curr_timestep_ret_ptr(tstp,0),G.curr_timestep_ret_ptr(tstp,0),(nt_ + 1) * size1_ * size2_ * sizeof(cplx));
         memcpy(this->curr_timestep_les_ptr(0,tstp),G.curr_timestep_les_ptr(0,tstp),(nt_ + 1) * size1_ * size2_ * sizeof(cplx));
         memcpy(this->tvptr(tstp,0),G.tvptr(tstp,0),r_ * size1_ * size2_ * sizeof(cplx));
@@ -370,7 +377,7 @@ void herm_matrix_hodlr::set_timestep_curr(int tstp,herm_matrix_hodlr &G){
     }
 }
 
-// Copy last kt timesteps
+// Copy the current window (last k+1 timesteps) FROM G INTO *this and give *this the same window.
 void herm_matrix_hodlr::set_timestep_curr(herm_matrix_hodlr &G){
     tstpmk_=G.tstpmk();
     for(int i=tstpmk_;i<=tstpmk_+k_;i++){

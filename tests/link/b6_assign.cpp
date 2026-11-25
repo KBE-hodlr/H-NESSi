@@ -1,4 +1,5 @@
-// B6: herm_matrix_hodlr::operator= is declared (documented as a deep copy) but never defined.
+// B6 (fixed in WP4): herm_matrix_hodlr::operator= was declared (documented as a deep copy) but never defined; it is
+// now defaulted (memberwise = deep copy).
 // This program must link and the assignment must produce an independent deep copy.
 #include <cstdio>
 #include "h_nessi/herm_matrix_hodlr.hpp"

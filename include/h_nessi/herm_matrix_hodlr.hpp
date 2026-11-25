@@ -77,8 +77,20 @@ class herm_matrix_hodlr{
    */
   herm_matrix_hodlr(int nt,int r,int nlvl,double svdtol,int size1,int size2,int sig,int k);
 
-  /** Copy-assignment (performs a deep copy of internal buffers). */
-  herm_matrix_hodlr &operator=(herm_matrix_hodlr &g);
+  /**
+   * Copy constructor and copy assignment: deep copy of the complete state.
+   * Every member is a value type (std::vector, Eigen matrix, ret_/les_/tv_blocks,
+   * which hold only std::vector and Eigen members, and scalars); there are no raw
+   * pointers or references, so the memberwise copy is an independent deep copy:
+   * geometry, compressed blocks and their ranks, all direct stores, the current-
+   * timestep window (tstpmk, circular buffers), mat, tv/tv_trans, GMConvTensMatrix,
+   * timing and can_extrap. The copy can continue time stepping (update_blocks,
+   * dyson_*) exactly like the original. Assignment replaces the target completely,
+   * so the geometries of the two objects need not match beforehand.
+   * No move operations are declared: an rvalue source is copied as well.
+   */
+  herm_matrix_hodlr(const herm_matrix_hodlr &g) = default;
+  herm_matrix_hodlr &operator=(const herm_matrix_hodlr &g) = default;
 
   /**
    * Construct from an HDF5 checkpoint file. Reads metadata and data stored
@@ -317,13 +329,26 @@ class herm_matrix_hodlr{
   }
 
   // Get/set for current timesteps
-  /** Copy the current timestep `tstp` data into `G`. */
+  // get_* copies FROM *this INTO G, set_* copies FROM G INTO *this; neither modifies its source.
+  // Both objects must have the same nt, r, size1, size2 and k (asserted).
+  /** Copy timestep `tstp` of *this into `G` (*this is not modified).
+   * tstp == -1: copy the Matsubara component (mat); no window requirement.
+   * tstp >= 0: copy row tstp of the retarded buffer, column tstp of the lesser
+   * buffer (entries 0..nt) and the tv/tv_trans row; tstp must lie in the current
+   * window [tstpmk, tstpmk+k] of both *this and G. */
   void get_timestep_curr(int tstp,herm_matrix_hodlr &G);
-  /** Copy the current timestep (latest) into `G`. */
+  /** Copy the whole current window of *this into `G` (*this is not modified):
+   * sets G.tstpmk = this->tstpmk and copies the k+1 timesteps tstpmk..tstpmk+k
+   * (as above, without mat). Only the window is copied, not the archived
+   * history (blocks, direct stores, left edges, mat, GMConvTens): G continues
+   * time stepping consistently only if its archive already holds rows
+   * 0..tstpmk-1 of the same function. Use operator= for a full copy. */
   void get_timestep_curr(herm_matrix_hodlr &G);
-  /** Replace internal current-timestep buffer for `tstp` with data from `G`. */
+  /** Copy timestep `tstp` of `G` into *this (G is not modified); same pieces
+   * and preconditions as get_timestep_curr(tstp,G). */
   void set_timestep_curr(int tstp,herm_matrix_hodlr &G);
-  /** Replace the latest current-timestep buffer with data from `G`. */
+  /** Copy the whole current window of `G` into *this (G is not modified):
+   * sets this->tstpmk = G.tstpmk and copies timesteps tstpmk..tstpmk+k. */
   void set_timestep_curr(herm_matrix_hodlr &G);
 
   /** Raw pointer to matsubara matrix `i` storage (double buffer). */
