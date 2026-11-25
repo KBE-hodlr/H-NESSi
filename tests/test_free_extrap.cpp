@@ -82,7 +82,7 @@ void check_green_from_H(int xi, int cplxH) {
   }
 }
 
-// green_from_H_dm with rho = density_matrix(-1) (decision D-1: rho is the density matrix)
+// green_from_H_dm with rho = density_matrix(-1) (decision D-1: rho is the density matrix; B10 fixed in WP3)
 void check_green_from_H_dm(int xi) {
   FreeCase c(xi, 0);
   dlr_info dlr(c.r, c.lambda, c.eps, c.beta, c.nao, xi);
@@ -104,8 +104,17 @@ void check_green_from_H_dm(int xi) {
       G2.get_tv(n, i, M);
       eTV = std::max(eTV, (M - c.GTV(n, dlr.it0B(i))).norm() / c.GTV(n, dlr.it0B(i)).norm());
     }
+  // contour continuity G^tv(t,0) = G^<(t,0) = -[G^<(0,t)]^dagger (rho thermal for H, so G^tv and G^< agree)
+  double eC = 0;
+  ZMatrix L(c.nao, c.nao), TV(c.nao, c.nao);
+  for (int n = 0; n <= c.k; n++) {
+    G2.get_les_curr(0, n, L);
+    G2.get_tv_tau(n, 0.0, dlr, TV);
+    eC = std::max(eC, (TV + L.adjoint()).norm());
+  }
   ZMatrix rr(c.nao, c.nao);
   G2.density_matrix(0, dlr, rr);
+  EXPECT_LT(eC, 1e-11) << "xi=" << xi << " G^tv(t,0) vs G^<(t,0)";
   EXPECT_LT(eL, 1e-13) << "xi=" << xi;
   EXPECT_LT(eTV, 1e-12) << "xi=" << xi;
   EXPECT_LT((rr - c.rho).norm(), 1e-13) << "xi=" << xi << " density_matrix(0) after green_from_H_dm";
@@ -121,7 +130,7 @@ INSTANTIATE_TEST_SUITE_P(Free, GreenFromH,
                          ::testing::Values(std::make_tuple(-1, 0), std::make_tuple(-1, 1), std::make_tuple(1, 0), std::make_tuple(1, 1)));
 
 TEST(GreenFromHdm, FermionExact) { check_green_from_H_dm(-1); }
-TEST(GreenFromHdm, KnownBug_B10_BosonExact) {
+TEST(GreenFromHdm, BosonExact) {
   hn_test::run_isolated([] { check_green_from_H_dm(+1); });
 }
 
@@ -308,19 +317,21 @@ GammaRes gamma_errors(int xi, int k, double h) {
   return res;
 }
 
-// Q2 relation for the free equilibrium G = Delta (nao = 2): gamma_integral(0) = xi * gamma_integral_mat
-double gamma_vs_mat(int xi) {
+// Q2 relation for the free equilibrium G = Delta (nao = 1, 2): gamma_integral(0) = xi * gamma_integral_mat
+// (B2, fixed in WP3: before the fix the bosonic mixed term had the fermionic sign).
+double gamma_vs_mat(int xi, int nao = NAO) {
   double beta = 4;
   int r = 0;
-  dlr_info dlr(r, 50., 1e-13, beta, NAO, xi);
+  dlr_info dlr(r, 50., 1e-13, beta, nao, xi);
   int k = 2, nt = 10;
-  herm_matrix_hodlr G(nt, r, 1, 1e-14, NAO, NAO, xi, k);
+  herm_matrix_hodlr G(nt, r, 1, 1e-14, nao, nao, xi, k);
   Integration::Integrator I(k);
-  dyson D(nt, NAO, k, dlr, true, false);
-  ZMatrix H(NAO, NAO);
-  H << 0.7, 0.3, 0.3, 1.4;
+  dyson D(nt, nao, k, dlr, true, false);
+  ZMatrix H(nao, nao);
+  if (nao == 2) H << 0.7, 0.3, 0.3, 1.4;
+  else H << 0.7;
   D.green_from_H(G, xi == -1 ? 0.9 : 0.0, H, 0.05, k, true);
-  ZMatrix a(NAO, NAO), b(NAO, NAO);
+  ZMatrix a(nao, nao), b(nao, nao);
   D.gamma_integral(0, G, G, 0.05, I, a.data());
   D.gamma_integral_mat(G, G, 0.05, I, b.data());
   return (a - double(xi) * b).norm() / b.norm();
@@ -339,14 +350,16 @@ TEST_P(GammaIntegralFermion, VsQuadratureAndOrder) {
 INSTANTIATE_TEST_SUITE_P(Gamma, GammaIntegralFermion, ::testing::Values(2, 4));
 
 TEST(GammaIntegralFermion, EquilibriumVsMat) { EXPECT_LT(gamma_vs_mat(-1), 1e-12); }
+TEST(GammaIntegralFermion, EquilibriumVsMatSingleOrbital) { EXPECT_LT(gamma_vs_mat(-1, 1), 1e-12); }
 
-TEST(GammaIntegralBoson, KnownBug_B2_VsQuadrature) {
+TEST(GammaIntegralBoson, VsQuadrature) {
   hn_test::run_isolated([] {
     GammaRes a = gamma_errors(+1, 2, 0.05);
     for (double e : a.err) EXPECT_LT(e, 1e-5);
     EXPECT_LT(a.err_last, 1e-5);
   });
 }
-TEST(GammaIntegralBoson, KnownBug_B2_EquilibriumVsMat) {
+TEST(GammaIntegralBoson, EquilibriumVsMat) {
   hn_test::run_isolated([] { EXPECT_LT(gamma_vs_mat(+1), 1e-12); });
 }
+TEST(GammaIntegralBoson, EquilibriumVsMatSingleOrbital) { EXPECT_LT(gamma_vs_mat(+1, 1), 1e-12); }

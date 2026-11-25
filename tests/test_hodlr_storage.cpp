@@ -357,3 +357,87 @@ TEST(HodlrCheckpoint, KnownBug_B9_TimingZeroWhenMissing) {
     EXPECT_EQ(timing.cwiseAbs().maxCoeff(), 0.0) << "timing read from a checkpoint without /timing is uninitialised";
   });
 }
+
+// ------------------------------------------------------------------------------------------------ checkpoint format_version (WP3)
+// write_checkpoint_hdf5 writes label/format_version = 2 (GMConvTensMatrix carries the xi factor, BUGS B1 fix).
+// Loading a bosonic checkpoint without it (written before WP3) still works, but warns on std::cerr that the stored
+// GMConvTensMatrix is stale and must be rebuilt with initGMConvTensor(dlr). Fermionic checkpoints never warn.
+namespace {
+struct CkptCase {
+  int xi, nt = 12, nlvl = 2, k = 2, nao = 2, r = 0;
+  dlr_info dlr;
+  herm_matrix_hodlr G;
+  explicit CkptCase(int xi_) : xi(xi_), dlr(r, 40., 1e-12, 4., 2, xi_), G(nt, r, nlvl, 1e-12, nao, nao, xi_, k) {
+    for (int m = 0; m < r; m++) {
+      double tau = dlr.it0B(m);
+      DMatrix M(nao, nao);
+      M << -exp(-0.5 * tau), 0.1 * exp(-tau), 0.1 * exp(-tau), -0.7 * exp(-1.3 * tau);
+      G.set_mat(m, M);
+    }
+    G.initGMConvTensor(dlr);
+  }
+  // write a checkpoint; optionally remove format_version to simulate a pre-WP3 file; load it, capturing stderr
+  std::string roundtrip(const std::string &fn, bool strip_version, int *version_on_disk, double *tens_diff) {
+    std::remove(fn.c_str());
+    {
+      h5e::File out(fn, h5e::File::Overwrite | h5e::File::ReadWrite | h5e::File::Create);
+      G.write_checkpoint_hdf5(out, "G/");
+      if (strip_version) out.unlink("G/format_version");
+    }
+    h5e::File in(fn, h5e::File::ReadOnly);
+    *version_on_disk = in.exist("G/format_version") ? in.getDataSet("G/format_version").read<int>() : -1;
+    ::testing::internal::CaptureStderr();
+    herm_matrix_hodlr G2(in, "G/");
+    std::string err = ::testing::internal::GetCapturedStderr();
+    double d = 0;
+    for (int i = 0; i < r * r * nao * nao; i++) d = std::max(d, std::abs(G.GMConvTens()[i] - G2.GMConvTens()[i]));
+    *tens_diff = d;
+    return err;
+  }
+};
+}  // namespace
+
+TEST(HodlrCheckpoint, FormatVersionNewBosonicLoadsSilently) {
+  CkptCase c(+1);
+  int v = 0;
+  double d = 1;
+  std::string err = c.roundtrip("hodlr_ckpt_v2_boson.h5", false, &v, &d);
+  EXPECT_EQ(v, herm_matrix_hodlr::checkpoint_format_version);
+  EXPECT_EQ(v, 2);
+  EXPECT_EQ(err, "") << "a current bosonic checkpoint must load without a warning";
+  EXPECT_EQ(d, 0.0);
+}
+
+TEST(HodlrCheckpoint, FormatVersionMissingBosonicWarns) {
+  CkptCase c(+1);
+  int v = 0;
+  double d = 1;
+  std::string err = c.roundtrip("hodlr_ckpt_v1_boson.h5", true, &v, &d);
+  EXPECT_EQ(v, -1) << "format_version must have been removed";
+  EXPECT_NE(err.find("format_version 1 < 2"), std::string::npos) << "stderr was: " << err;
+  EXPECT_NE(err.find("initGMConvTensor"), std::string::npos) << "stderr was: " << err;
+  EXPECT_EQ(d, 0.0) << "an old checkpoint must still load unchanged";
+}
+
+TEST(HodlrCheckpoint, FormatVersionMissingFermionicSilent) {
+  CkptCase c(-1);
+  int v = 0;
+  double d = 1;
+  std::string err = c.roundtrip("hodlr_ckpt_v1_fermion.h5", true, &v, &d);
+  EXPECT_EQ(err, "") << "fermionic tensors are unaffected by the bosonic-sign fix";
+  EXPECT_EQ(d, 0.0);
+}
+
+// write_to_hdf5 (output files, not checkpoints) is unchanged: no format_version.
+TEST(HodlrCheckpoint, FormatVersionNotInOutputFiles) {
+  CkptCase c(+1);
+  std::string fn = "hodlr_output_noversion.h5";
+  std::remove(fn.c_str());
+  {
+    h5e::File out(fn, h5e::File::Overwrite | h5e::File::ReadWrite | h5e::File::Create);
+    c.G.write_to_hdf5(out, "G");
+  }
+  h5e::File in(fn, h5e::File::ReadOnly);
+  EXPECT_TRUE(in.exist("G/nt"));
+  EXPECT_FALSE(in.exist("G/format_version"));
+}

@@ -1,6 +1,7 @@
 #include <vector>
 #include <iostream>
 #include <string>
+#include <cassert>
 
 #include "h_nessi/herm_matrix_hodlr.hpp"
 
@@ -267,11 +268,12 @@ int herm_matrix_hodlr::getbkl_indices(){
 }
 
 
-// Imaginary time convolution \int_0^\beta d\tau' \Sigma_{ik}(T,\tau') G_{kj}(\tau-\tau') in dlr basis is
-// \phi_{abc} G_{c,kj} \Sigma_{b,ik}
-// The first part is the same for each integral, so we construct
-// C_{ajbk} = -\phi_{abc} G_{-c,kj}
+// Imaginary time convolution \int_0^\beta d\bar\tau \Sigma_{ik}(T,\bar\tau) G^M_{kj}(\bar\tau-\tau) in dlr basis is
+// C_{ajbk} \Sigma_{b,ik}, with C the libdlr convolution matrix (phi) of g_{jk}(s) = \xi G^M_{kj}(\beta-s) = G^M_{kj}(-s).
+// The first part is the same for each integral, so we construct C once.
+// dlr must have been built with the same xi (phi carries it) and r as this object.
 void herm_matrix_hodlr::initGMConvTensor(dlr_info &dlr){
+    assert(dlr.xi()==sig_ && dlr.r()==r_);
     GMConvTensMatrix_.resize(r_*size1_*size2_, r_);
 
     std::vector<double> G1(r_ * size1_ * size2_);
@@ -285,15 +287,14 @@ void herm_matrix_hodlr::initGMConvTensor(dlr_info &dlr){
         DMatrixMap(G1.data()+i*es, size1_, size2_).noalias() = DMatrixMap(mat_.data()+i*es, size1_, size2_).transpose();
     }
 
-    // B_{jkc} = -A_{cjk}
-    DMatrixMap(G2.data(), es, r_).noalias() = - DMatrixMap(G1.data(), r_, es).transpose();
+    // B_{jkc} = xi A_{cjk} = xi G^M_{kj}(tau_c)
+    DMatrixMap(G2.data(), es, r_).noalias() = double(sig_) * DMatrixMap(G1.data(), r_, es).transpose();
 
-    // C_{jkc} = B_{jk(ntau-c-1)}
+    // C_{jkc} = xi G^M_{kj}(beta - tau_c): it2itr re-evaluates the DLR expansion at the reflected points beta - tau_c
+    // (the nodes are not symmetric, so this is not an index reversal); it2cf then gives the DLR coefficients of g_{jk}
     for(int i = 0; i<es; i++) {
         c_dlr_it2itr(&r_, &one, dlr.it2itr(), G2.data()+i*r_, G1.data()+i*r_);
-        // This calls some fortran code that is not threadsafe
-        // this needs protection if the same dlr object is being used to update two different G
-        // such as in the case of large numbers of k-points
+        // c_dlr_it2cf only reads the LU factors in dlr and is reentrant; this critical section is not required (harmless)
         #pragma omp critical
         c_dlr_it2cf(&r_,&one, dlr.it2cf(), dlr.it2cfp(), G1.data()+i*r_, G2.data()+i*r_);
     }

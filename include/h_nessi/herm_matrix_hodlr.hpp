@@ -378,6 +378,10 @@ class herm_matrix_hodlr{
   void initGMConvTensor(dlr_info &dlr);
 
   // I/O and diagnostics
+  /** Version written as `label/format_version` by write_checkpoint_hdf5.
+   * 2: GMConvTensMatrix carries the xi factor (bosonic sign fix). Missing = 1. */
+  static constexpr int checkpoint_format_version = 2;
+
   /** Write a lightweight checkpoint containing the current runtime buffers. */
   void write_checkpoint_hdf5(h5e::File &out, std::string label);
 

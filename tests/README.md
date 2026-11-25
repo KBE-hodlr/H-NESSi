@@ -26,7 +26,7 @@ Run the gtest executables through ctest. Each test then gets its own process. If
 `--gtest_filter`. Known-bug bodies `fork()`, and libgomp is not fork-safe once an earlier test has started its
 thread pool.
 
-Timings (Perlmutter login node, `-j16`, all 217 tests including `slow`): Release about 6 s wall, Debug (-O0)
+Timings (Perlmutter login node, `-j16`, all 226 tests including `slow`): Release about 6 s wall, Debug (-O0)
 about 90 s wall. The `slow` sweeps (21 tests) dominate in Debug at roughly 70 s each.
 
 ## Labels and naming convention
@@ -57,10 +57,10 @@ about 90 s wall. The `slow` sweeps (21 tests) dominate in Debug at roughly 70 s 
 | executable | ported from | contents |
 |---|---|---|
 | `test_integration` | `agent_scratch/02/t.cpp` | polynomial exactness of every weight table (k = 0..6); `bd_weights` with k+2 terms; Gregory symmetry; convergence orders |
-| `test_dlr_matsubara` | `03/test_dlr.cpp`, `51/t_mat.cpp` | DLR maps, `get_mat_tau`, `density_matrix`, reversed/tv accessors, `tv_it_conv`, `les_it_int`, `gamma_integral(_mat)` against quadrature; `dyson_mat` against the exact hybridised G^M (μ shift, mixing, return value); `dyson_mat` leaves Σ and both conv tensors untouched, `fixHam=true` reuses the saved G0; `dyson::memory_usage_bytes` counts every heap buffer with its real size (B32); B1 B2 B3 B4 (B4 fixed in WP2) |
-| `test_bosonic` | `51/t_resolvent.cpp` | exact resolvent identity G_ε∗G_η = (G_ε−G_η)/(ε−η) for both ξ; B1 B2 B10 and the Q2 relation |
-| `test_free_extrap` | `23/ta,tb,tc.cpp` | `green_from_H` exact (real and complex H, both ξ); `green_from_H_dm`; `extrapolate` order k+1 (and the `_2leg` variant, no-op on a second call); `gamma_integral` against a dense quadrature, order k+1; B2 B10 |
-| `test_hodlr_storage` | old `tests/linalg.cpp`, `52/s9.cpp`, `52/s1.cpp` | `mgs`, incremental TSVD; fill/archive/read-back round trips for 8 geometries; zero-first-row blocks (S9); checkpoint round trip; B9 B22 B23 B26 |
+| `test_dlr_matsubara` | `03/test_dlr.cpp`, `51/t_mat.cpp` | DLR maps, `get_mat_tau`, `density_matrix`, reversed/tv accessors, `tv_it_conv`, `les_it_int`, `gamma_integral(_mat)` against quadrature; `dyson_mat` against the exact hybridised G^M (μ shift, mixing, return value); `dyson_mat` leaves Σ and both conv tensors untouched, `fixHam=true` reuses the saved G0; `dyson::memory_usage_bytes` counts every heap buffer with its real size (B32); the `initGMConvTensor` dlr ξ/r assert (death test, Debug only, skipped in Release); B1 B2 B3 B4 (B1, B2 fixed in WP3; B4 fixed in WP2) |
+| `test_bosonic` | `51/t_resolvent.cpp`, new (WP3) | exact resolvent identity G_ε∗G_η = (G_ε−G_η)/(ε−η) for both ξ; B1 B2 B10 (fixed in WP3) and the Q2 relation; end-to-end system+bath run (dyson_mat → initGMConvTensor → dyson_start → dyson_timestep, drive after the bootstrap) vs the exact propagator, both ξ, order k+1 for k = 2, 4 in R, <, ⌉ |
+| `test_free_extrap` | `23/ta,tb,tc.cpp` | `green_from_H` exact (real and complex H, both ξ); `green_from_H_dm`; `extrapolate` order k+1 (and the `_2leg` variant, no-op on a second call); `gamma_integral` against a dense quadrature, order k+1; `gamma_integral(0)` = ξ·`gamma_integral_mat` (N_o = 1, 2); `green_from_H_dm` G^⌉(t,0) = G^<(t,0); B2 B10 (fixed in WP3) |
+| `test_hodlr_storage` | old `tests/linalg.cpp`, `52/s9.cpp`, `52/s1.cpp` | `mgs`, incremental TSVD; fill/archive/read-back round trips for 8 geometries; zero-first-row blocks (S9); checkpoint round trip; checkpoint `format_version` (new bosonic file silent, missing version warns on stderr, fermionic silent, not in `write_to_hdf5` output); B9 B22 B23 B26 |
 | `test_timestep` | `20/rettv.cpp`, `21/les.cpp` | R/⌉ step against dense discrete equations (5 geometries), against svdtol, order k+1 (k = 1..5); < step against the dense system, the 8-region decomposition of `les_lesadv_int_0_tstp` and raw storage, both rho modes, 2-leg, closed-system N conservation, order k+1; B14 B28 |
 | `test_bootstrap` | `22/start_test.cpp`, `51/t_start*.cpp` | TTI and non-TTI bootstrap (horiz/diag, nobc, 2leg) against a dense reference that uses the **correct** continuation and the right-acting imp_tp0 system, plus order k+1 against the exact impurity+bath model; the imp_tp0 error estimate; B12 B13 B25 B31 (all fixed in WP1) |
 | `test_mpi_comm` | `31/commtest.cpp` | `mpi_comm` routing with P simulated ranks: MPI symbols interposed, std::thread per rank, 1–5 ranks, spawn/nospawn, vector/reference_wrapper, high-level and lambda APIs; B20 B21 (`OMP_NUM_THREADS=4`) |
@@ -71,19 +71,19 @@ about 90 s wall. The `slow` sweeps (21 tests) dominate in Debug at roughly 70 s 
 
 ## BUG ID → test map
 
-Status is for the code as of WP0 (CLAUDE_dev = upstream 5c9706b), updated for the bugs fixed since (WP1: B12, B13, B25, B31; WP2: B4).
+Status is for the code as of WP0 (CLAUDE_dev = upstream 5c9706b), updated for the bugs fixed since (WP1: B12, B13, B25, B31; WP2: B4; WP3: B1, B2, B10).
 XF means expected failure.
 
 | BUGS id | test(s) | Release | Debug | symptom seen by the test |
 |---|---|---|---|---|
-| B1 | `DlrBoson.KnownBug_B1_TvItConvVsQuadrature`, `ResolventBoson.KnownBug_B1_TvItConv` | XF | XF | bosonic `tv_it_conv` = −reference (rel. err 2.0) |
-| B2 | `DlrBoson.KnownBug_B2_GammaIntegralMixedTerm`, `ResolventBoson.KnownBug_B2_GammaIntegralEquilibrium`, `ResolventBoson.KnownBug_B2_GammaIntegralVsMat`, `GammaIntegralBoson.KnownBug_B2_VsQuadrature`, `GammaIntegralBoson.KnownBug_B2_EquilibriumVsMat` | XF | XF | wrong sign of the bosonic mixed term (error 2.87; relation `gamma_integral = ξ·gamma_integral_mat` violated) |
+| B1 | `DlrBoson.TvItConvVsQuadrature`, `ResolventBoson.TvItConv`, `EndToEndBoson.MatStartTimestepVsExact`, `GMConvTensorDeathTest.DlrXiOrRankMismatchAsserts`, `HodlrCheckpoint.FormatVersion*` | pass | pass | **fixed in WP3** (was: bosonic `tv_it_conv` = −reference, rel. err 2.0). The death test is skipped in Release (assert off) |
+| B2 | `DlrBoson.GammaIntegralMixedTerm`, `ResolventBoson.GammaIntegralEquilibrium`, `ResolventBoson.GammaIntegralVsMat`, `GammaIntegralBoson.VsQuadrature`, `GammaIntegralBoson.EquilibriumVsMat`, `GammaIntegralBoson.EquilibriumVsMatSingleOrbital` | pass | pass | **fixed in WP3** (was: wrong sign of the bosonic mixed term, error 2.87; relation `gamma_integral = ξ·gamma_integral_mat` violated) |
 | B3 | `DlrArray.KnownBug_B3_GetMatTauArray`, `DlrArray.KnownBug_B3_GetTvTauArray` | XF | XF | child SIGSEGV |
 | B4 | `DysonMat.FixHamSecondCall`, `DysonMatFixHam.ReusesSavedG0/*` | pass | pass | **fixed in WP2** (was: rel. difference 1.10) |
 | B6 | `KnownBug_B6_OperatorAssignLinkAndDeepCopy` | XF | XF | undefined reference to `operator=` |
 | B8 | — | | | not testable without a NESSi build (see below) |
 | B9 | `HodlrCheckpoint.KnownBug_B9_TimingZeroWhenMissing` | XF | XF | uninitialised timing (malloc perturbation) |
-| B10 | `ResolventBoson.KnownBug_B10_GreenFromHdm`, `GreenFromHdm.KnownBug_B10_BosonExact` | XF | XF | bosonic G^< error 0.13 / 0.11 (decision D-1: `rho` is the density matrix) |
+| B10 | `ResolventBoson.GreenFromHdm`, `GreenFromHdm.BosonExact` | pass | pass | **fixed in WP3** (was: bosonic G^< error 0.13 / 0.11; decision D-1: `rho` is the density matrix) |
 | B12 | `Bootstrap.NttiHorizSlotZero`, `…NttiDiagSlotZero`, `…TwoLegDiagSlotZero`, `BootstrapRetNtti.OrderSlotZero`, `Bootstrap.Slow_*SlotZeroSweep` | pass | pass | **fixed in WP1** (was: library ≠ correct reference (≈1e-3); order 2 instead of k+1) |
 | B13 | `Bootstrap.NttiImpTp0`, `BootstrapRetNtti.OrderImpTp0TwoOrbitals`, `…OrderImpTp0TwoOrbitalsSlotZero`, `Bootstrap.Slow_NttiImpTp0SlotZeroSweep` | pass | pass | **fixed in WP1** (was: column-0 order 3 for k ≥ 3, N_o = 2) |
 | B14 | `LesNobc.KnownBug_B14_AccuracyAndBoundary` | XF | XF | `_nobc` G^< error 0.33; boundary mismatch 5.7e-3 |
@@ -123,7 +123,8 @@ The B14 test also checks the correct boundary sign through its dense reference: 
 
 ## Release vs Debug
 
-Both builds pass 100% (217 tests after WP2). Release has 25 expected failures and Debug has 26. The difference is:
+Both builds pass 100% (226 tests after WP3). Release has 16 expected failures (plus 1 skipped: the Debug-only
+`GMConvTensorDeathTest`) and Debug has 17. The difference is:
 
 * `HodlrCopy.KnownBugDebug_B22_GetTimestepCurrMatsubara` passes in Release. In Debug it is an expected failure:
   `assert(tstp>=tstpmk_)` at `herm_matrix_hodlr.cpp:339` fires before the `tstp==-1` branch (B22).

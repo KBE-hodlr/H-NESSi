@@ -262,12 +262,13 @@ void dyson::green_from_H_dm(herm_matrix_hodlr &G, double mu, ZMatrix H, ZMatrix 
   }
 
   // Ret and Less
+  // rho is the density matrix rho = -G^M(beta^-) = xi i G^<(0,0), so G^<(t_n,t_m) = -i xi U(t_n) rho U(t_m)^\dagger
   for(int m = 0; m <= tmax; m++) {
     for(int n = 0; n <= m; n++) {
       ZMatrixMap Ut1 = ZMatrixMap(Q_.data() + m*es_, nao_, nao_);
       ZMatrixMap Ut2 = ZMatrixMap(Q_.data() + n*es_, nao_, nao_);
       ZMatrixMap(G.curr_timestep_ret_ptr(m,n), nao_, nao_) = std::complex<double>(0,-1.0) * Ut1 * Ut2.adjoint();
-      ZMatrixMap(G.curr_timestep_les_ptr(n,m), nao_, nao_) = std::complex<double>(0,1.0) * Ut2 * rho * Ut1.adjoint();
+      ZMatrixMap(G.curr_timestep_les_ptr(n,m), nao_, nao_) = std::complex<double>(0,-double(sign)) * Ut2 * rho * Ut1.adjoint();
     }
   }
 }

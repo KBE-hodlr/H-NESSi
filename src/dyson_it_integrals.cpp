@@ -20,7 +20,8 @@ void dyson::gamma_integral(int tstp, herm_matrix_hodlr &G, herm_matrix_hodlr &De
   ZMatrixMap(NTauTmp_.data(), r_, es_) = DMatrixConstMap(dlr_.it2itr(), r_, r_).transpose() * ZMatrixMap(Delta.tvptr(tstp,0), r_, es_);
   ZMatrixMap(NTauTmp2_.data(), r_, es_) = DMatrixConstMap(dlr_.ipmat(), r_, r_).transpose() * ZMatrixMap(NTauTmp_.data(), r_, es_);
   for(int tau = 0; tau < r_; tau++) {
-    resMap += -ZMatrixMap(G.tvptr(tstp, tau), nao_, nao_) * ZMatrixMap(NTauTmp2_.data() + tau*es_, nao_, nao_).adjoint();
+    // mixed term -i(-i\int G^\rceil \Delta^\lceil) = \xi \int G^\rceil(T,\tau) [\Delta^\rceil(T,\beta-\tau)]^\dagger
+    resMap += double(xi_) * ZMatrixMap(G.tvptr(tstp, tau), nao_, nao_) * ZMatrixMap(NTauTmp2_.data() + tau*es_, nao_, nao_).adjoint();
   }
 
   for(int t = tstp+1; t <= k_; t++) {

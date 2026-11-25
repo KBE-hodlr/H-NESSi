@@ -25,6 +25,18 @@ herm_matrix_hodlr::herm_matrix_hodlr(h5e::File &in, std::string label) :
   DMatrixMap(mat_.data(), r_, size1_*size2_) = in.getDataSet(label + std::string("/mat")).read<DMatrix>();
   GMConvTensMatrix_ = in.getDataSet(label + std::string("/GMConvTensMatrix")).read<DMatrix>();
 
+  // Checkpoints without format_version (or older than 2) were written before the bosonic sign fix of
+  // initGMConvTensor: for bosons the stored GMConvTensMatrix has the wrong sign.
+  int format_version = 1;
+  if(in.exist(label + std::string("/format_version"))) {
+    format_version = in.getDataSet(label + std::string("/format_version")).read<int>();
+  }
+  if(format_version < 2 && sig_ == 1) {
+    std::cerr << "h_nessi warning: bosonic checkpoint '" << label << "' has format_version " << format_version
+              << " < 2. Its GMConvTensMatrix was written before the bosonic-sign fix and is wrong;"
+              << " rebuild it with initGMConvTensor(dlr) before time stepping." << std::endl;
+  }
+
   curr_timestep_ret_ = in.getDataSet(label + std::string("/curr_timestep_ret")).read<std::vector<cplx>>();
   curr_timestep_les_ = in.getDataSet(label + std::string("/curr_timestep_les")).read<std::vector<cplx>>();
 
@@ -101,6 +113,9 @@ herm_matrix_hodlr::herm_matrix_hodlr(h5e::File &in, std::string label) :
 }
 
 void herm_matrix_hodlr::write_checkpoint_hdf5(h5e::File &out, std::string label) {
+  // checkpoint format version (2: GMConvTensMatrix built with the xi factor, bosonic sign fix)
+  h5e::dump(out, label + std::string("/format_version"), checkpoint_format_version);
+
   // scalar parameters
   h5e::dump(out, label + std::string("/nt"), nt_);
   h5e::dump(out, label + std::string("/r"), r_);

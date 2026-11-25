@@ -76,9 +76,9 @@ endfunction()
 
 # ------------------------------------------------------------------ gtest executables
 hn_add_test_exe(test_integration MODULE integration SOURCES test_integration.cpp)
-hn_add_test_exe(test_dlr_matsubara MODULE dlr SOURCES test_dlr_matsubara.cpp BUGS 1 2 3)
-hn_add_test_exe(test_bosonic MODULE bosonic SOURCES test_bosonic.cpp BUGS 1 2 10)
-hn_add_test_exe(test_free_extrap MODULE free_extrap SOURCES test_free_extrap.cpp BUGS 2 10)
+hn_add_test_exe(test_dlr_matsubara MODULE dlr SOURCES test_dlr_matsubara.cpp BUGS 3)
+hn_add_test_exe(test_bosonic MODULE bosonic SOURCES test_bosonic.cpp)
+hn_add_test_exe(test_free_extrap MODULE free_extrap SOURCES test_free_extrap.cpp)
 hn_add_test_exe(test_hodlr_storage MODULE storage SOURCES test_hodlr_storage.cpp BUGS 9 22 23 26 DEBUG_BUGS 22)
 hn_add_test_exe(test_timestep MODULE timestep SOURCES test_timestep.cpp BUGS 14 28)
 hn_add_test_exe(test_bootstrap MODULE bootstrap SOURCES test_bootstrap.cpp)

@@ -190,10 +190,12 @@ public:
   void green_from_H(herm_matrix_hodlr &G, double mu, ZMatrix H, double h, int tmax, bool inc_mat = false);
   /**
    * @brief Constructs free Green's function from Hamiltonian and density matrix (complex version). Uses rho to set intial condition for the density matrix, instead of assuming thermal equilibrium.
+   * Sets G^R(t,t') = -i U(t) U(t')^\dagger and G^<(t,t') = -i xi U(t) rho U(t')^\dagger with U(t) = exp(-i(H-mu)t).
+   * G^\rceil is built from the thermal density matrix of H, not from rho (so it matches G^< only if rho is thermal for H); Matsubara is not written.
    * @param G Green's function object.
    * @param mu Chemical potential.
    * @param H Hamiltonian (complex).
-   * @param rho initial Density matrix (complex).
+   * @param rho initial density matrix rho = -G^M(beta^-) = xi i G^<(0,0) (complex), e.g. G.density_matrix(-1); same convention for fermions and bosons.
    * @param h Time step size.
    * @param tmax Maximum time step.
    */

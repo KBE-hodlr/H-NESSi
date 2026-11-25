@@ -4,11 +4,16 @@
 //   G^R = -i exp(-i e (t-t')),  G^< = -i xi f exp(-i e (t-t')),  G^tv(t,tau) = -i xi f exp(-i e t) exp(e tau),
 //   G^M(tau) = -(1 + xi f) exp(-e tau).
 // Checks: B1 (tv_it_conv), B2 (gamma_integral), Q2 (gamma_integral_mat = C^M(beta^-)), B10 (green_from_H_dm).
+// B1, B2 and B10 are fixed in WP3; their former KnownBug_* tests are ordinary tests now.
+// End-to-end (WP3, bottom of file): system + bath of free modes, dyson_mat -> initGMConvTensor -> dyson_start (TTI)
+// -> dyson_timestep against the exact noninteracting propagator, both statistics, order k+1.
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <cstdio>
 
 #include "h_nessi/dyson.hpp"
+#include "h_nessi/function.hpp"
 #include "common/test_util.hpp"
 
 using namespace h_nessi;
@@ -157,15 +162,200 @@ TEST(ResolventBoth, GammaIntegralMatExact) {
   }
 }
 
-TEST(ResolventBoson, KnownBug_B1_TvItConv) {
+TEST(ResolventBoson, TvItConv) {
   hn_test::run_isolated([] { check_tv_it_conv(+1); });
 }
-TEST(ResolventBoson, KnownBug_B2_GammaIntegralEquilibrium) {
+TEST(ResolventBoson, GammaIntegralEquilibrium) {
   hn_test::run_isolated([] { check_gamma_integral(+1); });
 }
-TEST(ResolventBoson, KnownBug_B2_GammaIntegralVsMat) {
+TEST(ResolventBoson, GammaIntegralVsMat) {
   hn_test::run_isolated([] { check_gamma_relation(+1); });
 }
-TEST(ResolventBoson, KnownBug_B10_GreenFromHdm) {
+TEST(ResolventBoson, GreenFromHdm) {
   hn_test::run_isolated([] { check_green_from_H_dm(+1); });
 }
+
+// =============================================================================================== end-to-end (WP3)
+// Two system modes linearly coupled to two bath modes (quadratic H_full = h_full - mu, real symmetric 4x4, for bosons
+// with mu below the spectrum so that K = h_full - mu > 0 and the Bose function is finite). Sigma = V g_bath V^T is
+// exact (the bath is not driven). The system block of h is driven after t_on = 0.5 > k*h, so dyson_start (TTI) sees a
+// time-independent problem, while dyson_timestep runs out of equilibrium. Exact, with n0 = (e^{beta K} - xi)^{-1}:
+//   G^R = -i U U'^dag, G^< = -i xi U n0 U'^dag, G^tv(t,tau) = -i xi U(t) n0 e^{K tau}, G^M(tau) = -(1 + xi n0) e^{-K tau}
+// (system block), U(t) the full propagator (RK4 with fine substeps).
+// Pipeline as in a user program: dyson_mat -> initGMConvTensor -> dyson_start -> {update_blocks, extrapolate,
+// set Sigma row, dyson_timestep}. B1 enters dyson_start (all of R, <, tv) and every dyson_timestep_tv.
+namespace e2e {
+typedef Eigen::MatrixXcd CM;
+const int NO = 2, NF = 4;
+
+struct Model {
+  int xi;
+  double beta = 5., mu, a = 0.5, ton = 0.5;
+  Eigen::MatrixXd hfull, K0, Kb, V;
+  CM A;
+  explicit Model(int xi_) : xi(xi_) {
+    hfull.resize(NF, NF);
+    hfull << 0.3, 0.2, 0.5, 0.3, 0.2, -0.4, -0.2, 0.4, 0.5, -0.2, 1.0, 0.0, 0.3, 0.4, 0.0, -0.7;
+    mu = xi == 1 ? -1.4 : 0.1;  // bosons: spectrum of hfull - mu is [0.41, 2.67]
+    K0 = hfull - mu * Eigen::MatrixXd::Identity(NF, NF);
+    Kb = K0.block(2, 2, 2, 2);
+    V = hfull.block(0, 2, 2, 2);
+    A.resize(2, 2);
+    A << C(0.2, 0), C(0.6, 0.4), C(0.6, -0.4), C(-0.3, 0);
+  }
+  double drive(double t) const { return t > ton ? a * exp(-1.0 / (t - ton)) : 0.; }  // C^infinity switch-on at ton
+  CM Himp(double t) const { return hfull.block(0, 0, 2, 2).cast<C>() + drive(t) * A; }
+  CM Kfull(double t) const {
+    CM K = K0.cast<C>();
+    K.block(0, 0, 2, 2) += drive(t) * A;
+    return K;
+  }
+};
+
+CM stat(const Eigen::MatrixXd &K, double beta, int xi) {  // (e^{beta K} - xi)^{-1}
+  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(K);
+  Eigen::VectorXd d(K.rows());
+  for (int i = 0; i < K.rows(); i++) d(i) = 1. / (exp(beta * es.eigenvalues()(i)) - xi);
+  return (es.eigenvectors() * d.asDiagonal() * es.eigenvectors().transpose()).cast<C>();
+}
+CM expm_sym(const Eigen::MatrixXd &K, C s) {
+  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(K);
+  Eigen::VectorXcd d(K.rows());
+  for (int i = 0; i < K.rows(); i++) d(i) = exp(s * es.eigenvalues()(i));
+  CM U = es.eigenvectors().cast<C>();
+  return U * d.asDiagonal() * U.transpose();
+}
+
+struct Exact {
+  const Model &M;
+  double h;
+  std::vector<CM> U;
+  CM n0, nb;
+  Exact(const Model &M_, int nt, double h_) : M(M_), h(h_) {
+    n0 = stat(M.K0, M.beta, M.xi);
+    nb = stat(M.Kb, M.beta, M.xi);
+    U.resize(nt);
+    CM u = CM::Identity(NF, NF);
+    U[0] = u;
+    const int ns = 400;
+    double dt = h / ns;
+    auto f = [&](double tt, const CM &x) -> CM { return -II * M.Kfull(tt) * x; };
+    for (int n = 1; n < nt; n++) {
+      for (int s = 0; s < ns; s++) {
+        double t = (n - 1) * h + s * dt;
+        CM k1 = f(t, u), k2 = f(t + dt / 2, u + dt / 2 * k1), k3 = f(t + dt / 2, u + dt / 2 * k2), k4 = f(t + dt, u + dt * k3);
+        u += dt / 6 * (k1 + 2. * k2 + 2. * k3 + k4);
+      }
+      U[n] = u;
+    }
+  }
+  double xi() const { return double(M.xi); }
+  CM GR(int n, int m) const { return (-II * U[n] * U[m].adjoint()).block(0, 0, 2, 2); }
+  CM GL(int m, int n) const { return (-II * xi() * U[m] * n0 * U[n].adjoint()).block(0, 0, 2, 2); }
+  CM Gtv(int n, double tau) const { return (-II * xi() * U[n] * n0 * expm_sym(M.K0, tau)).block(0, 0, 2, 2); }
+  Eigen::MatrixXd GM(double tau) const {
+    CM one = CM::Identity(NF, NF);
+    return (-(one + xi() * n0) * expm_sym(M.K0, -tau)).block(0, 0, 2, 2).real();
+  }
+  CM VgV(const CM &g) const { return M.V.cast<C>() * g * M.V.transpose().cast<C>(); }
+  CM SR(int n, int l) const { return VgV(-II * expm_sym(M.Kb, -II * double(n - l) * h)); }
+  CM SL(int l, int n) const { return VgV(-II * xi() * expm_sym(M.Kb, -II * double(l - n) * h) * nb); }
+  CM Stv(int n, double tau) const { return VgV(-II * xi() * expm_sym(M.Kb, -II * double(n) * h) * nb * expm_sym(M.Kb, tau)); }
+  Eigen::MatrixXd SM(double tau) const {
+    CM one = CM::Identity(2, 2);
+    return VgV(-(one + xi() * nb) * expm_sym(M.Kb, -tau)).real();
+  }
+};
+
+struct Errs { double M = 0, R = 0, L = 0, tv = 0; };
+
+Errs run(int xi, int k, double h, double tmax) {
+  Model Mo(xi);
+  int nt = int(std::lround(tmax / h)) + 1, r = 0, nlvl = 2;
+  dlr_info dlr(r, 60., 1e-13, Mo.beta, NO, xi);
+  Exact E(Mo, nt, h);
+  Integration::Integrator I(k);
+  herm_matrix_hodlr G(nt, r, nlvl, 1e-13, NO, NO, xi, k), Sig(nt, r, nlvl, 1e-13, NO, NO, xi, k);
+  function H(nt, NO, NO);
+  for (int t = -1; t < nt; t++) H.get_map(t) = ZMatrix(Mo.Himp(t < 0 ? 0. : t * h));
+  auto set_sigma_row = [&](int T) {
+    for (int tp = 0; tp <= T; tp++) {
+      Sig.set_ret_curr(T, tp, ZMatrix(E.SR(T, tp)));
+      Sig.set_les_curr(tp, T, ZMatrix(E.SL(tp, T)));
+    }
+    for (int j = 0; j < r; j++) Sig.set_tv(T, j, ZMatrix(E.Stv(T, dlr.it0B(j))));
+  };
+  for (int j = 0; j < r; j++) {
+    DMatrix s = E.SM(dlr.it0B(j));
+    Sig.set_mat(j, s);
+  }
+  for (int T = 0; T <= k; T++) set_sigma_row(T);
+  for (int T = 0; T <= k; T++)  // Sigma^R(n, l > n): smooth continuation (what a TTI user has in the window)
+    for (int tp = T + 1; tp <= k; tp++) Sig.set_ret_curr(T, tp, ZMatrix(E.SR(T, tp)));
+
+  dyson D(nt, NO, k, dlr);
+  D.dyson_mat(G, Mo.mu, H, Sig, false, 1.0);
+  G.initGMConvTensor(dlr);
+  D.dyson_start(G, Mo.mu, H, Sig, I, h);
+
+  Errs e;
+  DMatrix dm(NO, NO);
+  for (int j = 0; j < r; j++) {
+    G.get_mat(j, dm);
+    e.M = std::max(e.M, (dm - E.GM(dlr.it0B(j))).norm());
+  }
+  ZMatrix m(NO, NO);
+  auto row_err = [&](int T) {
+    for (int tp = 0; tp <= T; tp++) {
+      G.get_ret_curr(T, tp, m);
+      e.R = std::max(e.R, (CM(m) - E.GR(T, tp)).norm());
+      G.get_les_curr(tp, T, m);
+      e.L = std::max(e.L, (CM(m) - E.GL(tp, T)).norm());
+    }
+    for (int j = 0; j < r; j++) {
+      G.get_tv(T, j, m);
+      e.tv = std::max(e.tv, (CM(m) - E.Gtv(T, dlr.it0B(j))).norm());
+    }
+  };
+  for (int T = 0; T <= k; T++) row_err(T);
+  for (int T = k + 1; T < nt; T++) {
+    G.update_blocks(I);
+    Sig.update_blocks(I);
+    D.extrapolate(G, I);
+    set_sigma_row(T);
+    D.dyson_timestep(T, G, Mo.mu, H, Sig, I, h);
+    row_err(T);
+  }
+  return e;
+}
+
+void check(int xi) {
+  const double tmax = 1.6;
+  for (int k : {2, 4}) {
+    std::vector<double> hs = {0.1, 0.05, 0.025, 0.0125};
+    std::vector<Errs> e;
+    for (double h : hs) e.push_back(run(xi, k, h, tmax));
+    for (size_t i = 0; i < hs.size(); i++)
+      std::printf("[e2e] xi=%+d k=%d h=%.4f  errM=%.2e errR=%.2e errL=%.2e errTV=%.2e\n", xi, k, hs[i], e[i].M, e[i].R,
+                  e[i].L, e[i].tv);
+    EXPECT_LT(e[0].M, 1e-11) << "dyson_mat vs exact G^M";
+    // order k+1 on the finest pair (0.025 -> 0.0125; coarser pairs are pre-asymptotic for k = 4 after the switch-on)
+    const size_t i = hs.size() - 1;
+    const double want = k + 1 - 0.35;
+    EXPECT_GT(hn_test::rate(e[i - 1].R, e[i].R), want) << "xi=" << xi << " k=" << k << " R";
+    EXPECT_GT(hn_test::rate(e[i - 1].L, e[i].L), want) << "xi=" << xi << " k=" << k << " <";
+    EXPECT_GT(hn_test::rate(e[i - 1].tv, e[i].tv), want) << "xi=" << xi << " k=" << k << " tv";
+    for (size_t j = 1; j < hs.size(); j++) {
+      EXPECT_LT(e[j].R, e[j - 1].R / 4) << "xi=" << xi << " k=" << k << " h=" << hs[j];
+      EXPECT_LT(e[j].L, e[j - 1].L / 4) << "xi=" << xi << " k=" << k << " h=" << hs[j];
+      EXPECT_LT(e[j].tv, e[j - 1].tv / 4) << "xi=" << xi << " k=" << k << " h=" << hs[j];
+    }
+    EXPECT_LT(e.back().R, 2e-5);
+    EXPECT_LT(e.back().L, 2e-5);
+    EXPECT_LT(e.back().tv, 2e-5);
+  }
+}
+}  // namespace e2e
+
+TEST(EndToEndFermion, MatStartTimestepVsExact) { e2e::check(-1); }
+TEST(EndToEndBoson, MatStartTimestepVsExact) { e2e::check(+1); }

@@ -374,8 +374,8 @@ TEST_P(DlrFermion, GammaIntegralMixedTerm) {
 }
 INSTANTIATE_TEST_SUITE_P(Dlr, DlrFermion, ::testing::Values(1, 2));
 
-// B1: bosonic tv_it_conv returns exactly -reference.
-TEST(DlrBoson, KnownBug_B1_TvItConvVsQuadrature) {
+// B1 (fixed in WP3; was: bosonic tv_it_conv returned exactly -reference).
+TEST(DlrBoson, TvItConvVsQuadrature) {
   hn_test::run_isolated([] {
     for (int nao : {1, 2}) {
       const auto &m = metrics(+1, nao);
@@ -383,14 +383,35 @@ TEST(DlrBoson, KnownBug_B1_TvItConvVsQuadrature) {
     }
   });
 }
-// B2: bosonic gamma_integral mixed term has the fermionic sign.
-TEST(DlrBoson, KnownBug_B2_GammaIntegralMixedTerm) {
+// B2 (fixed in WP3; was: bosonic gamma_integral mixed term had the fermionic sign).
+TEST(DlrBoson, GammaIntegralMixedTerm) {
   hn_test::run_isolated([] {
     for (int nao : {1, 2}) {
       const auto &m = metrics(+1, nao);
       EXPECT_LT(m.gamma_mixed / m.gamma_mixed_ref, 1e-11) << "nao=" << nao;
     }
   });
+}
+
+// ---------------------------------------------------------------- initGMConvTensor dlr consistency (WP3)
+// initGMConvTensor needs a dlr_info with the same xi (Phi carries it) and r as G: assert(dlr.xi()==sig_ && dlr.r()==r_).
+// Tier-1 check (Debug only, WP6 makes it always-on): in Debug the call aborts; in Release the xi mismatch is not
+// detected (the result is silently wrong by O(1), doc 04 §10.4), so only the Debug expectation is tested there.
+TEST(GMConvTensorDeathTest, DlrXiOrRankMismatchAsserts) {
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
+  int rf = 0, rb = 0;
+  dlr_info dlrf(rf, 50., 1e-12, 5., 1, -1), dlrb(rb, 50., 1e-12, 5., 1, +1);
+  herm_matrix_hodlr Gf(4, rf, 1, 1e-12, 1, 1, -1, 2), Gb(4, rb, 1, 1e-12, 1, 1, +1, 2);
+  Gf.initGMConvTensor(dlrf);  // consistent: fine in every build
+  Gb.initGMConvTensor(dlrb);
+#ifndef NDEBUG
+  EXPECT_DEATH(Gb.initGMConvTensor(dlrf), "dlr.xi\\(\\)==sig_");
+  EXPECT_DEATH(Gf.initGMConvTensor(dlrb), "dlr.xi\\(\\)==sig_");
+  herm_matrix_hodlr Gr(4, rf - 1, 1, 1e-12, 1, 1, -1, 2);  // r mismatch
+  EXPECT_DEATH(Gr.initGMConvTensor(dlrf), "dlr.r\\(\\)==r_");
+#else
+  GTEST_SKIP() << "asserts are off (NDEBUG): the dlr consistency check is Debug-only (tier 1)";
+#endif
 }
 
 // ---------------------------------------------------------------- dyson_mat buffers and fixHam (B4, H29; fixed in WP2)
