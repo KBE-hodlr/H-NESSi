@@ -61,11 +61,13 @@ private:
   std::vector<cplx> NTauTmp2_;        /**< imaginary time storage - size ntau*es*/
   std::vector<double> DNTauTmp_;         /**< imaginary time storage - size ntau*es*/
   std::vector<double> DNTauTmp2_;        /**< imaginary time storage - size ntau*es*/
+  std::vector<double> DG0_;              /**< dyson_mat: G0 on the DLR nodes (libdlr layout g0(r,n,n)), kept for fixHam=true - size ntau*es*/
+  std::vector<double> DG0ConvMat_;       /**< dyson_mat: matrix of convolution by G0 (libdlr layout (r*n,r*n)), kept for fixHam=true - size ntau*ntau*es*/
   std::vector<cplx> Q_;               /**< storage for timeslice quantities such as history integrals - size (nt+1)*es*/
-  std::vector<cplx> M_;               /**< storage for Matrix which is solved when timestepping - size k*k*es */
+  std::vector<cplx> M_;               /**< storage for Matrix which is solved when timestepping - size (k+1)*k*es */
   std::vector<cplx> X_;               /**< storage for timeslice quantities such as the G being solved for  - size (nt+1)*es */
   std::vector<cplx> epsnao_tmp_;      /**< storage for intermediate quantities when applying U,S,V sequentially - size (nt+1)/2*nao */
-  std::vector<cplx> epsnao_tmp_2_;    /**< storage for intermediate quantities when applying U,S,V sequentially - size (nt+1)*/
+  std::vector<cplx> epsnao_tmp_2_;    /**< storage for intermediate quantities when applying U,S,V sequentially - size (nt+1)/2*nao*/
   std::vector<cplx> iden_;            /**< Identity matrix storage. */
   std::vector<cplx> bound_;           /**< storage for matrices when we need to build them from compressed representations - size nao*nao */
 
@@ -131,6 +133,13 @@ public:
    * @brief Provides a small report on memory usage
    */
   void print_memory_usage();
+
+  /**
+   * @brief Memory used by the dyson buffers in bytes (actual sizes of all heap buffers), as reported by print_memory_usage
+   * @return {DLR buffers (NTauTmp*_, DNTauTmp*_), G0 (DG0_), G0 conv. matrix (DG0ConvMat_), Mat Mul buffers (epsnao_tmp*_),
+   *          Solver buffers (Q_, X_, M_, iden_, bound_), Timing buffer (timing), Total}
+   */
+  std::vector<double> memory_usage_bytes();
 
   /**
    * @brief Writes timing information to an HDF5 file.
@@ -301,7 +310,9 @@ public:
    * @param mu Chemical potential.
    * @param H Hamiltonian function.
    * @param Sigma Self-energy object.
-   * @param fixHam Fix Hamiltonian flag - if true, G_0 is not recomputed (default: false).
+   * @param fixHam Fix Hamiltonian flag - if true, G_0 is not recomputed (default: false). G_0 and its convolution matrix
+   *               are then reused from the last fixHam=false call on this dyson object, so such a call (with the same
+   *               mu and H) must have been made first.
    * @param alpha Self-consistent iteration step-size - G^M = alpha*G^M_{new} + (1-alpha)*G^M_{old} (default: 0.1)
    * @return Error estimate.
    */
@@ -312,7 +323,9 @@ public:
    * @param mu Chemical potential.
    * @param hmf Mean-field Hamiltonian matrix.
    * @param Sigma Self-energy object.
-   * @param fixHam Fix Hamiltonian flag - if true, G_0 is not recomputed (default: false).
+   * @param fixHam Fix Hamiltonian flag - if true, G_0 is not recomputed (default: false). G_0 and its convolution matrix
+   *               are then reused from the last fixHam=false call on this dyson object, so such a call (with the same
+   *               mu and H) must have been made first.
    * @param alpha Self-consistent iteration step-size - G^M = alpha*G^M_{new} + (1-alpha)*G^M_{old} (default: 0.1)
    * @return Error estimate.
    */

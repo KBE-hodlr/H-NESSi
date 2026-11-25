@@ -9,16 +9,17 @@ double dyson::dyson_mat(herm_matrix_hodlr &G, double mu, function &H, herm_matri
     assert(xi_==G.sig() && nao_==G.size1() && nao_==G.size2());
     double sig = double(xi_);
 
+    // G0 and its convolution matrix live in dyson-owned buffers (DG0_, DG0ConvMat_), so that fixHam=true can reuse
+    // them and neither Sigma nor G.GMConvTensMatrix_ is used as scratch
     if(!fixHam) {
       dyson::green_from_H_mat(DNTauTmp2_.data(),mu,H.get_map(-1));
-      DMatrixMap(DNTauTmp_.data(), es_, ntau_).noalias() = DMatrixMap(DNTauTmp2_.data(), ntau_, es_).transpose();
-      c_dlr_convmat(&r_,&nao_,dlr_.it2cf(),dlr_.it2cfp(),dlr_.phi(),DNTauTmp_.data(),G.GMConvTens());
+      DMatrixMap(DG0_.data(), es_, ntau_).noalias() = DMatrixMap(DNTauTmp2_.data(), ntau_, es_).transpose();
+      c_dlr_convmat(&r_,&nao_,dlr_.it2cf(),dlr_.it2cfp(),dlr_.phi(),DG0_.data(),DG0ConvMat_.data());
     }
 
-    double *tmp = reinterpret_cast<double*>(Sigma.tvptr(0,0));
-    DMatrixMap(tmp, es_, ntau_).noalias() = DMatrixMap(Sigma.mat(), ntau_, es_).transpose();
+    DMatrixMap(DNTauTmp_.data(), es_, ntau_).noalias() = DMatrixMap(Sigma.mat(), ntau_, es_).transpose();
 
-    c_dyson_it(&r_, &nao_, dlr_.it2cf(), dlr_.it2cfp(), dlr_.phi(), DNTauTmp_.data(), G.GMConvTens(), tmp, DNTauTmp2_.data());
+    c_dyson_it(&r_, &nao_, dlr_.it2cf(), dlr_.it2cfp(), dlr_.phi(), DG0_.data(), DG0ConvMat_.data(), DNTauTmp_.data(), DNTauTmp2_.data());
     DMatrixMap(DNTauTmp_.data(), ntau_, es_).noalias() = DMatrixMap(DNTauTmp2_.data(), es_, ntau_).transpose();
 
     double ret = (DMatrixMap(DNTauTmp_.data(), 1, r_*es_) - DMatrixMap(G.mat(), 1, r_*es_)).norm();
@@ -33,16 +34,17 @@ double dyson::dyson_mat(herm_matrix_hodlr &G, double mu, DMatrix &H, herm_matrix
     assert(xi_==G.sig() && nao_==G.size1() && nao_==G.size2());
     double sig = double(xi_);
 
+    // G0 and its convolution matrix live in dyson-owned buffers (DG0_, DG0ConvMat_), so that fixHam=true can reuse
+    // them and neither Sigma nor G.GMConvTensMatrix_ is used as scratch
     if(!fixHam) {
       dyson::green_from_H_mat(DNTauTmp2_.data(),mu,H);
-      DMatrixMap(DNTauTmp_.data(), es_, ntau_).noalias() = DMatrixMap(DNTauTmp2_.data(), ntau_, es_).transpose();
-      c_dlr_convmat(&r_,&nao_,dlr_.it2cf(),dlr_.it2cfp(),dlr_.phi(),DNTauTmp_.data(),G.GMConvTens());
+      DMatrixMap(DG0_.data(), es_, ntau_).noalias() = DMatrixMap(DNTauTmp2_.data(), ntau_, es_).transpose();
+      c_dlr_convmat(&r_,&nao_,dlr_.it2cf(),dlr_.it2cfp(),dlr_.phi(),DG0_.data(),DG0ConvMat_.data());
     }
 
-    double *tmp = reinterpret_cast<double*>(Sigma.tvptr(0,0));
-    DMatrixMap(tmp, es_, ntau_).noalias() = DMatrixMap(Sigma.mat(), ntau_, es_).transpose();
+    DMatrixMap(DNTauTmp_.data(), es_, ntau_).noalias() = DMatrixMap(Sigma.mat(), ntau_, es_).transpose();
 
-    c_dyson_it(&r_, &nao_, dlr_.it2cf(), dlr_.it2cfp(), dlr_.phi(), DNTauTmp_.data(), G.GMConvTens(), tmp, DNTauTmp2_.data());
+    c_dyson_it(&r_, &nao_, dlr_.it2cf(), dlr_.it2cfp(), dlr_.phi(), DG0_.data(), DG0ConvMat_.data(), DNTauTmp_.data(), DNTauTmp2_.data());
     DMatrixMap(DNTauTmp_.data(), ntau_, es_).noalias() = DMatrixMap(DNTauTmp2_.data(), es_, ntau_).transpose();
 
     double ret = (DMatrixMap(DNTauTmp_.data(), 1, r_*es_) - DMatrixMap(G.mat(), 1, r_*es_)).norm();

@@ -393,39 +393,140 @@ TEST(DlrBoson, KnownBug_B2_GammaIntegralMixedTerm) {
   });
 }
 
-// ---------------------------------------------------------------- B4: dyson_mat(fixHam=true)
-// Contract test (agent_scratch/51/t_mat.cpp): with identical inputs, a second call with fixHam=true must give the
-// same G^M as a second call with fixHam=false (G0 is unchanged, only "not recomputed").
-TEST(DysonMat, KnownBug_B4_FixHamSecondCall) {
-  hn_test::run_isolated([] {
-    int nao = 2, xi = -1, nt = 10, k = 2;
-    double beta = 5., mu = 0.;
-    int r = 0;
-    dlr_info dlr(r, 50., 1e-12, beta, nao, xi);
-    function H(nt, nao, nao);
-    DMatrix h0(nao, nao);
-    h0 << 0.4, 0.2, 0.2, -0.3;
-    H.get_map(-1) = h0.cast<C>();
-    herm_matrix_hodlr S(nt, r, 1, 1e-12, nao, nao, xi, k);
-    {
-      herm_matrix_hodlr tmp(nt, r, 1, 1e-12, nao, nao, xi, k);
-      dyson D0(nt, nao, k, dlr, true, false);
-      ZMatrix hb(nao, nao);
+// ---------------------------------------------------------------- dyson_mat buffers and fixHam (B4, H29; fixed in WP2)
+namespace {
+// Small 2-orbital problem shared by the dyson_mat buffer tests: Sigma^M = 0.3 * G0_bath^M (static hybridisation).
+struct MatSetup {
+  int nao, xi, nt = 10, k = 2, r = 0;
+  double beta = 5.;
+  dlr_info dlr;
+  function H;
+  DMatrix h0;
+  herm_matrix_hodlr S;
+  MatSetup(int nao_, int xi_)
+      : nao(nao_), xi(xi_), dlr(r, 50., 1e-12, beta, nao_, xi_), H(nt, nao_, nao_), h0(nao_, nao_),
+        S(nt, r, 1, 1e-12, nao_, nao_, xi_, k) {
+    ZMatrix hb(nao, nao);
+    if (nao == 1) {
+      h0 << 0.4;
+      hb << 1.0;
+    } else {
+      h0 << 0.4, 0.2, 0.2, -0.3;
       hb << 1.0, 0.3, 0.3, -0.8;
-      D0.green_from_H(tmp, 0., hb, 0.01, k, true);
-      for (int i = 0; i < r; i++) S.set_mat(i, DMatrix(0.3 * DMatrixMap(tmp.matptr(i), nao, nao)));
     }
-    herm_matrix_hodlr Ga(nt, r, 1, 1e-12, nao, nao, xi, k), Gb(nt, r, 1, 1e-12, nao, nao, xi, k);
-    dyson D(nt, nao, k, dlr, true, false);
-    D.dyson_mat(Ga, mu, H, S, false, 1.0);
-    D.dyson_mat(Ga, mu, H, S, false, 1.0);
-    dyson D2(nt, nao, k, dlr, true, false);
-    D2.dyson_mat(Gb, mu, H, S, false, 1.0);
-    D2.dyson_mat(Gb, mu, H, S, true, 1.0);
-    double d = (DMatrixMap(Ga.mat(), r, nao * nao) - DMatrixMap(Gb.mat(), r, nao * nao)).norm() /
-               DMatrixMap(Ga.mat(), r, nao * nao).norm();
-    EXPECT_LT(d, 1e-12) << "relative difference fixHam=true vs false";
-  });
+    H.get_map(-1) = h0.cast<C>();
+    herm_matrix_hodlr tmp(nt, r, 1, 1e-12, nao, nao, xi, k);
+    dyson D0(nt, nao, k, dlr, true, false);
+    D0.green_from_H(tmp, 0., hb, 0.01, k, true);
+    for (int i = 0; i < r; i++) S.set_mat(i, DMatrix(0.3 * DMatrixMap(tmp.matptr(i), nao, nao)));
+  }
+  herm_matrix_hodlr newG() { return herm_matrix_hodlr(nt, r, 1, 1e-12, nao, nao, xi, k); }
+  double reldiff(herm_matrix_hodlr &A, herm_matrix_hodlr &B) {
+    int es = nao * nao;
+    return (DMatrixMap(A.mat(), r, es) - DMatrixMap(B.mat(), r, es)).norm() / DMatrixMap(A.mat(), r, es).norm();
+  }
+};
+}  // namespace
+
+// With identical inputs, a second call with fixHam=true must give the same G^M as a second call with fixHam=false
+// (G0 is unchanged, only "not recomputed"). Formerly KnownBug_B4 (agent_scratch/51/t_mat.cpp): rel. difference 1.10.
+TEST(DysonMat, FixHamSecondCall) {
+  MatSetup P(2, -1);
+  double mu = 0.;
+  herm_matrix_hodlr Ga = P.newG(), Gb = P.newG();
+  dyson D(P.nt, P.nao, P.k, P.dlr, true, false);
+  D.dyson_mat(Ga, mu, P.H, P.S, false, 1.0);
+  D.dyson_mat(Ga, mu, P.H, P.S, false, 1.0);
+  dyson D2(P.nt, P.nao, P.k, P.dlr, true, false);
+  D2.dyson_mat(Gb, mu, P.H, P.S, false, 1.0);
+  D2.dyson_mat(Gb, mu, P.H, P.S, true, 1.0);
+  EXPECT_LT(P.reldiff(Ga, Gb), 1e-12) << "relative difference fixHam=true vs false";
+}
+
+// fixHam=true reuses the G0 saved in the dyson object by the last fixHam=false call, for both overloads, both
+// statistics, with mixing, on a different G, after initGMConvTensor of G, and after a call with a different Sigma.
+class DysonMatFixHam : public ::testing::TestWithParam<std::tuple<int, int>> {};
+TEST_P(DysonMatFixHam, ReusesSavedG0) {
+  auto [xi, nao] = GetParam();
+  MatSetup P(nao, xi);
+  double mu = 0.15;
+  DMatrix hm = P.h0;
+  // reference: fixHam=false throughout
+  herm_matrix_hodlr Gref = P.newG();
+  dyson Dref(P.nt, P.nao, P.k, P.dlr, true, false);
+  for (int it = 0; it < 3; it++) Dref.dyson_mat(Gref, mu, P.H, P.S, false, 0.5);
+  for (int ovl = 0; ovl < 2; ovl++) {
+    herm_matrix_hodlr G0 = P.newG(), G = P.newG();
+    dyson D(P.nt, P.nao, P.k, P.dlr, true, false);
+    // the saving call is made on another G, and G's conv tensor is then initialised (it must not be used as G0)
+    if (ovl == 0) D.dyson_mat(G0, mu, P.H, P.S, false, 1.0);
+    else D.dyson_mat(G0, mu, hm, P.S, false, 1.0);
+    G0.initGMConvTensor(P.dlr);
+    // a fixHam=true call with a different Sigma must not disturb the saved G0 either
+    herm_matrix_hodlr S2 = P.newG();
+    for (int i = 0; i < P.r; i++) S2.set_mat(i, DMatrix(2.0 * DMatrixMap(P.S.matptr(i), nao, nao)));
+    D.dyson_mat(G0, mu, P.H, S2, true, 1.0);
+    for (int it = 0; it < 3; it++) {
+      if (ovl == 0) D.dyson_mat(G, mu, P.H, P.S, true, 0.5);
+      else D.dyson_mat(G, mu, hm, P.S, true, 0.5);
+    }
+    EXPECT_LT(P.reldiff(Gref, G), 1e-12) << "overload " << ovl;
+  }
+}
+INSTANTIATE_TEST_SUITE_P(Dlr, DysonMatFixHam,
+                         ::testing::Values(std::make_tuple(-1, 1), std::make_tuple(-1, 2), std::make_tuple(1, 1), std::make_tuple(1, 2)));
+
+// H29: dyson_mat must not write to Sigma (mat, every tv row and tv_trans, conv tensor) nor to G.GMConvTensMatrix_.
+TEST_P(DysonMatFixHam, LeavesSigmaAndConvTensorUnchanged) {
+  auto [xi, nao] = GetParam();
+  MatSetup P(nao, xi);
+  ExpSum sf(nao, 5 + xi);
+  for (int t = 0; t < P.nt; t++)  // tv holds nt rows (t = 0..nt-1)
+    for (int i = 0; i < P.r; i++) P.S.set_tv(t, i, ZMatrix(sf(P.dlr.it0B(i)) * C(1. + 0.1 * t, -0.03 * t)));
+  P.S.initGMConvTensor(P.dlr);
+  herm_matrix_hodlr G = P.newG();
+  dyson D(P.nt, P.nao, P.k, P.dlr, true, false);
+  D.dyson_mat(G, 0., P.H, P.S, false, 1.0);
+  G.initGMConvTensor(P.dlr);
+  std::vector<double> smat(P.S.mat(), P.S.mat() + P.r * nao * nao);
+  std::vector<C> stv = P.S.tv().data_vector(), stvt = P.S.tv().data_trans_vector();
+  DMatrix sconv = P.S.GMConvTensMatrix(), gconv = G.GMConvTensMatrix();
+  DMatrix hm = P.h0;
+  for (bool fix : {false, true}) {
+    D.dyson_mat(G, 0., P.H, P.S, fix, 0.5);
+    D.dyson_mat(G, 0., hm, P.S, fix, 0.5);
+  }
+  EXPECT_TRUE(std::equal(smat.begin(), smat.end(), P.S.mat())) << "Sigma^M changed";
+  EXPECT_TRUE(stv == P.S.tv().data_vector()) << "Sigma^tv changed";
+  EXPECT_TRUE(stvt == P.S.tv().data_trans_vector()) << "Sigma^tv tv_trans changed";
+  EXPECT_TRUE(sconv == P.S.GMConvTensMatrix()) << "Sigma conv tensor changed";
+  EXPECT_TRUE(gconv == G.GMConvTensMatrix()) << "G conv tensor changed";
+}
+
+// memory_usage_bytes (printed by print_memory_usage) must count every heap buffer of dyson with its real size
+// (B32, fixed in WP2). The sizes below are computed independently from nt, nao, k, r and profile.
+TEST(DysonMemory, CountsAllBuffers) {
+  for (int nt : {37, 38})
+    for (bool prof : {false, true}) {
+      int nao = 2, es = 4, k = 4, r = 0;
+      dlr_info dlr(r, 50., 1e-12, 5., nao, -1);
+      dyson D(nt, nao, k, dlr, true, prof);
+      std::vector<double> m = D.memory_usage_bytes();
+      ASSERT_EQ(m.size(), 7u);
+      double Db = sizeof(double), Zb = sizeof(C);
+      double dlrbuf = Zb * 2 * r * es + Db * 2 * r * es;                   // NTauTmp_, NTauTmp2_, DNTauTmp_, DNTauTmp2_
+      double g0 = Db * r * es, g0conv = Db * r * r * es;                    // DG0_, DG0ConvMat_
+      double matmul = Zb * 2 * ((nt + 1) / 2) * nao;                        // epsnao_tmp_, epsnao_tmp_2_
+      double solver = Zb * (2 * (nt + 1) * es + (k + 1) * k * es + 2 * es);  // Q_, X_, M_, iden_, bound_
+      double tim = Db * (prof ? nt : 0) * 25;                               // timing
+      EXPECT_EQ(m[0], dlrbuf);
+      EXPECT_EQ(m[1], g0);
+      EXPECT_EQ(m[2], g0conv);
+      EXPECT_EQ(m[3], matmul);
+      EXPECT_EQ(m[4], solver);
+      EXPECT_EQ(m[5], tim);
+      EXPECT_EQ(m[6], dlrbuf + g0 + g0conv + matmul + solver + tim) << "nt=" << nt << " profile=" << prof;
+    }
 }
 
 // ---------------------------------------------------------------- B3: vector eval_point (segfault)

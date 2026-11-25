@@ -46,6 +46,8 @@ dlr_(dlr)
   NTauTmp2_.resize(r_ * es_);
   DNTauTmp_.resize(r_ * es_);
   DNTauTmp2_.resize(r_ * es_);
+  DG0_.resize(r_ * es_);
+  DG0ConvMat_.resize(r_ * r_ * es_);
   epsnao_tmp_.resize((nt_+1)/2 * nao_);
   epsnao_tmp_2_.resize((nt_+1)/2 * nao_);
 
@@ -61,23 +63,33 @@ dlr_(dlr)
   timing = DMatrix::Zero(profile_ ? nt : 0, 25);
 }
 
-void dyson::print_memory_usage(void) {
-  
-    double D = (double)sizeof(double)/(1e9);
-    double Z = 2*D;
-    double I = (double)sizeof(int)/(1e9);
+std::vector<double> dyson::memory_usage_bytes(void) {
 
-    double total = 0;
+    // every heap buffer of the class, counted from its actual size
+    double D = (double)sizeof(double);
+    double Z = (double)sizeof(cplx);
+
     double tautmp = 0;
+    double g0 = 0;
+    double g0conv = 0;
     double epsnaotmp = 0;
     double qxm = 0;
     double tim = 0;
 
-    tautmp = Z * 2 * r_ * es_;
-    epsnaotmp = Z * 2 * (nt_+1)/2 * nao_;
-    qxm = Z * 2 * (nt_+1) * es_ + Z*k_*k_*es_;
-    tim = D * (profile_ ? nt_ : 0) * 25;
-    total = tautmp + epsnaotmp + qxm + tim;
+    tautmp = Z * (NTauTmp_.size() + NTauTmp2_.size()) + D * (DNTauTmp_.size() + DNTauTmp2_.size());
+    g0 = D * DG0_.size();
+    g0conv = D * DG0ConvMat_.size();
+    epsnaotmp = Z * (epsnao_tmp_.size() + epsnao_tmp_2_.size());
+    qxm = Z * (Q_.size() + X_.size() + M_.size() + iden_.size() + bound_.size());
+    tim = D * timing.rows() * timing.cols();
+
+    return {tautmp, g0, g0conv, epsnaotmp, qxm, tim, tautmp + g0 + g0conv + epsnaotmp + qxm + tim};
+}
+
+void dyson::print_memory_usage(void) {
+
+    std::vector<double> mem = memory_usage_bytes();
+    for(double &m : mem) m /= 1e9;
 
     const int total_width = 10;
     const int precision = 2;
@@ -86,12 +98,14 @@ void dyson::print_memory_usage(void) {
     std::cout << "==        Memory usage for dyson        ==" << std::endl;
     std::cout << "==========================================" << std::endl;
     std::cout << "==                                      ==" << std::endl;
-    printf(      "==  DLR buffers        :%*.*f MB   ==", total_width, precision, tautmp*1000); std::cout << std::endl;
-    printf(      "==  Mat Mul buffers    :%*.*f MB   ==", total_width, precision, epsnaotmp*1000); std::cout << std::endl;
-    printf(      "==  Solver buffers     :%*.*f MB   ==", total_width, precision, qxm*1000); std::cout << std::endl;
-    printf(      "==  Timing buffer      :%*.*f MB   ==", total_width, precision, tim*1000); std::cout << std::endl;
+    printf(      "==  DLR buffers        :%*.*f MB   ==", total_width, precision, mem[0]*1000); std::cout << std::endl;
+    printf(      "==  G0 (dyson_mat)     :%*.*f MB   ==", total_width, precision, mem[1]*1000); std::cout << std::endl;
+    printf(      "==  G0 conv. matrix    :%*.*f MB   ==", total_width, precision, mem[2]*1000); std::cout << std::endl;
+    printf(      "==  Mat Mul buffers    :%*.*f MB   ==", total_width, precision, mem[3]*1000); std::cout << std::endl;
+    printf(      "==  Solver buffers     :%*.*f MB   ==", total_width, precision, mem[4]*1000); std::cout << std::endl;
+    printf(      "==  Timing buffer      :%*.*f MB   ==", total_width, precision, mem[5]*1000); std::cout << std::endl;
     std::cout << "==                                      ==" << std::endl;
-    printf(      "==  Total              :%*.*f MB   ==", total_width, precision, total*1000); std::cout << std::endl;
+    printf(      "==  Total              :%*.*f MB   ==", total_width, precision, mem[6]*1000); std::cout << std::endl;
     std::cout << "==                                      ==" << std::endl;
     std::cout << "==========================================" << std::endl << std::endl;
 }
@@ -115,6 +129,8 @@ dlr_(dlr)
   NTauTmp2_.resize(r_ * es_);
   DNTauTmp_.resize(r_ * es_);
   DNTauTmp2_.resize(r_ * es_);
+  DG0_.resize(r_ * es_);
+  DG0ConvMat_.resize(r_ * r_ * es_);
   epsnao_tmp_.resize((nt_+1)/2 * nao_);
   epsnao_tmp_2_.resize((nt_+1)/2 * nao_);
 

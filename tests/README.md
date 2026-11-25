@@ -26,7 +26,7 @@ Run the gtest executables through ctest. Each test then gets its own process. If
 `--gtest_filter`. Known-bug bodies `fork()`, and libgomp is not fork-safe once an earlier test has started its
 thread pool.
 
-Timings (Perlmutter login node, `-j16`, all 208 tests including `slow`): Release about 6 s wall, Debug (-O0)
+Timings (Perlmutter login node, `-j16`, all 217 tests including `slow`): Release about 6 s wall, Debug (-O0)
 about 90 s wall. The `slow` sweeps (21 tests) dominate in Debug at roughly 70 s each.
 
 ## Labels and naming convention
@@ -57,7 +57,7 @@ about 90 s wall. The `slow` sweeps (21 tests) dominate in Debug at roughly 70 s 
 | executable | ported from | contents |
 |---|---|---|
 | `test_integration` | `agent_scratch/02/t.cpp` | polynomial exactness of every weight table (k = 0..6); `bd_weights` with k+2 terms; Gregory symmetry; convergence orders |
-| `test_dlr_matsubara` | `03/test_dlr.cpp`, `51/t_mat.cpp` | DLR maps, `get_mat_tau`, `density_matrix`, reversed/tv accessors, `tv_it_conv`, `les_it_int`, `gamma_integral(_mat)` against quadrature; `dyson_mat` against the exact hybridised G^M (μ shift, mixing, return value); B1 B2 B3 B4 |
+| `test_dlr_matsubara` | `03/test_dlr.cpp`, `51/t_mat.cpp` | DLR maps, `get_mat_tau`, `density_matrix`, reversed/tv accessors, `tv_it_conv`, `les_it_int`, `gamma_integral(_mat)` against quadrature; `dyson_mat` against the exact hybridised G^M (μ shift, mixing, return value); `dyson_mat` leaves Σ and both conv tensors untouched, `fixHam=true` reuses the saved G0; `dyson::memory_usage_bytes` counts every heap buffer with its real size (B32); B1 B2 B3 B4 (B4 fixed in WP2) |
 | `test_bosonic` | `51/t_resolvent.cpp` | exact resolvent identity G_ε∗G_η = (G_ε−G_η)/(ε−η) for both ξ; B1 B2 B10 and the Q2 relation |
 | `test_free_extrap` | `23/ta,tb,tc.cpp` | `green_from_H` exact (real and complex H, both ξ); `green_from_H_dm`; `extrapolate` order k+1 (and the `_2leg` variant, no-op on a second call); `gamma_integral` against a dense quadrature, order k+1; B2 B10 |
 | `test_hodlr_storage` | old `tests/linalg.cpp`, `52/s9.cpp`, `52/s1.cpp` | `mgs`, incremental TSVD; fill/archive/read-back round trips for 8 geometries; zero-first-row blocks (S9); checkpoint round trip; B9 B22 B23 B26 |
@@ -71,7 +71,7 @@ about 90 s wall. The `slow` sweeps (21 tests) dominate in Debug at roughly 70 s 
 
 ## BUG ID → test map
 
-Status is for the code as of WP0 (CLAUDE_dev = upstream 5c9706b), updated for the bugs fixed since (WP1: B12, B13, B25, B31).
+Status is for the code as of WP0 (CLAUDE_dev = upstream 5c9706b), updated for the bugs fixed since (WP1: B12, B13, B25, B31; WP2: B4).
 XF means expected failure.
 
 | BUGS id | test(s) | Release | Debug | symptom seen by the test |
@@ -79,7 +79,7 @@ XF means expected failure.
 | B1 | `DlrBoson.KnownBug_B1_TvItConvVsQuadrature`, `ResolventBoson.KnownBug_B1_TvItConv` | XF | XF | bosonic `tv_it_conv` = −reference (rel. err 2.0) |
 | B2 | `DlrBoson.KnownBug_B2_GammaIntegralMixedTerm`, `ResolventBoson.KnownBug_B2_GammaIntegralEquilibrium`, `ResolventBoson.KnownBug_B2_GammaIntegralVsMat`, `GammaIntegralBoson.KnownBug_B2_VsQuadrature`, `GammaIntegralBoson.KnownBug_B2_EquilibriumVsMat` | XF | XF | wrong sign of the bosonic mixed term (error 2.87; relation `gamma_integral = ξ·gamma_integral_mat` violated) |
 | B3 | `DlrArray.KnownBug_B3_GetMatTauArray`, `DlrArray.KnownBug_B3_GetTvTauArray` | XF | XF | child SIGSEGV |
-| B4 | `DysonMat.KnownBug_B4_FixHamSecondCall` | XF | XF | rel. difference 1.10 |
+| B4 | `DysonMat.FixHamSecondCall`, `DysonMatFixHam.ReusesSavedG0/*` | pass | pass | **fixed in WP2** (was: rel. difference 1.10) |
 | B6 | `KnownBug_B6_OperatorAssignLinkAndDeepCopy` | XF | XF | undefined reference to `operator=` |
 | B8 | — | | | not testable without a NESSi build (see below) |
 | B9 | `HodlrCheckpoint.KnownBug_B9_TimingZeroWhenMissing` | XF | XF | uninitialised timing (malloc perturbation) |
@@ -101,8 +101,9 @@ XF means expected failure.
 | B26 | `HodlrMemory.KnownBug_B26_MemoryReport` | XF | XF | reported memory ≠ true block storage |
 | B27 | — | | | not testable (see below) |
 | B28 | `DysonTiming.KnownBug_B28_Column5Accumulated` | XF | XF | dyson timing column 5 is always 0 |
-| B29, B30 | — | | | notebook plot / source comments only |
+| B29, B30 | — | | | notebook plot / source comments only (B30 fixed in WP2) |
 | B31 | `BootstrapRetNtti.ImpTp0ErrorEstimateTwoOrbitals` (added in WP1) | pass | pass | **fixed in WP1** (was: Debug Eigen assert at `dyson_start.cpp:197`; wrong error in Release) |
+| B32 | `DysonMemory.CountsAllBuffers` (added in WP2) | pass | pass | **fixed in WP2** (was: `DNTauTmp*_`, `iden_`, `bound_` not counted; `M_` counted as k²·es) |
 
 The B14 test also checks the correct boundary sign through its dense reference: the conjugate KBE with
 −`les_it_int`.
@@ -122,7 +123,7 @@ The B14 test also checks the correct boundary sign through its dense reference: 
 
 ## Release vs Debug
 
-Both builds pass 100% (208 tests after WP1). Release has 26 expected failures and Debug has 27. The difference is:
+Both builds pass 100% (217 tests after WP2). Release has 25 expected failures and Debug has 26. The difference is:
 
 * `HodlrCopy.KnownBugDebug_B22_GetTimestepCurrMatsubara` passes in Release. In Debug it is an expected failure:
   `assert(tstp>=tstpmk_)` at `herm_matrix_hodlr.cpp:339` fires before the `tstp==-1` branch (B22).
