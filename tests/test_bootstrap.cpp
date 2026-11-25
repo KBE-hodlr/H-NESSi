@@ -5,7 +5,8 @@
 //      equation X*A = Q (B13).
 //  (b) error vs the exact solution of an impurity+bath model, convergence order k+1.
 //  (c) agent_scratch/51/t_start*.cpp: order of dyson_start_ret_ntti with the slot (n,l>n) left zero (B12) and
-//      with imp_tp0 (B13); (d) B25: dyson_start_2leg(function&) must forward imp_tp0.
+//      with imp_tp0 (B13); (d) B25: dyson_start_2leg(function&) must forward imp_tp0; (e) B31: imp_tp0 error.
+//  B12, B13, B25 and B31 are fixed in WP1; their former KnownBug_* tests are ordinary tests now.
 #include <gtest/gtest.h>
 
 #include <cmath>
@@ -366,10 +367,10 @@ Errs run_case(const Case &cs, int k, double h) {
   return e;
 }
 
-// lib vs dense reference for k = 1..5 at h = 0.1, and convergence order k+1 vs exact from h = 0.1 -> 0.05
-void check_case(const Case &cs, int kmax = 5) {
+// lib vs dense reference for k = 1..5 at h = h0, and convergence order k+1 vs exact from h = h0 -> h0/2
+void check_case(const Case &cs, int kmax = 5, double h0 = 0.1) {
   for (int k = 1; k <= kmax; k++) {
-    Errs a = run_case(cs, k, 0.1), b = run_case(cs, k, 0.05);
+    Errs a = run_case(cs, k, h0), b = run_case(cs, k, h0 / 2);
     EXPECT_LT(a.libref, 1e-13) << "k=" << k << " library vs dense reference";
     EXPECT_LT(b.libref, 1e-13) << "k=" << k << " library vs dense reference";
     double want = k + 1 - 0.5;  // h = 0.1 -> 0.05 is slightly pre-asymptotic for k = 5
@@ -385,6 +386,7 @@ void check_case_sweep(const Case &cs) {
     for (double h : hs) e.push_back(run_case(cs, k, h));
     for (size_t i = 3; i < hs.size(); i++) {  // pairs 0.1->0.05, 0.05->0.025 (coarser ones are pre-asymptotic)
       if (e[i].R < 1e-11) continue;
+      if (cs.imp && k == 5 && i == 3) continue;  // imp_tp0, k=5: G^R(m,0) still pre-asymptotic at h=0.1 (rate 8.2, 4.3, 5.7)
       EXPECT_GT(hn_test::rate(e[i - 1].R, e[i].R), k + 1 - 0.5) << "k=" << k << " h=" << hs[i];
       EXPECT_GT(hn_test::rate(e[i - 1].L, e[i].L), k + 1 - 0.5) << "k=" << k << " h=" << hs[i];
     }
@@ -408,24 +410,22 @@ TEST(Bootstrap, NobcDiagSlotFilled) { bs::check_case({2, false, LES_NOBC, true, 
 TEST(Bootstrap, TwoLegHorizSlotFilled) { bs::check_case({3, false, LES_2LEG, false, false, SLOT_FIXEQUIV}); }
 TEST(Bootstrap, TwoLegDiagSlotFilled) { bs::check_case({3, false, LES_2LEG, true, false, SLOT_FIXEQUIV}); }
 
-// --- B12: what every user has: the slot (n,l>n) is never written (zero); the code must use Sigma^R(l,n)
-TEST(Bootstrap, KnownBug_B12_NttiHorizSlotZero) {
-  hn_test::run_isolated([] { bs::check_case({1, false, LES_BC, false, false, SLOT_ZERO}); });
-}
-TEST(Bootstrap, KnownBug_B12_NttiDiagSlotZero) {
-  hn_test::run_isolated([] { bs::check_case({1, false, LES_BC, true, false, SLOT_ZERO}); });
-}
-TEST(Bootstrap, KnownBug_B12_TwoLegDiagSlotZero) {
-  hn_test::run_isolated([] { bs::check_case({3, false, LES_2LEG, true, false, SLOT_ZERO}); });
-}
-// --- B13: imp_tp0 = true with N_o = 2 (right-acting system)
-TEST(Bootstrap, KnownBug_B13_NttiImpTp0) {
-  hn_test::run_isolated([] { bs::check_case({1, false, LES_BC, false, true, SLOT_FIXEQUIV}); });
-}
+// --- B12 (fixed in WP1): what every user has: the slot (n,l>n) is never written (zero); the code must use Sigma^R(l,n)
+TEST(Bootstrap, NttiHorizSlotZero) { bs::check_case({1, false, LES_BC, false, false, SLOT_ZERO}); }
+TEST(Bootstrap, NttiDiagSlotZero) { bs::check_case({1, false, LES_BC, true, false, SLOT_ZERO}); }
+TEST(Bootstrap, TwoLegDiagSlotZero) { bs::check_case({3, false, LES_2LEG, true, false, SLOT_ZERO}); }
+// --- B13 (fixed in WP1): imp_tp0 = true with N_o = 2 (right-acting system)
+// (h = 0.05 -> 0.025: at k = 5 the imp_tp0 column G^R(m,0) is pre-asymptotic at h = 0.1, rate 4.3 for 0.1 -> 0.05)
+TEST(Bootstrap, NttiImpTp0) { bs::check_case({1, false, LES_BC, false, true, SLOT_FIXEQUIV}, 5, 0.05); }
 
 TEST(Bootstrap, Slow_StartTTISweep) { bs::check_case_sweep({0, true, LES_BC, false, false, SLOT_ZERO}); }
 TEST(Bootstrap, Slow_NttiDiagSlotFilledSweep) { bs::check_case_sweep({1, false, LES_BC, true, false, SLOT_FIXEQUIV}); }
 TEST(Bootstrap, Slow_TwoLegHorizSlotFilledSweep) { bs::check_case_sweep({3, false, LES_2LEG, false, false, SLOT_FIXEQUIV}); }
+// WP1: the same sweeps as a user gets them (slot (n,l>n) of Sigma^R zero), for ntti, ntti_nobc and 2leg, and imp_tp0
+TEST(Bootstrap, Slow_NttiHorizSlotZeroSweep) { bs::check_case_sweep({1, false, LES_BC, false, false, SLOT_ZERO}); }
+TEST(Bootstrap, Slow_NobcDiagSlotZeroSweep) { bs::check_case_sweep({2, false, LES_NOBC, true, false, SLOT_ZERO}); }
+TEST(Bootstrap, Slow_TwoLegHorizSlotZeroSweep) { bs::check_case_sweep({3, false, LES_2LEG, false, false, SLOT_ZERO}); }
+TEST(Bootstrap, Slow_NttiImpTp0SlotZeroSweep) { bs::check_case_sweep({1, false, LES_BC, false, true, SLOT_ZERO}); }
 
 // =============================================================================================== agent_scratch/51/t_start
 // Exact system (nao orbitals) + bath, full 4x4 complex Hermitian H; G^R and Sigma^R exact.
@@ -478,17 +478,52 @@ void check_order(int nao, bool slot_filled, bool imp, int kmin, int kmax) {
 
 TEST(BootstrapRetNtti, OrderSlotFilled) { ts::check_order(2, true, false, 2, 5); }
 TEST(BootstrapRetNtti, OrderImpTp0SingleOrbital) { ts::check_order(1, true, true, 2, 5); }
-TEST(BootstrapRetNtti, KnownBug_B12_OrderSlotZero) {
-  hn_test::run_isolated([] { ts::check_order(2, false, false, 2, 5); });
-}
-TEST(BootstrapRetNtti, KnownBug_B13_OrderImpTp0TwoOrbitals) {
-  hn_test::run_isolated([] { ts::check_order(2, true, true, 3, 5); });
+TEST(BootstrapRetNtti, OrderSlotZero) { ts::check_order(2, false, false, 2, 5); }                 // B12
+TEST(BootstrapRetNtti, OrderImpTp0TwoOrbitals) { ts::check_order(2, true, true, 3, 5); }          // B13
+TEST(BootstrapRetNtti, OrderImpTp0TwoOrbitalsSlotZero) { ts::check_order(2, false, true, 2, 5); }  // B12 + B13
+
+// B31: the imp_tp0 error estimate must compare all es = N_o^2 entries of the old and new G^R(m,0).
+// A second call on unchanged input reproduces every column bitwise; column 0 is re-solved (not counted), the
+// columns m >= 1 are unchanged, so the returned error is exactly sum_m ||delta_m||_F for a perturbation delta_m
+// put into G^R(m,0) before the second call.
+TEST(BootstrapRetNtti, ImpTp0ErrorEstimateTwoOrbitals) {
+  const int nao = 2, k = 4;
+  const double h = 0.05;
+  ZMatrix Hf(4, 4);
+  Hf << 0.3, 0.4, 0.5, 0.2, 0.4, -0.6, 0.1, 0.7, 0.5, 0.1, 1.1, 0.3, 0.2, 0.7, 0.3, -0.9;
+  Hf(0, 1) += C(0, 0.25);
+  Hf(1, 0) -= C(0, 0.25);
+  ZMatrix Hs = Hf.block(0, 0, nao, nao), V = Hf.block(0, nao, nao, 2), Hb = Hf.block(nao, nao, 2, 2);
+  auto SRex = [&](double dt) { return ZMatrix(V * (-ts::II * ZMatrix((-ts::II * dt * Hb).exp())) * V.adjoint()); };
+  int r = 0;
+  dlr_info dlr(r, 20., 1e-10, 1., nao, -1);
+  int nt = 2 * k + 4;
+  herm_matrix_hodlr G(nt, r, 1, 1e-14, nao, nao, -1, k), S(nt, r, 1, 1e-14, nao, nao, -1, k);
+  for (int n = 0; n <= k; n++)
+    for (int l = 0; l <= n; l++) S.set_ret_curr(n, l, SRex((n - l) * h));
+  std::vector<C> H((k + 1) * nao * nao);
+  for (int l = 0; l <= k; l++) ZMatrixMap(H.data() + l * nao * nao, nao, nao) = Hs;
+  dyson D(nt, nao, k, dlr, true, false);
+  Integration::Integrator I(k);
+  double e1 = D.dyson_start_ret_ntti(G, 0.0, H.data(), S, I, h, true);
+  EXPECT_TRUE(std::isfinite(e1));
+  EXPECT_EQ(D.dyson_start_ret_ntti(G, 0.0, H.data(), S, I, h, true), 0.0) << "repeat call must reproduce G^R";
+  double want = 0;
+  for (int m = 1; m <= k; m++) {
+    ZMatrix d(nao, nao);
+    d << C(1e-3 * m, 2e-4), C(-3e-4, 5e-4 * m), C(7e-4, -1e-4), C(2e-4 * m, 9e-4);  // all es entries nonzero
+    ZMatrixMap(G.curr_timestep_ret_ptr(m, 0), nao, nao) += d;
+    want += d.norm();
+  }
+  double e2 = D.dyson_start_ret_ntti(G, 0.0, H.data(), S, I, h, true);
+  EXPECT_TRUE(std::isfinite(e2));
+  EXPECT_NEAR(e2, want, 1e-12 * want);
 }
 
 // =============================================================================================== B25
 // dyson_start_2leg(function&, ..., imp_tp0) must forward imp_tp0: it must agree with the pointer overload.
-TEST(Bootstrap2leg, KnownBug_B25_FunctionOverloadForwardsImpTp0) {
-  hn_test::run_isolated([] {
+TEST(Bootstrap2leg, FunctionOverloadForwardsImpTp0) {  // B25
+  {
     bs::Model M;
     int xi = -1, r = 0, k = 3, nao = bs::NO;
     double h = 0.05;
@@ -517,5 +552,5 @@ TEST(Bootstrap2leg, KnownBug_B25_FunctionOverloadForwardsImpTp0) {
         d = std::max(d, (ZMatrixMap(G1.curr_timestep_les_ptr(m, n), nao, nao) - ZMatrixMap(G2.curr_timestep_les_ptr(m, n), nao, nao)).norm());
       }
     EXPECT_EQ(d, 0.0) << "function& and pointer overloads differ with imp_tp0=true";
-  });
+  }
 }

@@ -81,7 +81,7 @@ hn_add_test_exe(test_bosonic MODULE bosonic SOURCES test_bosonic.cpp BUGS 1 2 10
 hn_add_test_exe(test_free_extrap MODULE free_extrap SOURCES test_free_extrap.cpp BUGS 2 10)
 hn_add_test_exe(test_hodlr_storage MODULE storage SOURCES test_hodlr_storage.cpp BUGS 9 22 23 26 DEBUG_BUGS 22)
 hn_add_test_exe(test_timestep MODULE timestep SOURCES test_timestep.cpp BUGS 14 28)
-hn_add_test_exe(test_bootstrap MODULE bootstrap SOURCES test_bootstrap.cpp BUGS 12 13 25)
+hn_add_test_exe(test_bootstrap MODULE bootstrap SOURCES test_bootstrap.cpp)
 
 hn_add_test_exe(test_mpi_comm MODULE mpi_comm SOURCES test_mpi_comm.cpp ENV "OMP_NUM_THREADS=4" BUGS 20 21)
 hn_add_test_exe(test_read_inputfile MODULE read_inputfile SOURCES test_read_inputfile.cpp BUGS 15)

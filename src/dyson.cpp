@@ -393,7 +393,7 @@ double dyson::dyson_start_2leg(herm_matrix_hodlr &G, double mu, cplx *H, herm_ma
 double dyson::dyson_start_2leg(herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h, bool imp_tp0) {
   G.can_extrap() = false;
   Sigma.can_extrap() = false;
-  return dyson_start_2leg(G, mu, H.ptr(0), Sigma, I, h);
+  return dyson_start_2leg(G, mu, H.ptr(0), Sigma, I, h, imp_tp0);
 }
 
 /*

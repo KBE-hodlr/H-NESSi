@@ -164,7 +164,7 @@ double dyson::dyson_start_ret_ntti(herm_matrix_hodlr &G, double mu, cplx *H, her
         MMap.block((n-m-1)*nao_, (l-m-1)*nao_, nao_, nao_) += -ncplxi/h * I.poly_diff(n,l) * IMap;
         if(n==l) MMap.block((n-m-1)*nao_, (l-m-1)*nao_, nao_, nao_) += mu*IMap - ZMatrixMap(H + l*es_, nao_, nao_);
         if(n>=l) MMap.block((n-m-1)*nao_, (l-m-1)*nao_, nao_, nao_) += -h*I.poly_integ(m,n,l) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(n,l), nao_, nao_);
-        else     MMap.block((n-m-1)*nao_, (l-m-1)*nao_, nao_, nao_) -= -h*I.poly_integ(m,n,l) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(n,l), nao_, nao_).adjoint();
+        else     MMap.block((n-m-1)*nao_, (l-m-1)*nao_, nao_, nao_) -= -h*I.poly_integ(m,n,l) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(l,n), nao_, nao_).adjoint(); // Sigma^R(n,l) = -Sigma^R(l,n)^dagger
       }
 
     }
@@ -191,10 +191,10 @@ double dyson::dyson_start_ret_ntti(herm_matrix_hodlr &G, double mu, cplx *H, her
       for(int i = 0; i < k_-m; i++)  QMap0 -= h * I.poly_integ(k_-m,k_,i) * ZMatrixMap(G.curr_timestep_ret_ptr(k_-i,m), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_ret_ptr(k_-i,0), nao_, nao_);
       for(int i = k_-m; i < k_; i++) QMap0 += h * I.poly_integ(k_-m,k_,i) * ZMatrixMap(G.curr_timestep_ret_ptr(m,k_-i), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(k_-i,0), nao_, nao_);
 
-      // Solve MX=Q for X
-      Eigen::FullPivLU<ZMatrix> lu(ZMatrixMap(M_.data(), nao_, nao_));
-      ZMatrixMap(X_.data(), nao_, nao_) = lu.solve(ZMatrixMap(Q_.data(), nao_, nao_));
-      err += (ZColVectorMap(GR0.data() + (m-1)*nao_*nao_, nao_, nao_) - ZColVectorMap(X_.data(), es_)).norm();
+      // Solve XM=Q for X, i.e. M^T X^T = Q^T
+      Eigen::FullPivLU<ZMatrix> lu(ZMatrixMap(M_.data(), nao_, nao_).transpose());
+      ZMatrixMap(X_.data(), nao_, nao_) = lu.solve(ZMatrixMap(Q_.data(), nao_, nao_).transpose()).transpose();
+      err += (ZColVectorMap(GR0.data() + (m-1)*es_, es_) - ZColVectorMap(X_.data(), es_)).norm();
       ZMatrixMap(G.curr_timestep_ret_ptr(m,0), nao_, nao_).noalias() = ZMatrixMap(X_.data(), nao_, nao_);
     }
   }
