@@ -83,7 +83,14 @@ dlr_info::dlr_info(int &r, double lambda, double eps, double beta, int nao, int 
 
 
 
+void dlr_info::check_tau_(const char *where, double tau) const {
+  HNESSI_REQUIRE(tau >= 0 && tau <= beta_ * (1 + 1e-14), where, HNESSI_KV(tau), HNESSI_KV(beta_),
+                 detail::note{"the imaginary time must lie in [0, beta]"});
+}
+
 void dlr_info::eval_point(double tau, double *Gtij, double *Mij) {
+  detail::owner_scope busy(owner_, "dlr_info::eval_point");   // ST-10
+  check_tau_("dlr_info::eval_point", tau);
   int es = size1_*size2_;
   int one = 1;
   
@@ -97,6 +104,8 @@ void dlr_info::eval_point(double tau, double *Gtij, double *Mij) {
 }
 
 void dlr_info::eval_point(double tau, double *Gtij, cplx *Mij) {
+  detail::owner_scope busy(owner_, "dlr_info::eval_point");   // ST-10
+  check_tau_("dlr_info::eval_point", tau);
   int es = size1_*size2_;
   int one = 1;
   
@@ -110,6 +119,8 @@ void dlr_info::eval_point(double tau, double *Gtij, cplx *Mij) {
 }
 
 void dlr_info::eval_point(double tau, cplx *Gtij, cplx *Mij) {
+  detail::owner_scope busy(owner_, "dlr_info::eval_point");   // ST-10
+  check_tau_("dlr_info::eval_point", tau);
   int es = size1_*size2_;
   int one = 1;
   
@@ -126,6 +137,8 @@ void dlr_info::eval_point(double tau, cplx *Gtij, cplx *Mij) {
 }
 
 void dlr_info::eval_point(DColVector &tau, double *Gtij, double *Mtij) {
+  detail::owner_scope busy(owner_, "dlr_info::eval_point");   // ST-10
+  for(Eigen::Index i = 0; i < tau.size(); i++) check_tau_("dlr_info::eval_point", tau(i));   // DL-9
   int es = size1_*size2_;
   int one = 1;
   
@@ -142,6 +155,8 @@ void dlr_info::eval_point(DColVector &tau, double *Gtij, double *Mtij) {
 }
 
 void dlr_info::eval_point(DColVector &tau, double *Gtij, cplx *Mtij) {
+  detail::owner_scope busy(owner_, "dlr_info::eval_point");   // ST-10
+  for(Eigen::Index i = 0; i < tau.size(); i++) check_tau_("dlr_info::eval_point", tau(i));   // DL-9
   int es = size1_*size2_;
   int one = 1;
   
@@ -158,6 +173,8 @@ void dlr_info::eval_point(DColVector &tau, double *Gtij, cplx *Mtij) {
 }
 
 void dlr_info::eval_point(DColVector &tau, cplx *Gtij, cplx *Mtij) {
+  detail::owner_scope busy(owner_, "dlr_info::eval_point");   // ST-10
+  for(Eigen::Index i = 0; i < tau.size(); i++) check_tau_("dlr_info::eval_point", tau(i));   // DL-9
   int es = size1_*size2_;
   int one = 1;
   

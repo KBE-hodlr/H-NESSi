@@ -12,6 +12,7 @@
 #include <tuple>
 
 #include "h_nessi/dlr.hpp"
+#include "h_nessi/checks.hpp"
 #include "h_nessi/dyson.hpp"
 #include "h_nessi/function.hpp"
 #include "h_nessi/herm_matrix_hodlr.hpp"
@@ -434,6 +435,10 @@ struct MatSetup {
     } else {
       h0 << 0.4, 0.2, 0.2, -0.3;
       hb << 1.0, 0.3, 0.3, -0.8;
+      if (xi == 1) {  // bosons need h - mu > 0 (WP6b check DY-M10/F10): shift the spectrum up
+        h0 += 0.8 * DMatrix::Identity(nao, nao);
+        hb += 1.2 * ZMatrix::Identity(nao, nao);
+      }
     }
     H.get_map(-1) = h0.cast<C>();
     herm_matrix_hodlr tmp(nt, r, 1, 1e-12, nao, nao, xi, k);
@@ -540,6 +545,10 @@ TEST(DysonMemory, CountsAllBuffers) {
       double matmul = Zb * 2 * ((nt + 1) / 2) * nao;                        // epsnao_tmp_, epsnao_tmp_2_
       double solver = Zb * (2 * (nt + 1) * es + (k + 1) * k * es + 2 * es);  // Q_, X_, M_, iden_, bound_
       double tim = Db * (prof ? nt : 0) * 25 + Db * (nt + 1);               // timing + Hermiticity diagnostic (D-11)
+      // WP6b check state: D-11 deferred slice copy (es complex) + scalars (herm_copy_t_, herm_pend_, herm_pend_rel_,
+      // g0_valid_, stamp_G_, stamp_tstp_, stamp_mask_, owner_, dlr_eps_, dlr_lambda_, les00_warned_)
+      tim += Zb * es + sizeof(int) + sizeof(bool) + sizeof(double) + sizeof(bool) + sizeof(void *) + sizeof(int) +
+             sizeof(unsigned) + sizeof(h_nessi::detail::single_thread_owner) + 2 * sizeof(double) + sizeof(bool);
       EXPECT_EQ(m[0], dlrbuf);
       EXPECT_EQ(m[1], g0);
       EXPECT_EQ(m[2], g0conv);

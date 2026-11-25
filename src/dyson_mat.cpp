@@ -30,7 +30,7 @@ void dyson::ensure_mat_finite_(const char *where) {
 }
 
 double dyson::dyson_mat(herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, bool fixHam, double alpha){
-    call_scope cs(api_depth_);
+    call_scope cs(*this);
     const char *where = "dyson::dyson_mat";
     if(cs.outer()) {
       check_mat_args_(where, G, Sigma, mu, alpha, fixHam);
@@ -66,7 +66,7 @@ double dyson::dyson_mat(herm_matrix_hodlr &G, double mu, function &H, herm_matri
 
 
 double dyson::dyson_mat(herm_matrix_hodlr &G, double mu, DMatrix &H, herm_matrix_hodlr &Sigma, bool fixHam, double alpha){
-    call_scope cs(api_depth_);
+    call_scope cs(*this);
     const char *where = "dyson::dyson_mat";
     if(cs.outer()) {
       check_mat_args_(where, G, Sigma, mu, alpha, fixHam);

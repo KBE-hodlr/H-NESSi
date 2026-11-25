@@ -9,6 +9,7 @@
 #define DLR_DECL
 
 #include "utils.hpp"
+#include "checks.hpp"
 #include <vector>
 
 extern "C"
@@ -53,6 +54,11 @@ private:
   std::vector<double> Gijc_;       /**< Temporary storage for dlr coefficients. */
   std::vector<double> res_;        /**< Temporary storage for results. */
   Eigen::PartialPivLU<DMatrix> LU_; /**< LU decomposition object for matrix operations. */
+  detail::single_thread_owner owner_; /**< ST-10 / DL-10: eval_point uses the scratch Gijc_, res_ (one thread at a time) */
+
+  friend struct dlr_info_test_access;   // tests reach owner_ (ST-10)
+  /** DL-8, DL-9 (tier 2): 0 <= tau <= beta (a few ulps above beta are accepted). */
+  void check_tau_(const char *where, double tau) const;
 
 
 public:
@@ -128,13 +134,19 @@ public:
    * @param i Index
    * @return Value at it0B_[i]
    */
-  double it0B(int i) const { return it0B_[i]; };
+  double it0B(int i) const {
+    HNESSI_ASSERT(0 <= i && i < r_, "dlr_info::it0B", HNESSI_KV(i), HNESSI_KV(r_));   // DL-11 (tier 1)
+    return it0B_[i];
+  };
   /**
    * @brief Returns value from dlrit array at index i.
    * @param i Index
    * @return Value at dlrit_[i]
    */
-  double dlrit(int i) const { return dlrit_[i]; };
+  double dlrit(int i) const {
+    HNESSI_ASSERT(0 <= i && i < r_, "dlr_info::dlrit", HNESSI_KV(i), HNESSI_KV(r_));   // DL-11 (tier 1)
+    return dlrit_[i];
+  };
   /**
    * @brief Returns beta parameter (inverse temperature).
    * @return Beta value.
@@ -171,6 +183,11 @@ public:
    */
   int xi() const {return xi_;};
 
+  /**
+   * The eval_point overloads require 0 <= tau <= beta for every point (tier 2, h_nessi::precondition_error; for
+   * tau < 0 the expansion would return G(tau+beta) without the statistics factor). They use scratch buffers of this
+   * object: one dlr_info must not be used by two threads at the same time (detected, h_nessi::state_error, ST-10).
+   */
   /**
    * @brief Evaluates the DLR expansion at a single imaginary time point.
    * @param tau Imaginary time value.

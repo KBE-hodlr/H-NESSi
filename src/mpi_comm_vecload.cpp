@@ -5,6 +5,9 @@
 namespace h_nessi {
 
 ZMatrixMap mpi_comm::map_ret(int k_global, int t_global) {
+  // MP-15 (tier 1): k in range, the time/tau point in this rank's block (valid after a get; H30, ST-8)
+  HNESSI_ASSERT(0 <= k_global && k_global < Nk_ && my_first_t >= 0 && my_first_t <= t_global && t_global < my_first_t + my_Nt,
+                "mpi_comm::map_ret", HNESSI_KV(k_global), HNESSI_KV(t_global), HNESSI_KV(my_first_t), HNESSI_KV(my_Nt));
   int t_local = t_global - my_first_t;
   int mpi_index = k_rank_map[k_global];
   int k_local = k_global-init_k_per_rank[mpi_index];
@@ -12,30 +15,45 @@ ZMatrixMap mpi_comm::map_ret(int k_global, int t_global) {
 }
 
 ZMatrixMap mpi_comm::map_les(int k_global, int t_global){
+  // MP-15 (tier 1): k in range, the time/tau point in this rank's block (valid after a get; H30, ST-8)
+  HNESSI_ASSERT(0 <= k_global && k_global < Nk_ && my_first_t >= 0 && my_first_t <= t_global && t_global < my_first_t + my_Nt,
+                "mpi_comm::map_les", HNESSI_KV(k_global), HNESSI_KV(t_global), HNESSI_KV(my_first_t), HNESSI_KV(my_Nt));
   int t_local = t_global - my_first_t;
   int mpi_index = k_rank_map[k_global];
   int k_local = k_global-init_k_per_rank[mpi_index];
   return ZMatrixMap(t_allk_buff.data() + t_allk_buff_index(t_local, nao_*nao_, k_local, k_global), nao_, nao_);
 }
 ZMatrixMap mpi_comm::map_tv(int k_global, int tau_global){
+  // MP-15 (tier 1): k in range, the time/tau point in this rank's block (valid after a get; H30, ST-8)
+  HNESSI_ASSERT(0 <= k_global && k_global < Nk_ && my_first_tau >= 0 && my_first_tau <= tau_global && tau_global < my_first_tau + my_Ntau,
+                "mpi_comm::map_tv", HNESSI_KV(k_global), HNESSI_KV(tau_global), HNESSI_KV(my_first_tau), HNESSI_KV(my_Ntau));
   int tau_local = tau_global - my_first_tau;
   int mpi_index = k_rank_map[k_global];
   int k_local = k_global-init_k_per_rank[mpi_index];
   return ZMatrixMap(tau_allk_buff.data() + tau_allk_buff_index(tau_local, 0, k_local, k_global), nao_, nao_);
 }
 ZMatrixMap mpi_comm::map_tv_rev(int k_global, int tau_global){
+  // MP-15 (tier 1): k in range, the time/tau point in this rank's block (valid after a get; H30, ST-8)
+  HNESSI_ASSERT(0 <= k_global && k_global < Nk_ && my_first_tau >= 0 && my_first_tau <= tau_global && tau_global < my_first_tau + my_Ntau,
+                "mpi_comm::map_tv_rev", HNESSI_KV(k_global), HNESSI_KV(tau_global), HNESSI_KV(my_first_tau), HNESSI_KV(my_Ntau));
   int tau_local = tau_global - my_first_tau;
   int mpi_index = k_rank_map[k_global];
   int k_local = k_global-init_k_per_rank[mpi_index];
   return ZMatrixMap(tau_allk_buff.data() + tau_allk_buff_index(tau_local, nao_*nao_, k_local, k_global), nao_, nao_);
 }
 ZMatrixMap mpi_comm::map_mat(int k_global, int tau_global) {
+  // MP-15 (tier 1): k in range, the time/tau point in this rank's block (valid after a get; H30, ST-8)
+  HNESSI_ASSERT(0 <= k_global && k_global < Nk_ && my_first_tau >= 0 && my_first_tau <= tau_global && tau_global < my_first_tau + my_Ntau,
+                "mpi_comm::map_mat", HNESSI_KV(k_global), HNESSI_KV(tau_global), HNESSI_KV(my_first_tau), HNESSI_KV(my_Ntau));
   int tau_local = tau_global - my_first_tau;
   int mpi_index = k_rank_map[k_global];
   int k_local = k_global-init_k_per_rank[mpi_index];
   return ZMatrixMap(tau_allk_buff.data() + tau_allk_buff_index(tau_local, 0, k_local, k_global), nao_, nao_);
 }
 ZMatrixMap mpi_comm::map_mat_rev(int k_global, int tau_global) {
+  // MP-15 (tier 1): k in range, the time/tau point in this rank's block (valid after a get; H30, ST-8)
+  HNESSI_ASSERT(0 <= k_global && k_global < Nk_ && my_first_tau >= 0 && my_first_tau <= tau_global && tau_global < my_first_tau + my_Ntau,
+                "mpi_comm::map_mat_rev", HNESSI_KV(k_global), HNESSI_KV(tau_global), HNESSI_KV(my_first_tau), HNESSI_KV(my_Ntau));
   int tau_local = tau_global - my_first_tau;
   int mpi_index = k_rank_map[k_global];
   int k_local = k_global-init_k_per_rank[mpi_index];
@@ -51,6 +69,10 @@ void mpi_comm::mpi_get_and_comm_spawn
 )
 {
   check_highlevel_components_("mpi_get_and_comm_spawn");
+  check_ti_("mpi_get_and_comm_spawn", ti);   // MP-6
+  check_objects_("mpi_get_and_comm_spawn", ti, hmh_vec.size(), [&](int i) -> herm_matrix_hodlr & { return hmh_vec[i]; });   // MP-8
+  check_dlr_("mpi_get_and_comm_spawn", dlr);   // MP-9
+  debug_collective_("mpi_get_and_comm_spawn", ti, 2*nao_*nao_, 2*nao_*nao_);   // MP-18 (tier 1)
 
   int mpi_rank, mpi_size;
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
@@ -160,7 +182,7 @@ void mpi_comm::mpi_get_and_comm_spawn
   MPI_Alltoallv(tau_alltp_buff.data(), tau_send_counts.data(), tau_send_displs.data(), MPI_CXX_DOUBLE_COMPLEX,
                 tau_allk_buff.data(), tau_recv_counts.data(), tau_recv_displs.data(), MPI_CXX_DOUBLE_COMPLEX,
                 MPI_COMM_WORLD);
-
+  record_get_(ti, 2*nao_*nao_, 2*nao_*nao_, true);   // ST-9
 }
 
 void mpi_comm::mpi_get_and_comm_spawn
@@ -170,6 +192,10 @@ void mpi_comm::mpi_get_and_comm_spawn
 )
 {
   check_highlevel_components_("mpi_get_and_comm_spawn");
+  check_ti_("mpi_get_and_comm_spawn", ti);   // MP-6
+  check_objects_("mpi_get_and_comm_spawn", ti, hmh_vec.size(), [&](int i) -> herm_matrix_hodlr & { return hmh_vec[i].get(); });   // MP-8
+  check_dlr_("mpi_get_and_comm_spawn", dlr);   // MP-9
+  debug_collective_("mpi_get_and_comm_spawn", ti, 2*nao_*nao_, 2*nao_*nao_);   // MP-18 (tier 1)
 
   int mpi_rank, mpi_size;
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
@@ -280,7 +306,7 @@ void mpi_comm::mpi_get_and_comm_spawn
   MPI_Alltoallv(tau_alltp_buff.data(), tau_send_counts.data(), tau_send_displs.data(), MPI_CXX_DOUBLE_COMPLEX,
                 tau_allk_buff.data(), tau_recv_counts.data(), tau_recv_displs.data(), MPI_CXX_DOUBLE_COMPLEX,
                 MPI_COMM_WORLD);
-
+  record_get_(ti, 2*nao_*nao_, 2*nao_*nao_, true);   // ST-9
 }
 
 void mpi_comm::mpi_get_and_comm_nospawn
@@ -291,6 +317,10 @@ void mpi_comm::mpi_get_and_comm_nospawn
 {
   // check before any barrier; identical on every thread (shared state), so all threads throw together
   check_highlevel_components_("mpi_get_and_comm_nospawn");
+  check_ti_("mpi_get_and_comm_nospawn", ti);   // MP-6
+  check_objects_("mpi_get_and_comm_nospawn", ti, hmh_vec.size(), [&](int i) -> herm_matrix_hodlr & { return hmh_vec[i]; });   // MP-8
+  check_dlr_("mpi_get_and_comm_nospawn", dlr);   // MP-9
+  require_funneled_("mpi_get_and_comm_nospawn");   // MP-3
 
   int mpi_rank, mpi_size;
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
@@ -299,6 +329,7 @@ void mpi_comm::mpi_get_and_comm_nospawn
   // B21: partition over the current team (1 outside a parallel region), not omp_get_max_threads()
   int thread_id = omp_get_thread_num();
   int nthreads = omp_get_num_threads();
+  if(thread_id == 0) debug_collective_("mpi_get_and_comm_nospawn", ti, 2*nao_*nao_, 2*nao_*nao_);   // MP-18 (tier 1)
 
   if(ti>=0){
     int tp_size = ti+1;
@@ -409,6 +440,7 @@ void mpi_comm::mpi_get_and_comm_nospawn
     MPI_Alltoallv(tau_alltp_buff.data(), tau_send_counts.data(), tau_send_displs.data(), MPI_CXX_DOUBLE_COMPLEX,
                   tau_allk_buff.data(), tau_recv_counts.data(), tau_recv_displs.data(), MPI_CXX_DOUBLE_COMPLEX,
                   MPI_COMM_WORLD);
+    record_get_(ti, 2*nao_*nao_, 2*nao_*nao_, true);   // ST-9 (thread 0, published by the barrier)
   }
 
   #pragma omp barrier
@@ -422,6 +454,10 @@ void mpi_comm::mpi_get_and_comm_nospawn
 {
   // check before any barrier; identical on every thread (shared state), so all threads throw together
   check_highlevel_components_("mpi_get_and_comm_nospawn");
+  check_ti_("mpi_get_and_comm_nospawn", ti);   // MP-6
+  check_objects_("mpi_get_and_comm_nospawn", ti, hmh_vec.size(), [&](int i) -> herm_matrix_hodlr & { return hmh_vec[i].get(); });   // MP-8
+  check_dlr_("mpi_get_and_comm_nospawn", dlr);   // MP-9
+  require_funneled_("mpi_get_and_comm_nospawn");   // MP-3
 
   int mpi_rank, mpi_size;
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
@@ -430,6 +466,7 @@ void mpi_comm::mpi_get_and_comm_nospawn
   // B21: partition over the current team (1 outside a parallel region), not omp_get_max_threads()
   int thread_id = omp_get_thread_num();
   int nthreads = omp_get_num_threads();
+  if(thread_id == 0) debug_collective_("mpi_get_and_comm_nospawn", ti, 2*nao_*nao_, 2*nao_*nao_);   // MP-18 (tier 1)
 
   if(ti>=0){
     int tp_size = ti+1;
@@ -540,17 +577,11 @@ void mpi_comm::mpi_get_and_comm_nospawn
     MPI_Alltoallv(tau_alltp_buff.data(), tau_send_counts.data(), tau_send_displs.data(), MPI_CXX_DOUBLE_COMPLEX,
                   tau_allk_buff.data(), tau_recv_counts.data(), tau_recv_displs.data(), MPI_CXX_DOUBLE_COMPLEX,
                   MPI_COMM_WORLD);
+    record_get_(ti, 2*nao_*nao_, 2*nao_*nao_, true);   // ST-9 (thread 0, published by the barrier)
   }
 
   #pragma omp barrier
 }
-
-
-
-
-
-
-
 
 void mpi_comm::mpi_comm_and_set_spawn
 (int ti,
@@ -558,6 +589,11 @@ void mpi_comm::mpi_comm_and_set_spawn
 )
 {
   check_highlevel_components_("mpi_comm_and_set_spawn");
+  check_ti_("mpi_comm_and_set_spawn", ti);   // MP-6
+  check_objects_("mpi_comm_and_set_spawn", ti, hmh_vec.size(), [&](int i) -> herm_matrix_hodlr & { return hmh_vec[i]; });   // MP-8
+  require_get_("mpi_comm_and_set_spawn", ti, 2*nao_*nao_, 2*nao_*nao_, true);   // ST-9 (MP-11)
+  debug_collective_("mpi_comm_and_set_spawn", ti, 2*nao_*nao_, 2*nao_*nao_);   // MP-18 (tier 1)
+  clear_get_();
 
   int mpi_rank, mpi_size;
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
@@ -592,6 +628,7 @@ void mpi_comm::mpi_comm_and_set_spawn
           std::copy_n(t_alltp_buff.begin() + index, nao_*nao_, Stmp.begin() + (init_tp_per_rank[mpi_id]+tpi)*nao_*nao_);
         }
       }
+      if(ti == hmh_vec[krank].tstp()) hmh_vec[krank].can_extrap() = false;   // ST-6: row tstp() is written
       std::copy_n(Stmp.begin(), tp_size * nao_*nao_, hmh_vec[krank].curr_timestep_ret_ptr(ti,0));
       //next we do les, which is compi=nao^2
       for(int mpi_id = 0; mpi_id<mpi_size; mpi_id++){
@@ -648,11 +685,24 @@ void mpi_comm::mpi_comm_and_set_spawn
         }
       }
       // cant use copy_n because we are copying into a real array
+      {   // MP-13: the imaginary part of Sigma^M is dropped
+        double im = 0, mx = 0;
+        for(int i = 0; i < r_ * nao_*nao_; i++) {
+          im = std::max(im, std::abs(Stmp[i].imag()));
+          mx = std::max(mx, std::abs(Stmp[i]));
+        }
+        imag_rel_k_[krank] = mx == 0 ? 0. : im / mx;
+      }
       for(int i = 0; i < r_ * nao_*nao_; i++) hmh_vec[krank].matptr(0)[i] = Stmp[i].real();
         });
       }
       omp_errs.rethrow();
     }
+  }
+  if(ti < 0) {   // MP-13
+    double rel = 0;
+    for(double x : imag_rel_k_) rel = std::max(rel, x);
+    warn_imag_mat_("mpi_comm_and_set_spawn", rel);
   }
 };
 
@@ -662,6 +712,11 @@ void mpi_comm::mpi_comm_and_set_spawn
 )
 {
   check_highlevel_components_("mpi_comm_and_set_spawn");
+  check_ti_("mpi_comm_and_set_spawn", ti);   // MP-6
+  check_objects_("mpi_comm_and_set_spawn", ti, hmh_vec.size(), [&](int i) -> herm_matrix_hodlr & { return hmh_vec[i].get(); });   // MP-8
+  require_get_("mpi_comm_and_set_spawn", ti, 2*nao_*nao_, 2*nao_*nao_, true);   // ST-9 (MP-11)
+  debug_collective_("mpi_comm_and_set_spawn", ti, 2*nao_*nao_, 2*nao_*nao_);   // MP-18 (tier 1)
+  clear_get_();
 
   int mpi_rank, mpi_size;
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
@@ -696,6 +751,7 @@ void mpi_comm::mpi_comm_and_set_spawn
           std::copy_n(t_alltp_buff.begin() + index, nao_*nao_, Stmp.begin() + (init_tp_per_rank[mpi_id]+tpi)*nao_*nao_);
         }
       }
+      if(ti == hmh_vec[krank].get().tstp()) hmh_vec[krank].get().can_extrap() = false;   // ST-6: row tstp() is written
       std::copy_n(Stmp.begin(), tp_size * nao_*nao_, hmh_vec[krank].get().curr_timestep_ret_ptr(ti,0));
       //next we do les, which is compi=nao^2=nao_*nao_
       for(int mpi_id = 0; mpi_id<mpi_size; mpi_id++){
@@ -752,14 +808,26 @@ void mpi_comm::mpi_comm_and_set_spawn
         }
       }
       // cant use copy_n because we are copying into a real array
+      {   // MP-13: the imaginary part of Sigma^M is dropped
+        double im = 0, mx = 0;
+        for(int i = 0; i < r_ * nao_*nao_; i++) {
+          im = std::max(im, std::abs(Stmp[i].imag()));
+          mx = std::max(mx, std::abs(Stmp[i]));
+        }
+        imag_rel_k_[krank] = mx == 0 ? 0. : im / mx;
+      }
       for(int i = 0; i < r_ * nao_*nao_; i++) hmh_vec[krank].get().matptr(0)[i] = Stmp[i].real();
         });
       }
       omp_errs.rethrow();
     }
   }
+  if(ti < 0) {   // MP-13
+    double rel = 0;
+    for(double x : imag_rel_k_) rel = std::max(rel, x);
+    warn_imag_mat_("mpi_comm_and_set_spawn", rel);
+  }
 };
-
 
 void mpi_comm::mpi_comm_and_set_nospawn
 (int ti,
@@ -768,6 +836,10 @@ void mpi_comm::mpi_comm_and_set_nospawn
 {
   // check before any barrier; identical on every thread (shared state), so all threads throw together
   check_highlevel_components_("mpi_comm_and_set_nospawn");
+  check_ti_("mpi_comm_and_set_nospawn", ti);   // MP-6
+  check_objects_("mpi_comm_and_set_nospawn", ti, hmh_vec.size(), [&](int i) -> herm_matrix_hodlr & { return hmh_vec[i]; });   // MP-8
+  require_funneled_("mpi_comm_and_set_nospawn");   // MP-3
+  require_get_("mpi_comm_and_set_nospawn", ti, 2*nao_*nao_, 2*nao_*nao_, true);   // ST-9 (MP-11)
 
   int mpi_rank, mpi_size;
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
@@ -776,6 +848,12 @@ void mpi_comm::mpi_comm_and_set_nospawn
   // B21: partition over the current team (1 outside a parallel region), not omp_get_max_threads()
   int thread_id = omp_get_thread_num();
   int nthreads = omp_get_num_threads();
+  // every thread has passed require_get_ before this barrier; then thread 0 consumes the get record (ST-9)
+  #pragma omp barrier
+  if(thread_id == 0) {
+    debug_collective_("mpi_comm_and_set_nospawn", ti, 2*nao_*nao_, 2*nao_*nao_);   // MP-18 (tier 1)
+    clear_get_();
+  }
 
   if(ti>=0){
     int tp_size = ti+1;
@@ -816,7 +894,8 @@ void mpi_comm::mpi_comm_and_set_nospawn
             std::copy_n(t_alltp_buff.begin() + index, nao_*nao_, Stmp.begin() + (init_tp_per_rank[mpi_id]+tpi)*nao_*nao_);
           }
         }
-        std::copy_n(Stmp.begin(), tp_size * nao_*nao_, hmh_vec[krank].curr_timestep_ret_ptr(ti,0));
+        if(ti == hmh_vec[krank].tstp()) hmh_vec[krank].can_extrap() = false;   // ST-6: row tstp() is written
+      std::copy_n(Stmp.begin(), tp_size * nao_*nao_, hmh_vec[krank].curr_timestep_ret_ptr(ti,0));
         //next we do les, which is compi=nao^2
         for(int mpi_id = 0; mpi_id<mpi_size; mpi_id++){
           for(int tpi=0; tpi<Ntp_per_rank[mpi_id]; tpi++){
@@ -872,13 +951,26 @@ void mpi_comm::mpi_comm_and_set_nospawn
           }
         }
         // cant use copy_n because we are copying into a real array
-        for(int i = 0; i < r_ * nao_*nao_; i++) hmh_vec[krank].matptr(0)[i] = Stmp[i].real();
+        {   // MP-13: the imaginary part of Sigma^M is dropped
+        double im = 0, mx = 0;
+        for(int i = 0; i < r_ * nao_*nao_; i++) {
+          im = std::max(im, std::abs(Stmp[i].imag()));
+          mx = std::max(mx, std::abs(Stmp[i]));
+        }
+        imag_rel_k_[krank] = mx == 0 ? 0. : im / mx;
+      }
+      for(int i = 0; i < r_ * nao_*nao_; i++) hmh_vec[krank].matptr(0)[i] = Stmp[i].real();
       }
     }
   }
 
   // H24: other threads' k-points must be fully written before any thread reads them
   #pragma omp barrier
+  if(thread_id == 0 && ti < 0) {   // MP-13 (after the final barrier: every thread has written its k-points)
+    double rel = 0;
+    for(double x : imag_rel_k_) rel = std::max(rel, x);
+    warn_imag_mat_("mpi_comm_and_set_nospawn", rel);
+  }
 };
 
 void mpi_comm::mpi_comm_and_set_nospawn
@@ -888,6 +980,10 @@ void mpi_comm::mpi_comm_and_set_nospawn
 {
   // check before any barrier; identical on every thread (shared state), so all threads throw together
   check_highlevel_components_("mpi_comm_and_set_nospawn");
+  check_ti_("mpi_comm_and_set_nospawn", ti);   // MP-6
+  check_objects_("mpi_comm_and_set_nospawn", ti, hmh_vec.size(), [&](int i) -> herm_matrix_hodlr & { return hmh_vec[i].get(); });   // MP-8
+  require_funneled_("mpi_comm_and_set_nospawn");   // MP-3
+  require_get_("mpi_comm_and_set_nospawn", ti, 2*nao_*nao_, 2*nao_*nao_, true);   // ST-9 (MP-11)
 
   int mpi_rank, mpi_size;
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
@@ -896,6 +992,12 @@ void mpi_comm::mpi_comm_and_set_nospawn
   // B21: partition over the current team (1 outside a parallel region), not omp_get_max_threads()
   int thread_id = omp_get_thread_num();
   int nthreads = omp_get_num_threads();
+  // every thread has passed require_get_ before this barrier; then thread 0 consumes the get record (ST-9)
+  #pragma omp barrier
+  if(thread_id == 0) {
+    debug_collective_("mpi_comm_and_set_nospawn", ti, 2*nao_*nao_, 2*nao_*nao_);   // MP-18 (tier 1)
+    clear_get_();
+  }
 
   if(ti>=0){
     int tp_size = ti+1;
@@ -936,7 +1038,8 @@ void mpi_comm::mpi_comm_and_set_nospawn
             std::copy_n(t_alltp_buff.begin() + index, nao_*nao_, Stmp.begin() + (init_tp_per_rank[mpi_id]+tpi)*nao_*nao_);
           }
         }
-        std::copy_n(Stmp.begin(), tp_size * nao_*nao_, hmh_vec[krank].get().curr_timestep_ret_ptr(ti,0));
+        if(ti == hmh_vec[krank].get().tstp()) hmh_vec[krank].get().can_extrap() = false;   // ST-6: row tstp() is written
+      std::copy_n(Stmp.begin(), tp_size * nao_*nao_, hmh_vec[krank].get().curr_timestep_ret_ptr(ti,0));
         //next we do les, which is compi=nao^2
         for(int mpi_id = 0; mpi_id<mpi_size; mpi_id++){
           for(int tpi=0; tpi<Ntp_per_rank[mpi_id]; tpi++){
@@ -992,13 +1095,26 @@ void mpi_comm::mpi_comm_and_set_nospawn
           }
         }
         // cant use copy_n because we are copying into a real array
-        for(int i = 0; i < r_ * nao_*nao_; i++) hmh_vec[krank].get().matptr(0)[i] = Stmp[i].real();
+        {   // MP-13: the imaginary part of Sigma^M is dropped
+        double im = 0, mx = 0;
+        for(int i = 0; i < r_ * nao_*nao_; i++) {
+          im = std::max(im, std::abs(Stmp[i].imag()));
+          mx = std::max(mx, std::abs(Stmp[i]));
+        }
+        imag_rel_k_[krank] = mx == 0 ? 0. : im / mx;
+      }
+      for(int i = 0; i < r_ * nao_*nao_; i++) hmh_vec[krank].get().matptr(0)[i] = Stmp[i].real();
       }
     }
   }
 
   // H24: other threads' k-points must be fully written before any thread reads them
   #pragma omp barrier
+  if(thread_id == 0 && ti < 0) {   // MP-13 (after the final barrier: every thread has written its k-points)
+    double rel = 0;
+    for(double x : imag_rel_k_) rel = std::max(rel, x);
+    warn_imag_mat_("mpi_comm_and_set_nospawn", rel);
+  }
 };
 
 } // namespace 

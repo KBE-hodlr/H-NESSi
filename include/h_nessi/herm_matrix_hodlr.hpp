@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <cstdint>
 
 #include "block.hpp"
@@ -8,6 +9,7 @@
 #include <fstream>
 #include "integration.hpp"
 #include "dlr.hpp"
+#include "checks.hpp"
 
 #ifdef INCLUDE_NESSI
 // NESSi interoperability (BUGS B8, WP-N). Only the class template is needed for the declarations below; code that
@@ -103,25 +105,16 @@ class herm_matrix_hodlr{
    */
   herm_matrix_hodlr(h5e::File &in, std::string label);
 
-  // geometry helpers
-  /** Compute and store information about block levels and row/column indices of directly stored regions.
-   * @return maxdir - maximum number of directly-stored entries in a row
-   */
-  int getbkl_indices(void);
-
-  /** Initialize internal geometry arrays for a given number of timesteps and hierarchical levels.
-   * @param nt Number of time steps
-   * @param nlvl Number of hierarchical levels
-   */
-  void init_shape(int nt,int nlvl);
-
   /** Map a time pair (t1,t2) into an index for directly stored column layout.
+   * Precondition (tier 1): 0 <= t1 < nt and c1_dir(t1) <= t2 <= t1 (the pair lies in the yellow direct triangle).
    * @param t1 first time argument
    * @param t2 second time argument
    */
   int time2direct_col(int t1,int t2);
 
   /** Map a time pair (t1,t2) into a HODLR block index.
+   * Precondition: 0 <= t1 < nt and 0 <= t2 < c1_dir(t1) (tier 1); a pair outside every compressed block throws
+   * h_nessi::precondition_error (always on: it is only evaluated on the failure path).
    * @param t1 first time argument
    * @param t2 second time argument
    */
@@ -140,8 +133,14 @@ class herm_matrix_hodlr{
   int tstpmk(void) const {return tstpmk_;};
   int tstp(void) const {return tstpmk_ + k_;};
   int maxdir(void) const {return maxdir_;};
-  void set_tstpmk(int tstpmk) {tstpmk_=tstpmk;};
+  /** Set the window start tstpmk (bootstrap reset to 0, restart). Tier 2: 0 <= tstpmk <= nt (HM-C14). */
+  void set_tstpmk(int tstpmk) {
+    HNESSI_REQUIRE(0 <= tstpmk && tstpmk <= nt_, "herm_matrix_hodlr::set_tstpmk", HNESSI_KV(tstpmk), HNESSI_KV(nt_));
+    tstpmk_=tstpmk;
+  };
   int k(void) const {return k_;};
+  /** true between update_blocks and the first write into row tstp() (extrapolate, solver calls and the setters of
+   * row tstp() clear it; ST-6). */
   bool &can_extrap(void) {return can_extrap_;};
 
 
@@ -152,61 +151,66 @@ class herm_matrix_hodlr{
   double *GMConvTens(void) {return GMConvTensMatrix_.data();};
   DMatrix &GMConvTensMatrix(void) {return GMConvTensMatrix_;};
     
-  /** Modified Gram-Schmidt used by low-rank updates. Returns 
-   * pre-normalization norm of vector x
-   * @param V Matrix to orthogonalize against (columns are basis vectors)
-   * @param b Vector to orthogonalize
-   * @param x  output normalized vector
-   * @param Vb output vector
-   */
-  double mgs(const ZMatrix &V,const ZRowVector &b,const ZRowVector &x_,const ZRowVector &Vb_);
-
-  /**
-   * Update an existing block `B` by adding the information contained in
-   * `row` (complex row vector). `row_cur` is the current row index in the
-   * global time/orbital layout. This routine may trigger an SVD update and
-   * rank truncation based on the instance's svdtol_. If `print` is true,
-   * the routine outputs diagnostic information.
-   */
-  void updatetsvd(block &B,const ZRowVector &row,int row_cur, bool print = false);
-
   /** Update all blocks that depend on the current state. The Integrator
    * `I` provides quadrature/weight tables potentially needed during
-   * updates (e.g., when building direct-to-lowrank interfaces). */
+   * updates (e.g., when building direct-to-lowrank interfaces).
+   * Tier 2: I.k() == k() (HM-U2, precondition_error) and 0 <= tstpmk() < nt() (HM-U1, state_error: at most
+   * nt-k-1 time steps plus the final k+1 flush calls). */
   void update_blocks(Integration::Integrator &I);
 
   // Geometry accessors
   /** Number of blocks that have been built/initialized. */
   int built_blocks(void) const {return built_blocks_;};
-  /** first row index of block blk. */
-  int blkr1(int blk) {if(blk==-1) return 0; else return blkr1_[blk];};
+  // Index preconditions of the geometry getters are tier 1 (HNESSI_ASSERT, HM-C15..C18).
+  /** first row index of block blk (-1 <= blk < nbox; blk == -1 gives 0). */
+  int blkr1(int blk) {
+    HNESSI_ASSERT(-1 <= blk && blk < nbox_, "herm_matrix_hodlr::blkr1", HNESSI_KV(blk), HNESSI_KV(nbox_));
+    if(blk==-1) return 0; else return blkr1_[blk];
+  };
   /** last row index of block blk. */
-  int blkr2(int blk) {return blkr2_[blk];};
+  int blkr2(int blk) {check_blk_("herm_matrix_hodlr::blkr2", blk); return blkr2_[blk];};
   /** first column index of block blk. */
-  int blkc1(int blk) {return blkc1_[blk];};
+  int blkc1(int blk) {check_blk_("herm_matrix_hodlr::blkc1", blk); return blkc1_[blk];};
   /** last column index of block blk. */
-  int blkc2(int blk) {return blkc2_[blk];};
-  /** last column index of block blk. */
-  int blkdirheight(int blk)  {return blkdirheight_[blk];};
+  int blkc2(int blk) {check_blk_("herm_matrix_hodlr::blkc2", blk); return blkc2_[blk];};
+  /** height of the direct square at the top of block blk (0 <= blk <= nbox; blk == nbox is the last square). */
+  int blkdirheight(int blk)  {
+    HNESSI_ASSERT(0 <= blk && blk <= nbox_, "herm_matrix_hodlr::blkdirheight", HNESSI_KV(blk), HNESSI_KV(nbox_));
+    return blkdirheight_[blk];
+  };
   /** column index of first directly stored element in row tstp */
-  int c1_dir(int tstp) {return c1_dir_[tstp];};
+  int c1_dir(int tstp) {check_t_("herm_matrix_hodlr::c1_dir", tstp); return c1_dir_[tstp];};
   /** row index of last directly stored element in column tstp */
-  int r2_dir(int tstp) {return r2_dir_[tstp];};
+  int r2_dir(int tstp) {check_t_("herm_matrix_hodlr::r2_dir", tstp); return r2_dir_[tstp];};
   /** number of directly stored elements in each row */
-  int ntri(int tstp) {return ntri_[tstp];};
+  int ntri(int tstp) {check_t_("herm_matrix_hodlr::ntri", tstp); return ntri_[tstp];};
   /** the current timestep minus k (integration order) */
   int tstpmk(void) {return tstpmk_;};
   /** number of built rows in each blocks */
-  int blklen(int blkindex) {return blklen_[blkindex];};
+  int blklen(int blkindex) {check_blk_("herm_matrix_hodlr::blklen", blkindex); return blklen_[blkindex];};
   /** number of directly stored lesser component elements */
   int len_les_dir_square() { return len_les_dir_square_; }
   /** index of triangluar direct region at row t */
-  int t_to_dirlvl(int t) { return t_to_dirlvl_[t]; }
+  int t_to_dirlvl(int t) { check_t_("herm_matrix_hodlr::t_to_dirlvl", t); return t_to_dirlvl_[t]; }
   /** first index in les_dir_square_ for level lvl - data is stored as (i,j,t1,t2), row-major for time indices*/
-  int les_dir_square_first_index(int lvl) { return les_dir_square_first_index_[lvl]; }
+  int les_dir_square_first_index(int lvl) {
+    HNESSI_ASSERT(0 <= lvl && lvl <= nbox_, "herm_matrix_hodlr::les_dir_square_first_index", HNESSI_KV(lvl),
+                  HNESSI_KV(nbox_));
+    return les_dir_square_first_index_[lvl];
+  }
 
     
   // Accessors (Get)
+  // Preconditions (doc 61 §2.2-2.5). Single-element accessors and raw pointers are hot paths: their index checks are
+  // tier 1 (HNESSI_ASSERT, Debug/RelWithAsserts only). last = min(tstp(), nt()-1) is the last row that is both
+  // computed and allocated.
+  //  - get_ret/get_les(t1,t2): 0 <= t1,t2 <= last; *_curr(t1,t2): max(t1,t2) in the window [tstpmk, tstpmk+k],
+  //    min(t1,t2) >= 0; map_ret_curr/set_ret_curr(t1,t2): t1 in the window, 0 <= t2 <= max(t1,k) (t2 > t1 only for the
+  //    bootstrap continuation entries t2 <= k); map_les_curr/set_les_curr(t1,t2): t2 in the window, 0 <= t1 <= max(t2,k); get_tv/set_tv/tvptr(t,tau): 0 <= t < nt, 0 <= tau < r; matptr/get_mat/set_mat(i): 0 <= i < r;
+  //    Eigen-matrix arguments of get_mat/set_* must already have size1 x size2 (they are not resized).
+  //  - The DLR evaluators (get_mat_tau*, get_tv_tau*, get_*_reversed, get_vt, density_matrix) check once per call
+  //    (tier 2, precondition_error): dlr has r() and the orbital size of this object, 0 <= tau <= beta, the row
+  //    tstp is computed (0 <= tstp <= last; density_matrix: -1 <= tstp <= last), Eigen outputs are large enough.
   /**
    * Evaluate the Matsubara/mixed component at DLR time `tau` and write the
    * real-valued matrix into `M`.
@@ -294,7 +298,8 @@ class herm_matrix_hodlr{
   void set_mat(int i, const double *M);
   template <typename Derived>
   void set_mat(int i, const Eigen::MatrixBase<Derived>& expr) {
-    assert(expr.rows() == size1_ && expr.cols() == size2_ && "Expression size mismatch!");
+    HNESSI_ASSERT(expr.rows() == size1_ && expr.cols() == size2_, "herm_matrix_hodlr::set_mat", HNESSI_KV(expr.rows()),
+                  HNESSI_KV(expr.cols()), HNESSI_KV(size1_));
     double* raw_dest_ptr = matptr(i);
     Eigen::Map<DMatrix> dest_map(raw_dest_ptr, size1_, size2_);
     dest_map = expr;
@@ -304,7 +309,9 @@ class herm_matrix_hodlr{
   void set_tv(int t1, int t2, const cplx* M);
   template <typename Derived>
   void set_tv(int t1, int t2, const Eigen::MatrixBase<Derived>& expr) {
-    assert(expr.rows() == size1_ && expr.cols() == size2_ && "Expression size mismatch!");
+    HNESSI_ASSERT(expr.rows() == size1_ && expr.cols() == size2_, "herm_matrix_hodlr::set_tv", HNESSI_KV(expr.rows()),
+                  HNESSI_KV(expr.cols()), HNESSI_KV(size1_));
+    if(t1 == tstpmk_+k_) can_extrap_ = false;   // ST-6
     cplx* raw_dest_ptr = tvptr(t1, t2);
     Eigen::Map<ZMatrix> dest_map(raw_dest_ptr, size1_, size2_);
     dest_map = expr;
@@ -317,7 +324,10 @@ class herm_matrix_hodlr{
   void set_ret_curr(int t1, int t2, const cplx* M);
   template <typename Derived>
   void set_ret_curr(int t1, int t2, const Eigen::MatrixBase<Derived>& expr) {
-    assert(expr.rows() == size1_ && expr.cols() == size2_ && "Expression size mismatch!");
+    HNESSI_ASSERT(expr.rows() == size1_ && expr.cols() == size2_, "herm_matrix_hodlr::set_ret_curr",
+                  HNESSI_KV(expr.rows()), HNESSI_KV(expr.cols()), HNESSI_KV(size1_));
+    check_ret_curr_("herm_matrix_hodlr::set_ret_curr", t1, t2);
+    if(t1 == tstpmk_+k_) can_extrap_ = false;   // ST-6
     cplx* raw_dest_ptr = curr_timestep_ret_ptr(t1, t2);
     Eigen::Map<ZMatrix> dest_map(raw_dest_ptr, size1_, size2_);
     dest_map = expr;
@@ -327,7 +337,10 @@ class herm_matrix_hodlr{
   void set_les_curr(int t1, int t2, const cplx* M);
   template <typename Derived>
   void set_les_curr(int t1, int t2, const Eigen::MatrixBase<Derived>& expr) {
-    assert(expr.rows() == size1_ && expr.cols() == size2_ && "Expression size mismatch!");
+    HNESSI_ASSERT(expr.rows() == size1_ && expr.cols() == size2_, "herm_matrix_hodlr::set_les_curr",
+                  HNESSI_KV(expr.rows()), HNESSI_KV(expr.cols()), HNESSI_KV(size1_));
+    check_les_curr_("herm_matrix_hodlr::set_les_curr", t1, t2);
+    if(t2 == tstpmk_+k_) can_extrap_ = false;   // ST-6
     cplx* raw_dest_ptr = curr_timestep_les_ptr(t1, t2);
     Eigen::Map<ZMatrix> dest_map(raw_dest_ptr, size1_, size2_);
     dest_map = expr;
@@ -335,12 +348,12 @@ class herm_matrix_hodlr{
 
   // Get/set for current timesteps
   // get_* copies FROM *this INTO G, set_* copies FROM G INTO *this; neither modifies its source.
-  // Both objects must have the same nt, r, size1, size2 and k (asserted).
+  // Both objects must have the same nt, nlvl, r, size1, size2, sig and k (tier 2, h_nessi::precondition_error).
   /** Copy timestep `tstp` of *this into `G` (*this is not modified).
    * tstp == -1: copy the Matsubara component (mat); no window requirement.
    * tstp >= 0: copy row tstp of the retarded buffer, column tstp of the lesser
    * buffer (entries 0..nt) and the tv/tv_trans row; tstp must lie in the current
-   * window [tstpmk, tstpmk+k] of both *this and G. */
+   * window [tstpmk, tstpmk+k] of both *this and G (tier 2, precondition_error). */
   void get_timestep_curr(int tstp,herm_matrix_hodlr &G);
   /** Copy the whole current window of *this into `G` (*this is not modified):
    * sets G.tstpmk = this->tstpmk and copies the k+1 timesteps tstpmk..tstpmk+k
@@ -372,7 +385,10 @@ class herm_matrix_hodlr{
   cplx *curr_timestep_ret_ptr(int t, int tp);
 
   /** Compute internal linear offset for tv storage. */
-  int tv_offset(int t, int tau) {assert(t <= nt_ && tau < r_); return t*r_*size1_*size2_ + tau*size1_*size2_;}
+  int tv_offset(int t, int tau) {
+    check_tv_("herm_matrix_hodlr::tv_offset", t, tau);
+    return t*r_*size1_*size2_ + tau*size1_*size2_;
+  }
 
   /** Pointer to directly stored retarded data in column-major order. */
   std::complex<double>* retptr_col(int t, int t1); // Directly stored data in col order
@@ -381,10 +397,11 @@ class herm_matrix_hodlr{
   std::complex<double>* retptr_corr(int t, int t1); // Directly stored data up to k+1 below diagonal
 
   // Algebraic operations on timesteps
-  /** Increment the current timestep buffer for `tstp` by `alpha * G`. */
+  /** Increment the current timestep buffer for `tstp` by `alpha * G`. Tier 2 (HM-T5): G has the geometry of *this;
+   * tstp == -1 (Matsubara) or tstp lies in the windows of both *this and G (G's slot is read). */
   void incr_timestep_curr(int tstp,herm_matrix_hodlr &G,cplx alpha);
 
-  /** Scale stored current-timestep data for `tstp` by `alpha`. */
+  /** Scale stored current-timestep data for `tstp` by `alpha` (tstp == -1 or in the window; tier 1). */
   void smul_curr(int tstp,cplx alpha);
 
   /** Set the circular buffer corresponding to timestep `tstp` to zero. */
@@ -424,10 +441,13 @@ class herm_matrix_hodlr{
   /** Write a lightweight checkpoint containing the current runtime buffers. */
   void write_checkpoint_hdf5(h5e::File &out, std::string label);
 
-  /** Write the full object to HDF5 under `label`. */
+  /** Write the full object to HDF5 under `label`. Prints a warning (h_nessi::detail::warn) if the k+1 final
+   * update_blocks calls have not been made (tstpmk() < nt(): rows >= tstpmk are not in the archive written here).
+   * If `geometry/<geometry_label>` already exists it must describe the same geometry (tier 2). */
   void write_to_hdf5(h5e::File &out, std::string label, std::string geometry_label = "");
 
-  /** Write the density matrix (rho) to HDF5 using `dlr` for Matsubara transforms. */
+  /** Write the density matrix (rho) to HDF5 using `dlr` for Matsubara transforms (all rows must be computed:
+   * tstp() >= nt()-1, tier 2). */
   void write_rho_to_hdf5(h5e::File &out, std::string label, dlr_info &dlr);
 
   /** Write per-block ranks to HDF5 for diagnostics. */
@@ -439,10 +459,10 @@ class herm_matrix_hodlr{
   /** Write the current circular buffers to HDF5. */
   void write_curr_to_hdf5(h5e::File &out, std::string label);
 
-  /** Write GL0 (left boundary) helper data to HDF5. */
+  /** Write GL0 (left boundary) helper data to HDF5 (all rows must be computed: tstp() >= nt()-1, tier 2). */
   void write_GL0_to_hdf5(h5e::File &out, std::string label);
 
-  /** Write GR0 (right boundary) helper data to HDF5. */
+  /** Write GR0 (right boundary) helper data to HDF5 (all rows must be computed: tstp() >= nt()-1, tier 2). */
   void write_GR0_to_hdf5(h5e::File &out, std::string label);
 
   /** Print a small report on memory usage (compressed and full) to stdout. 
@@ -452,6 +472,65 @@ class herm_matrix_hodlr{
 
 
   private:
+  // Tests reach the private numerical kernels (mgs, updatetsvd) through this struct (defined in the test sources).
+  friend struct herm_matrix_hodlr_test_access;
+
+  // geometry helpers (private, doc 61 Q-12)
+  /** Compute and store information about block levels and row/column indices of directly stored regions.
+   * @return maxdir - maximum number of directly-stored entries in a row
+   */
+  int getbkl_indices(void);
+
+  /** Initialize internal geometry arrays for nt_ = nt and nlvl_ = nlvl (k_, size1_, size2_ must be set). */
+  void init_shape(int nt,int nlvl);
+
+  /** Modified Gram-Schmidt used by low-rank updates. Returns
+   * pre-normalization norm of vector x
+   * @param V Matrix to orthogonalize against (columns are basis vectors)
+   * @param b Vector to orthogonalize
+   * @param x  output normalized vector
+   * @param Vb output vector
+   */
+  double mgs(const ZMatrix &V,const ZRowVector &b,const ZRowVector &x_,const ZRowVector &Vb_);
+
+  /**
+   * Update an existing block `B` by adding the information contained in
+   * `row` (complex row vector). `row_cur` is the current row index in the
+   * global time/orbital layout. This routine may trigger an SVD update and
+   * rank truncation based on the instance's svdtol_. If `print` is true,
+   * the routine outputs diagnostic information.
+   */
+  void updatetsvd(block &B,const ZRowVector &row,int row_cur, bool print = false);
+
+  /// @private last row that is computed and allocated: min(tstp(), nt-1)
+  int last_row_() const { return std::min(tstpmk_ + k_, nt_ - 1); }
+  /// @private tier-1 index checks shared by the inline accessors
+  void check_blk_(const char *where, int b) const {
+    HNESSI_ASSERT(0 <= b && b < nbox_, where, HNESSI_KV(b), HNESSI_KV(nbox_));
+  }
+  void check_t_(const char *where, int t) const {
+    HNESSI_ASSERT(0 <= t && t < nt_, where, HNESSI_KV(t), HNESSI_KV(nt_));
+  }
+  void check_tv_(const char *where, int t, int tau) const {
+    HNESSI_ASSERT(0 <= t && t < nt_ && 0 <= tau && tau < r_, where, HNESSI_KV(t), HNESSI_KV(tau), HNESSI_KV(nt_),
+                  HNESSI_KV(r_));
+  }
+  // R: row t1 in the window, 0 <= t2 <= max(t1, k) (the entries t1 < t2 <= k of the bootstrap rows hold the
+  // continuation G^R(t1,t2) used by the non-TTI bootstrap and archived into ret_left_edge, doc 22); < likewise.
+  void check_ret_curr_(const char *where, int t1, int t2) const {
+    HNESSI_ASSERT(tstpmk_ <= t1 && t1 <= tstpmk_ + k_ && 0 <= t2 && t2 <= std::max(t1, k_), where, HNESSI_KV(t1),
+                  HNESSI_KV(t2), HNESSI_KV(tstpmk_), HNESSI_KV(k_));
+  }
+  void check_les_curr_(const char *where, int t1, int t2) const {
+    HNESSI_ASSERT(tstpmk_ <= t2 && t2 <= tstpmk_ + k_ && 0 <= t1 && t1 <= std::max(t2, k_), where, HNESSI_KV(t1),
+                  HNESSI_KV(t2), HNESSI_KV(tstpmk_), HNESSI_KV(k_));
+  }
+  /// @private tier-2 checks of the DLR evaluators (getit)
+  void check_tau_(const char *where, double tau, const dlr_info &dlr) const;
+  void check_row_(const char *where, int tstp) const;
+  /// @private HM-T1..T5 (tier 2): G has the geometry of *this
+  void check_same_geometry_(const char *where, herm_matrix_hodlr &G) const;
+
   DMatrix timing;
 // ######################### GEOMETRY ################################
     /// @private
@@ -601,11 +680,19 @@ class herm_matrix_hodlr{
                                 int k);
 };
 
+/**
+ * @name Distances between two herm_matrix_hodlr objects (absolute Frobenius norm of the difference)
+ * Preconditions (tier 2, h_nessi::precondition_error): equal size1 and size2; curr_ret/curr_les: 0 <= tstp in the
+ * current windows of both objects and tstp < nt of both; mat, tv: equal r; tv: 0 <= tstp < min(g1.nt(), g2.nt());
+ * curr: tstp >= -1 (-1 is the Matsubara distance).
+ */
+///@{
 double distance_norm2_curr(int tstp, herm_matrix_hodlr &g1, herm_matrix_hodlr &g2);
 double distance_norm2_mat(herm_matrix_hodlr &g1, herm_matrix_hodlr &g2);
 double distance_norm2_curr_ret(int tstp, herm_matrix_hodlr &g1, herm_matrix_hodlr &g2);
 double distance_norm2_curr_les(int tstp, herm_matrix_hodlr &g1, herm_matrix_hodlr &g2);
 double distance_norm2_tv(int tstp, herm_matrix_hodlr &g1, herm_matrix_hodlr &g2);
+///@}
 
 #ifdef INCLUDE_NESSI
 /**
@@ -631,9 +718,10 @@ double distance_norm2_tv(int tstp, herm_matrix_hodlr &g1, herm_matrix_hodlr &g2)
  *  - distance_norm2_curr(tstp,g1,g2,dlr)  = distance_norm2_mat(g1,g2,dlr) for tstp == -1, otherwise
  *                                           sqrt( curr_ret^2 + curr_les^2 + tv^2 ) at tstp.
  *
- * Preconditions (checked, std::invalid_argument): equal size1/size2 (square), equal sig, g2.nt() >= tstp; for the
+ * Preconditions (checked, h_nessi::precondition_error): equal size1/size2 (square), equal sig, g2.nt() >= tstp; for the
  * real-time rows g1 must hold row tstp in its current window (g1.tstpmk() <= tstp <= g1.tstp()); for mat/tv
- * g2.ntau() >= 1 and dlr.r() == g1.r(), dlr.xi() == g1.sig(), dlr.size1() == g1.size1(); tv needs 0 <= tstp < g1.nt().
+ * g2.ntau() >= 1 and dlr.r() == g1.r(), dlr.xi() == g1.sig(), dlr.size1() == g1.size1(); tv needs a computed row,
+ * 0 <= tstp <= min(g1.tstp(), g1.nt()-1). The checks throw h_nessi::precondition_error (a std::invalid_argument).
  * The beta of NESSi's tau grid is taken from dlr.beta() (NESSi does not store beta).
  * Not thread-safe for a shared dlr_info (eval_point uses dlr scratch, doc 03).
  */

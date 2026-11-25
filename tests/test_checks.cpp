@@ -568,6 +568,9 @@ TEST(Hermiticity, NonHermitianHThrowsBeforeModifyingIt) {
   int T = s.k + 1;
   s.G.update_blocks(s.I);
   s.S.update_blocks(s.I);
+  // WP6b (maintainer decision (a)): the tolerances apply to the h(T) of the corrector solves; the first solve of the
+  // step (predictor) is done with a Hermitian h(T), the corrector h(T) is broken
+  EXPECT_NO_THROW(s.D.dyson_timestep(T, s.G, s.mu, s.H, s.S, s.I, s.h));
   ZMatrix bad = s.H.get_map(T);
   bad(0, 1) += 0.5;  // O(1) anti-Hermitian part
   s.H.get_map(T) = bad;
@@ -650,6 +653,9 @@ TEST(Hermiticity, WarnsOnceAndTolerancesAreSettable) {
   int T = s.k + 1;
   s.G.update_blocks(s.I);
   s.S.update_blocks(s.I);
+  // corrector solves (the tolerances apply to the h(T) of the corrector solves, WP6b): predictor with the Hermitian
+  // h(T), then the perturbed h(T)
+  s.D.dyson_timestep(T, s.G, s.mu, s.H, s.S, s.I, s.h);
   ZMatrix hp = s.H.get_map(T);
   hp(1, 0) += 1e-3;  // rel ~ 1e-3: above warn (1e-4), below err (1e-2)
   s.H.get_map(T) = hp;
@@ -660,6 +666,7 @@ TEST(Hermiticity, WarnsOnceAndTolerancesAreSettable) {
             std::string::npos) << err;
   s.G.update_blocks(s.I);
   s.S.update_blocks(s.I);
+  s.D.dyson_timestep(T + 1, s.G, s.mu, s.H, s.S, s.I, s.h);
   hp = s.H.get_map(T + 1);
   hp(1, 0) += 1e-3;
   s.H.get_map(T + 1) = hp;
@@ -672,6 +679,7 @@ TEST(Hermiticity, WarnsOnceAndTolerancesAreSettable) {
   EXPECT_EQ(s.D.hermiticity_err_tol(), 1e-5);
   s.G.update_blocks(s.I);
   s.S.update_blocks(s.I);
+  s.D.dyson_timestep(T + 2, s.G, s.mu, s.H, s.S, s.I, s.h);
   hp = s.H.get_map(T + 2);
   hp(1, 0) += 1e-3;
   s.H.get_map(T + 2) = hp;

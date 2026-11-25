@@ -3,12 +3,20 @@
 #include <string>
 
 #include "h_nessi/herm_matrix_hodlr.hpp"
+#include "h_nessi/checks.hpp"
 
 namespace h_nessi {
 
+// HM-R13, LX-7 (tier 2, once per call): -1 <= tstp <= last (row tstp computed and allocated)
+void herm_matrix_hodlr::check_row_(const char *where, int tstp) const {
+  HNESSI_REQUIRE(0 <= tstp && tstp <= last_row_(), where, HNESSI_KV(tstp), HNESSI_KV(tstpmk_ + k_), HNESSI_KV(nt_),
+                 detail::note{"row tstp must be computed (0 <= tstp <= min(tstp(), nt()-1))"});
+}
+
 void herm_matrix_hodlr::density_matrix(int tstp, dlr_info &dlr, DMatrix &M){
-  assert(M.rows() == size1_ && M.cols() == size2_);
-  assert(tstp >= -1 && tstp <= nt_);
+  HNESSI_REQUIRE(M.rows() == size1_ && M.cols() == size2_, "herm_matrix_hodlr::density_matrix", HNESSI_KV(M.rows()),
+                 HNESSI_KV(M.cols()), HNESSI_KV(size1_));
+  if(tstp != -1) check_row_("herm_matrix_hodlr::density_matrix", tstp);
     if (tstp == -1) {
         check_dlr_("herm_matrix_hodlr::density_matrix", dlr);
         get_mat_tau(dlr.beta(),dlr,M);
@@ -22,8 +30,9 @@ void herm_matrix_hodlr::density_matrix(int tstp, dlr_info &dlr, DMatrix &M){
 }
 
 void herm_matrix_hodlr::density_matrix(int tstp, dlr_info &dlr, ZMatrix &M){
-  assert(M.rows() == size1_ && M.cols() == size2_);
-  assert(tstp >= -1 && tstp <= nt_);
+  HNESSI_REQUIRE(M.rows() == size1_ && M.cols() == size2_, "herm_matrix_hodlr::density_matrix", HNESSI_KV(M.rows()),
+                 HNESSI_KV(M.cols()), HNESSI_KV(size1_));
+  if(tstp != -1) check_row_("herm_matrix_hodlr::density_matrix", tstp);
     if (tstp == -1) {
         check_dlr_("herm_matrix_hodlr::density_matrix", dlr);
         get_mat_tau(dlr.beta(),dlr,M);
@@ -35,6 +44,9 @@ void herm_matrix_hodlr::density_matrix(int tstp, dlr_info &dlr, ZMatrix &M){
 }
 
 void herm_matrix_hodlr::get_ret(int t1, int t2, cplx *M){
+    // HM-R1, LX-6 (tier 1): a row above tstp() would read an aliased circular slot
+    HNESSI_ASSERT(0 <= t1 && t1 <= last_row_() && 0 <= t2 && t2 <= last_row_(), "herm_matrix_hodlr::get_ret",
+                  HNESSI_KV(t1), HNESSI_KV(t2), HNESSI_KV(tstpmk_ + k_), HNESSI_KV(nt_));
     if(t1 >= t2){
         if( t1 >= tstpmk_) {
           ZMatrixMap(M, size1_, size2_).noalias() = ZMatrixMap(curr_timestep_ret_ptr(t1,t2), size1_, size2_);
@@ -50,6 +62,8 @@ void herm_matrix_hodlr::get_ret(int t1, int t2, cplx *M){
         }
         else {               // compressed get
             int b=time2block(t1,t2);
+            HNESSI_ASSERT(b < built_blocks_ && t1-blkr1_[b] < blklen_[b], "herm_matrix_hodlr::get_ret", HNESSI_KV(b),
+                          HNESSI_KV(built_blocks_), HNESSI_KV(t1), HNESSI_KV(blklen_[b]));   // HM-R3: row archived
             ret_.get_compress(t1-blkr1_[b],t2-blkc1_[b],b,M);
         }
     }else{
@@ -67,6 +81,8 @@ void herm_matrix_hodlr::get_ret(int t1, int t2, cplx *M){
         }
         else {               // compressed get
             int b=time2block(t2,t1);
+            HNESSI_ASSERT(b < built_blocks_ && t2-blkr1_[b] < blklen_[b], "herm_matrix_hodlr::get_ret", HNESSI_KV(b),
+                          HNESSI_KV(built_blocks_), HNESSI_KV(t2), HNESSI_KV(blklen_[b]));   // HM-R3
             ret_.get_compress(t2-blkr1_[b],t1-blkc1_[b],b,M);
         }
         ZMatrixMap MMap(M, size1_, size2_);
@@ -76,14 +92,14 @@ void herm_matrix_hodlr::get_ret(int t1, int t2, cplx *M){
 }
 
 void herm_matrix_hodlr::get_ret(int t1, int t2, ZMatrix &M){
-    assert(t1<=nt_ && t2<=nt_);
     M.resize(size1_,size2_);
     get_ret(t1, t2, M.data());
 }
 
 void herm_matrix_hodlr::get_ret_curr(int t1, int t2, cplx *M){
-    assert(t1 <= tstpmk_+k_);
-    assert(t1 >= tstpmk_);
+    // HM-R4, LX-8: the stored row is max(t1,t2)
+    HNESSI_ASSERT(tstpmk_ <= std::max(t1,t2) && std::max(t1,t2) <= tstpmk_+k_ && std::min(t1,t2) >= 0,
+                  "herm_matrix_hodlr::get_ret_curr", HNESSI_KV(t1), HNESSI_KV(t2), HNESSI_KV(tstpmk_), HNESSI_KV(k_));
     if(t1>=t2){
         memcpy(M,curr_timestep_ret_ptr(t1,t2),size1_*size2_*sizeof(cplx));
     }else{
@@ -95,8 +111,6 @@ void herm_matrix_hodlr::get_ret_curr(int t1, int t2, cplx *M){
 }
 
 void herm_matrix_hodlr::get_ret_curr(int t1, int t2, ZMatrix &M){
-    assert(t1 <= tstpmk_+k_);
-    assert(t1 >= tstpmk_);
     M.resize(size1_,size2_);
     get_ret_curr(t1, t2, M.data());
 }
@@ -119,6 +133,9 @@ void herm_matrix_hodlr::get_ret_corr(int t1, int t2, ZMatrix &M){
 
 
 void herm_matrix_hodlr::get_les(int t1, int t2, cplx* M){
+    // HM-R6, LX-6 (tier 1)
+    HNESSI_ASSERT(0 <= t1 && t1 <= last_row_() && 0 <= t2 && t2 <= last_row_(), "herm_matrix_hodlr::get_les",
+                  HNESSI_KV(t1), HNESSI_KV(t2), HNESSI_KV(tstpmk_ + k_), HNESSI_KV(nt_));
     if(t2 >= t1){
         if( t2 >= tstpmk_) {
           ZMatrixMap(M, size1_, size2_).noalias() = ZMatrixMap(curr_timestep_les_ptr(t1,t2), size1_, size2_);
@@ -129,10 +146,14 @@ void herm_matrix_hodlr::get_les(int t1, int t2, cplx* M){
             int row = t2 - blkr1(dirlvl-1);
             int col = t1 - c1_dir_[t2];
             int width = blkdirheight_[dirlvl];
+            HNESSI_ASSERT(0 <= row && row < width && 0 <= col && col < width, "herm_matrix_hodlr::get_les",
+                          HNESSI_KV(row), HNESSI_KV(col), HNESSI_KV(width));   // HM-R8: inside the direct square
             int index = first_index + row*width + col;
             ZMatrixMap(M, size1_, size2_).noalias() = Eigen::Map<Eigen::Matrix<cplx, -1, -1, Eigen::RowMajor>, 0, Eigen::InnerStride<> >(les_dir_square_.data() + index, size1_, size2_, Eigen::InnerStride<>(len_les_dir_square_));
         }else{               // compressed get
             int b=time2block(t2,t1);
+            HNESSI_ASSERT(b < built_blocks_ && t2-blkr1_[b] < blklen_[b], "herm_matrix_hodlr::get_les", HNESSI_KV(b),
+                          HNESSI_KV(built_blocks_), HNESSI_KV(t2), HNESSI_KV(blklen_[b]));   // HM-R8 (blue)
             les_.get_compress(t2-blkr1_[b],t1-blkc1_[b],b,M);
         }
     }else{
@@ -145,10 +166,14 @@ void herm_matrix_hodlr::get_les(int t1, int t2, cplx* M){
             int row = t1 - blkr1(dirlvl-1);
             int col = t2 - c1_dir_[t1];
             int width = blkdirheight_[dirlvl];
+            HNESSI_ASSERT(0 <= row && row < width && 0 <= col && col < width, "herm_matrix_hodlr::get_les",
+                          HNESSI_KV(row), HNESSI_KV(col), HNESSI_KV(width));   // HM-R8
             int index = first_index + row*width + col;
             ZMatrixMap(M, size1_, size2_).noalias() = Eigen::Map<Eigen::Matrix<cplx, -1, -1, Eigen::RowMajor>, 0, Eigen::InnerStride<> >(les_dir_square_.data() + index, size1_, size2_, Eigen::InnerStride<>(len_les_dir_square_));
         }else{               // compressed get
             int b=time2block(t1,t2);
+            HNESSI_ASSERT(b < built_blocks_ && t1-blkr1_[b] < blklen_[b], "herm_matrix_hodlr::get_les", HNESSI_KV(b),
+                          HNESSI_KV(built_blocks_), HNESSI_KV(t1), HNESSI_KV(blklen_[b]));   // HM-R8 (blue)
             les_.get_compress(t1-blkr1_[b],t2-blkc1_[b],b,M);
         }
         ZMatrixMap MMap(M, size1_, size2_);
@@ -158,15 +183,15 @@ void herm_matrix_hodlr::get_les(int t1, int t2, cplx* M){
 }
 
 void herm_matrix_hodlr::get_les(int t1, int t2, ZMatrix &M){
-    assert(t1<=nt_ && t2<=nt_);
     M.resize(size1_,size2_);
 
     get_les(t1, t2, M.data());
 }
 
 void herm_matrix_hodlr::get_les_curr(int t1, int t2, cplx *M){
-    assert(t2 <= tstpmk_+k_);
-    assert(t2 >= tstpmk_);
+    // HM-R9, LX-8: the stored column is max(t1,t2)
+    HNESSI_ASSERT(tstpmk_ <= std::max(t1,t2) && std::max(t1,t2) <= tstpmk_+k_ && std::min(t1,t2) >= 0,
+                  "herm_matrix_hodlr::get_les_curr", HNESSI_KV(t1), HNESSI_KV(t2), HNESSI_KV(tstpmk_), HNESSI_KV(k_));
     if(t1<=t2){
         memcpy(M,curr_timestep_les_ptr(t1,t2),size1_*size2_*sizeof(cplx));
     }else{
@@ -178,37 +203,35 @@ void herm_matrix_hodlr::get_les_curr(int t1, int t2, cplx *M){
 }
 
 void herm_matrix_hodlr::get_les_curr(int t1, int t2, ZMatrix &M){
-    assert(t2 <= tstpmk_+k_);
-    assert(t2 >= tstpmk_);
     M.resize(size1_,size2_);
     get_les_curr(t1, t2, M.data());
 }
 
 void herm_matrix_hodlr::get_tv(int t1, int t2, cplx* M){
-    assert(t1<=nt_ && t2<r_);
+    check_tv_("herm_matrix_hodlr::get_tv", t1, t2);   // HM-R10, LX-5
     memcpy(M,tvptr(t1,t2),size1_*size2_*sizeof(cplx));
 }
 
 void herm_matrix_hodlr::get_tv(int t1, int t2, ZMatrix &M){
-    assert(t1<=nt_ && t2<r_);
     M.resize(size1_,size2_);
     get_tv(t1, t2, M.data());
 }
 
 void herm_matrix_hodlr::get_tv_trans(int t1, int t2, cplx* M){
-    assert(t1<=nt_ && t2<r_);
+    check_tv_("herm_matrix_hodlr::get_tv_trans", t1, t2);   // HM-R10, LX-5
     memcpy(M,tvptr_trans(t1,t2),size1_*size2_*sizeof(cplx));
 }
 
 void herm_matrix_hodlr::get_tv_trans(int t1, int t2, ZMatrix &M){
-    assert(t1<=nt_ && t2<r_);
     M.resize(size1_,size2_);
     get_tv_trans(t1, t2, M.data());
 }
 
 void herm_matrix_hodlr::get_mat(int t1, DMatrix &M) {
-  assert(t1 < r_ && t1 >=0);
-    memcpy(M.data(), mat_.data() + t1*size1_*size2_, size1_*size2_*sizeof(double));
+  // HM-R12: memcpy writes size1*size2 entries into M, which is not resized
+  HNESSI_ASSERT(M.rows() == size1_ && M.cols() == size2_, "herm_matrix_hodlr::get_mat", HNESSI_KV(M.rows()),
+                HNESSI_KV(M.cols()), HNESSI_KV(size1_), HNESSI_KV(size2_));
+  memcpy(M.data(), matptr(t1), size1_*size2_*sizeof(double));
 }
 
 } // namespace 

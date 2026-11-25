@@ -5,7 +5,33 @@ using namespace std::chrono;
 
 namespace h_nessi {
 
+// DY-G1, DY-G3 (tier 2): G and Delta share the geometry and match this dyson
+void dyson::check_gamma_args_(const char *where, herm_matrix_hodlr &G, herm_matrix_hodlr &Delta) {
+  HNESSI_REQUIRE(G.size1() == nao_ && G.size2() == nao_ && G.r() == r_ && G.sig() == xi_, where, HNESSI_KV(G.size1()),
+                 HNESSI_KV(nao_), HNESSI_KV(G.r()), HNESSI_KV(r_), HNESSI_KV(G.sig()), HNESSI_KV(xi_));
+  HNESSI_REQUIRE(Delta.nt() == G.nt() && Delta.nlvl() == G.nlvl() && Delta.k() == G.k() &&
+                 Delta.size1() == G.size1() && Delta.size2() == G.size2() && Delta.r() == G.r() &&
+                 Delta.sig() == G.sig(), where, HNESSI_KV(Delta.nt()), HNESSI_KV(G.nt()), HNESSI_KV(Delta.k()),
+                 HNESSI_KV(G.k()), HNESSI_KV(Delta.size1()), HNESSI_KV(G.size1()), HNESSI_KV(Delta.r()),
+                 HNESSI_KV(G.r()), HNESSI_KV(Delta.sig()), HNESSI_KV(G.sig()),
+                 detail::note{"G and Delta must have the same geometry"});
+}
+
 void dyson::gamma_integral(int tstp, herm_matrix_hodlr &G, herm_matrix_hodlr &Delta, double h, Integration::Integrator &I, cplx *res) {
+  call_scope cs(*this);
+  if(cs.outer()) {
+    const char *where = "dyson::gamma_integral";
+    check_gamma_args_(where, G, Delta);   // DY-G1
+    HNESSI_REQUIRE(I.k() == k_ && G.k() == k_ && std::isfinite(h) && h > 0, where, HNESSI_KV(I.k()), HNESSI_KV(G.k()),
+                   HNESSI_KV(k_), HNESSI_KV(h));
+    // DY-G2: row tstp of both objects is in their windows; for tstp < k the rows tstp+1..k are read as well
+    HNESSI_REQUIRE(0 <= tstp && tstp < G.nt(), where, HNESSI_KV(tstp), HNESSI_KV(G.nt()));
+    HNESSI_REQUIRE_STATE(G.tstpmk() <= tstp && tstp <= G.tstpmk()+k_ && Delta.tstpmk() <= tstp &&
+                         tstp <= Delta.tstpmk()+k_ && (tstp >= k_ || (G.tstpmk() == 0 && Delta.tstpmk() == 0)),
+                         where, HNESSI_KV(tstp), HNESSI_KV(G.tstpmk()), HNESSI_KV(Delta.tstpmk()), HNESSI_KV(k_),
+                         detail::note{"tstp must be in the current windows of G and Delta (for tstp < k: the bootstrap "
+                                      "windows 0..k)"});
+  }
   memset(res, 0, nao_*nao_*sizeof(cplx));
   ZMatrixMap resMap(res, nao_, nao_);
   cplx cplxi = cplx(0.,1.);
@@ -33,6 +59,8 @@ void dyson::gamma_integral(int tstp, herm_matrix_hodlr &G, herm_matrix_hodlr &De
 }
 
 void dyson::gamma_integral_mat(herm_matrix_hodlr &G, herm_matrix_hodlr &Delta, double h, Integration::Integrator &I, cplx *res) {
+  call_scope cs(*this);
+  if(cs.outer()) check_gamma_args_("dyson::gamma_integral_mat", G, Delta);   // DY-G3
 
   memset(res, 0, nao_*nao_*sizeof(cplx));
   ZMatrixMap resMap(res, nao_, nao_);
@@ -72,7 +100,7 @@ void dyson::check_it_args_(const char *where, int tstp, herm_matrix_hodlr &Sigma
 }
 
 void dyson::tv_it_conv(int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G, cplx *res) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   if(cs.outer()) {
     check_it_args_("dyson::tv_it_conv", tstp, Sigma, G);
     G.require_gmconv_current("dyson::tv_it_conv");   // ST-2
@@ -83,12 +111,13 @@ void dyson::tv_it_conv(int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G,
 // C_{mjbk} \Sigma_{bik} = I_{ij}
 // Sigma is assumed to be transposed, ie \Sigma^\lceil_{ik} is stored as \Sigma^\lceil_{ki}
 void dyson::tv_it_conv(int m, cplx *Sigma, cplx *res,double *GMConvTens) {
+  HNESSI_ASSERT(0 <= m && m < r_, "dyson::tv_it_conv", HNESSI_KV(m), HNESSI_KV(r_));   // DY-I1 (tier 1)
   // I_{ij} = C_{jbk} Sigma_{bki}
   ZMatrixMap(res, nao_, nao_).noalias() += (DMatrixMap(GMConvTens + m*nao_*nao_*r_, nao_, r_*nao_) * ZMatrixMap(Sigma, r_*nao_, nao_)).transpose();
 }
 
 void dyson::tv_it_conv(int m, int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G, cplx *res) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   if(cs.outer()) {
     check_it_args_("dyson::tv_it_conv", tstp, Sigma, G);
     HNESSI_REQUIRE(0 <= m && m < r_, "dyson::tv_it_conv", HNESSI_KV(m), HNESSI_KV(r_));
@@ -104,17 +133,12 @@ void dyson::tv_it_conv(int m, int tstp, herm_matrix_hodlr &Sigma, herm_matrix_ho
 // Result goes into res VIA INCREMENT
 // Integral is transposed in ij indicies
 void dyson::les_it_int(int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G, cplx* res) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   if(cs.outer()) check_it_args_("dyson::les_it_int", tstp, Sigma, G);   // DY-I3
-  assert(tstp <= G.nt());
-  assert(tstp <= Sigma.nt());
-  assert(tstp <= nt_);
-  assert(G.size1() == Sigma.size1());
-  assert(G.size1() == nao_);
-  assert(G.sig() == xi_);
-  assert(G.sig() == Sigma.sig());
-  assert(G.r() == Sigma.r());
-  assert(G.r() == r_);
+  // LX-15 (tier 1; the tier-2 checks run at the public entry)
+  HNESSI_ASSERT(0 <= tstp && tstp < G.nt() && tstp < Sigma.nt() && tstp < nt_ && G.size1() == Sigma.size1() &&
+                G.size1() == nao_ && G.sig() == xi_ && G.sig() == Sigma.sig() && G.r() == Sigma.r() && G.r() == r_,
+                "dyson::les_it_int", HNESSI_KV(tstp), HNESSI_KV(G.nt()), HNESSI_KV(Sigma.nt()), HNESSI_KV(nt_));
 
   cplx mimxi = cplx(0, xi_);
 
@@ -136,20 +160,15 @@ void dyson::les_it_int(int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G,
 // Result goes into res VIA INCREMENT
 // Integral is transposed in ij indicies
 void dyson::les_it_int(int t, int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G, cplx* res) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   if(cs.outer()) {   // DY-I4
     check_it_args_("dyson::les_it_int", tstp, Sigma, G);
     HNESSI_REQUIRE(0 <= t && t < Sigma.nt(), "dyson::les_it_int", HNESSI_KV(t), HNESSI_KV(Sigma.nt()));
   }
-  assert(tstp <= G.nt());
-  assert(tstp <= Sigma.nt());
-  assert(tstp <= nt_);
-  assert(G.size1() == Sigma.size1());
-  assert(G.size1() == nao_);
-  assert(G.sig() == xi_);
-  assert(G.sig() == Sigma.sig());
-  assert(G.r() == Sigma.r());
-  assert(G.r() == r_);
+  // LX-15 (tier 1; the tier-2 checks run at the public entry)
+  HNESSI_ASSERT(0 <= tstp && tstp < G.nt() && tstp < Sigma.nt() && tstp < nt_ && G.size1() == Sigma.size1() &&
+                G.size1() == nao_ && G.sig() == xi_ && G.sig() == Sigma.sig() && G.r() == Sigma.r() && G.r() == r_,
+                "dyson::les_it_int", HNESSI_KV(tstp), HNESSI_KV(G.nt()), HNESSI_KV(Sigma.nt()), HNESSI_KV(nt_));
 
   cplx mimxi = cplx(0, xi_);
 
@@ -164,6 +183,15 @@ void dyson::les_it_int(int t, int tstp, herm_matrix_hodlr &Sigma, herm_matrix_ho
 }
 
 void dyson::tv_ret_int(int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G, Integration::Integrator &I, double h) {
+  call_scope cs(*this);
+  if(cs.outer()) {   // DY-I5 (tier 2)
+    const char *where = "dyson::tv_ret_int";
+    check_it_args_(where, tstp, Sigma, G);
+    HNESSI_REQUIRE(0 < tstp && I.k() == k_ && std::isfinite(h) && h > 0, where, HNESSI_KV(tstp), HNESSI_KV(I.k()),
+                   HNESSI_KV(k_), HNESSI_KV(h));
+    HNESSI_REQUIRE_STATE(Sigma.tstpmk() <= tstp && tstp <= Sigma.tstpmk()+Sigma.k(), where, HNESSI_KV(tstp),
+                         HNESSI_KV(Sigma.tstpmk()), detail::note{"row tstp of Sigma must be in its current window"});
+  }
   memset(NTauTmp2_.data(),0,r_*es_*sizeof(cplx));
 
   for( int t = 0; t < tstp; t++ ) {
@@ -177,6 +205,14 @@ void dyson::tv_ret_int(int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G,
 
 // Integral is transposed in ij indicies
 void dyson::les_lesadv_int_0_tstp(int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G, double h, Integration::Integrator &I) {
+  call_scope cs(*this);
+  if(cs.outer()) {   // DY-I6 (tier 2): G and Sigma geometry and windows are mixed in this integral (doc 21 §4)
+    const char *where = "dyson::les_lesadv_int_0_tstp";
+    check_solver_args_(where, G, Sigma, I, h, 0.);
+    HNESSI_REQUIRE_STATE(G.tstpmk() == Sigma.tstpmk() && tstp == G.tstpmk()+k_, where, HNESSI_KV(tstp),
+                         HNESSI_KV(G.tstpmk()), HNESSI_KV(Sigma.tstpmk()), HNESSI_KV(k_),
+                         detail::note{"G and Sigma must be at the same step and tstp == G.tstpmk()+k"});
+  }
 
   ZMatrixMap(X_.data(), nao_, (tstp+1)*nao_).noalias() = h * ZMatrixMap(G.curr_timestep_ret_ptr(tstp, 0), (tstp+1)*nao_, nao_).adjoint();
   ZMatrixMap(M_.data(), nao_, (k_+1)*nao_).noalias() = h * ZMatrixMap(G.curr_timestep_ret_ptr(tstp, 0), (k_+1)*nao_, nao_).adjoint();
@@ -255,6 +291,9 @@ void dyson::les_lesadv_int_0_tstp(int tstp, herm_matrix_hodlr &Sigma, herm_matri
         int blkcols = Sigma.les().data().blocks()[b][i][k].cols();
         int epsrank = Sigma.les().data().blocks()[b][i][k].epsrank();
         int blkr1 = Sigma.blkr1(b);
+        // DY-T9 (tier 1): the block fits the dyson scratch
+        HNESSI_ASSERT(epsrank*nao_ <= (int)epsnao_tmp_.size(), "dyson::les_lesadv_int_0_tstp", HNESSI_KV(epsrank),
+                      HNESSI_KV(epsnao_tmp_.size()));
         ZMatrixMap tmp(epsnao_tmp_.data(), epsrank, nao_);
         ZMatrixMap tmp2(epsnao_tmp_2_.data(), epsrank, nao_);
 
@@ -280,6 +319,9 @@ void dyson::les_lesadv_int_0_tstp(int tstp, herm_matrix_hodlr &Sigma, herm_matri
         int blkcols = Sigma.les().data().blocks()[b][k][i].cols();
         int epsrank = Sigma.les().data().blocks()[b][k][i].epsrank();
         int blkr1 = Sigma.blkr1(b);
+        // DY-T9 (tier 1): the block fits the dyson scratch
+        HNESSI_ASSERT(epsrank*nao_ <= (int)epsnao_tmp_.size(), "dyson::les_lesadv_int_0_tstp", HNESSI_KV(epsrank),
+                      HNESSI_KV(epsnao_tmp_.size()));
         ZMatrixMap tmp(epsnao_tmp_.data(), epsrank, nao_);
         ZMatrixMap tmp2(epsnao_tmp_2_.data(), epsrank, nao_);
 

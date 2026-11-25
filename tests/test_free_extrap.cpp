@@ -5,6 +5,7 @@
 #include <cmath>
 #include <unsupported/Eigen/MatrixFunctions>
 
+#include "h_nessi/checks.hpp"
 #include "h_nessi/dyson.hpp"
 #include "common/test_util.hpp"
 
@@ -47,7 +48,10 @@ void check_green_from_H(int xi, int cplxH) {
   dlr_info dlr(c.r, c.lambda, c.eps, c.beta, c.nao, xi);
   herm_matrix_hodlr G(c.nt, c.r, 2, 1e-12, c.nao, c.nao, xi, c.k);
   dyson D(c.nt, c.nao, c.k, dlr, true, false);
-  D.green_from_H(G, c.mu, c.H, c.h, c.k, true);
+  // DY-F9 (WP6b): G^M is stored real, so a complex H with inc_mat=true throws (like dyson_mat); a complex H is
+  // propagated without G^M
+  if (cplxH) EXPECT_THROW(D.green_from_H(G, c.mu, c.H, c.h, c.k, true), h_nessi::precondition_error);
+  D.green_from_H(G, c.mu, c.H, c.h, c.k, !cplxH);
   double eR = 0, eL = 0, eTV = 0, eM = 0;
   ZMatrix M(c.nao, c.nao);
   DMatrix DM(c.nao, c.nao);

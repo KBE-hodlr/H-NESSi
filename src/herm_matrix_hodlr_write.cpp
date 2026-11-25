@@ -7,6 +7,14 @@
 
 namespace h_nessi {
 
+namespace {
+// HM-C11 (tier 2): a checkpoint dataset must have the size implied by the stored geometry
+void require_dataset_size(const char *where, const std::string &name, long long got, long long expected) {
+  HNESSI_REQUIRE(got == expected, where, HNESSI_KV(name), HNESSI_KV(got), HNESSI_KV(expected),
+                 detail::note{"the checkpoint dataset does not match the stored geometry (corrupt or foreign file)"});
+}
+}  // namespace
+
 herm_matrix_hodlr::herm_matrix_hodlr(h5e::File &in, std::string label) :
   r_(in.getDataSet(label + std::string("/r")).read<int>())
 {
@@ -24,12 +32,19 @@ herm_matrix_hodlr::herm_matrix_hodlr(h5e::File &in, std::string label) :
   // HM-C11 (scalar part, tier 2): the stored geometry must be one the constructor accepts
   check_geometry_("herm_matrix_hodlr::herm_matrix_hodlr(h5e::File&,label)", nt_, r_, nlvl_, svdtol_, size1_, size2_,
                   sig_, k_);
-  HNESSI_REQUIRE(0 <= tstpmk_ && tstpmk_ <= nt_, "herm_matrix_hodlr::herm_matrix_hodlr(h5e::File&,label)",
-                 HNESSI_KV(tstpmk_), HNESSI_KV(nt_));
-  
+  const char *where = "herm_matrix_hodlr::herm_matrix_hodlr(h5e::File&,label)";
+  HNESSI_REQUIRE(0 <= tstpmk_ && tstpmk_ <= nt_, where, HNESSI_KV(tstpmk_), HNESSI_KV(nt_));
+  const long long es = (long long)size1_ * size2_;
+
   mat_.resize(r_ * size1_ * size2_);
-  DMatrixMap(mat_.data(), r_, size1_*size2_) = in.getDataSet(label + std::string("/mat")).read<DMatrix>();
+  {
+    DMatrix m = in.getDataSet(label + std::string("/mat")).read<DMatrix>();
+    HNESSI_REQUIRE(m.rows() == r_ && m.cols() == es, where, HNESSI_KV(m.rows()), HNESSI_KV(m.cols()), HNESSI_KV(r_),
+                   HNESSI_KV(es), detail::note{"dataset mat must be r x size1*size2"});
+    DMatrixMap(mat_.data(), r_, size1_*size2_) = m;
+  }
   GMConvTensMatrix_ = in.getDataSet(label + std::string("/GMConvTensMatrix")).read<DMatrix>();
+  require_dataset_size(where, "GMConvTensMatrix", GMConvTensMatrix_.size(), (long long)r_ * r_ * es);
 
   // Checkpoints without format_version (or older than 2) were written before the bosonic sign fix of
   // initGMConvTensor: for bosons the stored GMConvTensMatrix has the wrong sign.
@@ -54,9 +69,19 @@ herm_matrix_hodlr::herm_matrix_hodlr(h5e::File &in, std::string label) :
 
   curr_timestep_ret_ = in.getDataSet(label + std::string("/curr_timestep_ret")).read<std::vector<cplx>>();
   curr_timestep_les_ = in.getDataSet(label + std::string("/curr_timestep_les")).read<std::vector<cplx>>();
+  require_dataset_size(where, "curr_timestep_ret", curr_timestep_ret_.size(), (long long)(k_+1) * (nt_+1) * es);
+  require_dataset_size(where, "curr_timestep_les", curr_timestep_les_.size(), (long long)(k_+1) * (nt_+1) * es);
 
   init_shape(nt_,nlvl_);
+  // init_shape sized every direct store from the geometry: the datasets read below must have the same sizes
+  const long long len_les_dir = les_dir_square_.size(), len_edge = les_left_edge_.size(),
+                  len_corr = ret_corr_below_tri_.size();
   blklen_ = in.getDataSet(label + std::string("/blklen")).read<std::vector<int>>();
+  require_dataset_size(where, "blklen", blklen_.size(), nbox_);
+  HNESSI_REQUIRE(0 <= built_blocks_ && built_blocks_ <= nbox_, where, HNESSI_KV(built_blocks_), HNESSI_KV(nbox_));
+  for(int b = 0; b < nbox_; b++)
+    HNESSI_REQUIRE(0 <= blklen_[b] && blklen_[b] <= blkr2_[b]-blkr1_[b]+1 && (b < built_blocks_ || blklen_[b] == 0),
+                   where, HNESSI_KV(b), HNESSI_KV(blklen_[b]), HNESSI_KV(built_blocks_));
 
   std::vector<int> nrows(nbox_),ncols(nbox_);
   for(int i=0;i<nbox_;i++){
@@ -74,49 +99,73 @@ herm_matrix_hodlr::herm_matrix_hodlr(h5e::File &in, std::string label) :
     for(int i = 0; i < size1_; i++) {
       for(int j = 0; j < size2_; j++) {
         std::string prelabel = label + "/ret/" + std::to_string(b)+"_"+std::to_string(i)+"_"+std::to_string(j)+"/";
-        double epsrank = in.getDataSet(prelabel + "epsrank").read<int>();
-        ret_.data().blocks()[b][i][j].set_epsrank(epsrank); 
-        ret_.data().blocks()[b][i][j].U()       = in.getDataSet(prelabel + "U"      ).read<ZMatrix>();
-        ret_.data().blocks()[b][i][j].V()       = in.getDataSet(prelabel + "V"      ).read<ZMatrix>();
+        int epsrank = in.getDataSet(prelabel + "epsrank").read<int>();
+        block &B = ret_.data().blocks()[b][i][j];
+        B.set_epsrank(epsrank);
+        B.U()       = in.getDataSet(prelabel + "U"      ).read<ZMatrix>();
+        B.V()       = in.getDataSet(prelabel + "V"      ).read<ZMatrix>();
         auto a = in.getDataSet(prelabel + "S").read<std::vector<double>>();
-        ret_.data().blocks()[b][i][j].S() = Eigen::Map<Eigen::VectorXd>(a.data(), epsrank);
+        // HM-C11 per block: 0 <= epsrank <= min(rows built, cols), U is rows x epsrank, V is cols x epsrank
+        HNESSI_REQUIRE(0 <= epsrank && epsrank <= std::min(blklen_[b], B.cols()) && B.U().rows() == blklen_[b] &&
+                       B.U().cols() == epsrank && B.V().rows() == B.cols() && B.V().cols() == epsrank &&
+                       (long long)a.size() >= epsrank, where, HNESSI_KV(prelabel), HNESSI_KV(epsrank),
+                       HNESSI_KV(blklen_[b]), HNESSI_KV(B.cols()), HNESSI_KV(B.U().rows()), HNESSI_KV(B.U().cols()),
+                       HNESSI_KV(B.V().rows()), HNESSI_KV(B.V().cols()), HNESSI_KV(a.size()));
+        B.S() = Eigen::Map<Eigen::VectorXd>(a.data(), epsrank);
       }
     }
   }
 
   // Retarded diagonal data
-  ZMatrixMap(ret_.dirtricol(), ndir_*size1_*size2_, 1) = in.getDataSet(label + std::string("/ret/dirtricol")).read<ZMatrix>(); 
+  {
+    ZMatrix d = in.getDataSet(label + std::string("/ret/dirtricol")).read<ZMatrix>();
+    require_dataset_size(where, "ret/dirtricol", d.size(), (long long)ndir_ * es);
+    ZMatrixMap(ret_.dirtricol(), ndir_*size1_*size2_, 1) = ZMatrixMap(d.data(), ndir_*size1_*size2_, 1);
+  }
 
   // Lesser diagonal data
   ret_corr_below_tri_ = in.getDataSet(label + std::string("/ret/ret_corr_below_tri")).read<std::vector<cplx>>();
+  require_dataset_size(where, "ret/ret_corr_below_tri", ret_corr_below_tri_.size(), len_corr);
 
   // Retarded data on left edge
   ret_left_edge_ = in.getDataSet(label + std::string("/ret_left_edge")).read<std::vector<cplx>>();
+  require_dataset_size(where, "ret_left_edge", ret_left_edge_.size(), len_edge);
 
   // Lesser block data
   for(int b = 0; b < built_blocks_; b++) {
     for(int i = 0; i < size1_; i++) {
       for(int j = 0; j < size2_; j++) {
         std::string prelabel = label + "/les/" + std::to_string(b)+"_"+std::to_string(i)+"_"+std::to_string(j)+"/";
-        double epsrank = in.getDataSet(prelabel + "epsrank").read<int>();
-        les_.data().blocks()[b][i][j].set_epsrank(epsrank); 
-        les_.data().blocks()[b][i][j].U()       = in.getDataSet(prelabel + "U"      ).read<ZMatrix>();
-        les_.data().blocks()[b][i][j].V()       = in.getDataSet(prelabel + "V"      ).read<ZMatrix>();
+        int epsrank = in.getDataSet(prelabel + "epsrank").read<int>();
+        block &B = les_.data().blocks()[b][i][j];
+        B.set_epsrank(epsrank);
+        B.U()       = in.getDataSet(prelabel + "U"      ).read<ZMatrix>();
+        B.V()       = in.getDataSet(prelabel + "V"      ).read<ZMatrix>();
         auto a = in.getDataSet(prelabel + "S").read<std::vector<double>>();
-        les_.data().blocks()[b][i][j].S() = Eigen::Map<Eigen::VectorXd>(a.data(), epsrank);
+        // HM-C11 per block: 0 <= epsrank <= min(rows built, cols), U is rows x epsrank, V is cols x epsrank
+        HNESSI_REQUIRE(0 <= epsrank && epsrank <= std::min(blklen_[b], B.cols()) && B.U().rows() == blklen_[b] &&
+                       B.U().cols() == epsrank && B.V().rows() == B.cols() && B.V().cols() == epsrank &&
+                       (long long)a.size() >= epsrank, where, HNESSI_KV(prelabel), HNESSI_KV(epsrank),
+                       HNESSI_KV(blklen_[b]), HNESSI_KV(B.cols()), HNESSI_KV(B.U().rows()), HNESSI_KV(B.U().cols()),
+                       HNESSI_KV(B.V().rows()), HNESSI_KV(B.V().cols()), HNESSI_KV(a.size()));
+        B.S() = Eigen::Map<Eigen::VectorXd>(a.data(), epsrank);
       }
     }
   }
 
   // Lesser diagonal data
   les_dir_square_ = in.getDataSet(label + std::string("/les_dir_square")).read<std::vector<cplx>>();
+  require_dataset_size(where, "les_dir_square", les_dir_square_.size(), len_les_dir);
 
   // Lesser data on left edge
   les_left_edge_ = in.getDataSet(label + std::string("/les_left_edge")).read<std::vector<cplx>>();
+  require_dataset_size(where, "les_left_edge", les_left_edge_.size(), len_edge);
 
   // TV data
   tv_.data_vector() = in.getDataSet(label + std::string("/tv")).read<std::vector<cplx>>();
   tv_.data_trans_vector() = in.getDataSet(label + std::string("/tv_trans")).read<std::vector<cplx>>();
+  require_dataset_size(where, "tv", tv_.data_vector().size(), (long long)nt_ * r_ * es);
+  require_dataset_size(where, "tv_trans", tv_.data_trans_vector().size(), (long long)nt_ * r_ * es);
 
   // timing
   try {
@@ -125,6 +174,8 @@ herm_matrix_hodlr::herm_matrix_hodlr(h5e::File &in, std::string label) :
   catch (const HighFive::DataSetException& e) {
     timing = DMatrix(nt_, 22);
   }
+  HNESSI_REQUIRE(timing.rows() == nt_ && timing.cols() == 22, where, HNESSI_KV(timing.rows()), HNESSI_KV(timing.cols()),
+                 HNESSI_KV(nt_));
 }
 
 void herm_matrix_hodlr::write_checkpoint_hdf5(h5e::File &out, std::string label) {
@@ -210,6 +261,20 @@ void herm_matrix_hodlr::write_checkpoint_hdf5(h5e::File &out, std::string label)
 }
 
 void herm_matrix_hodlr::write_to_hdf5(h5e::File &out, std::string label, std::string geometry_label) {
+  // HM-W2 (Q-8: warning): rows >= tstpmk are still in the circular buffers and are not written by this function
+  if(tstpmk_ != nt_) {
+    detail::warn("h_nessi::herm_matrix_hodlr::write_to_hdf5('" + label + "'): tstpmk=" + std::to_string(tstpmk_) +
+                 " < nt=" + std::to_string(nt_) + ": the final k+1 update_blocks calls have not been made, rows >= " +
+                 std::to_string(tstpmk_) + " are missing from the compressed output");
+  }
+  // HM-W3 (tier 2): an existing geometry group must describe this geometry (the readers use it for every object
+  // written with this geometry_label)
+  if (out.exist("geometry/" + geometry_label + "/blkr1")) {
+    std::vector<int> b1 = out.getDataSet("geometry/" + geometry_label + "/blkr1").read<std::vector<int>>();
+    HNESSI_REQUIRE(b1 == blkr1_, "herm_matrix_hodlr::write_to_hdf5", HNESSI_KV(geometry_label), HNESSI_KV(b1.size()),
+                   HNESSI_KV(nbox_), detail::note{"geometry/<geometry_label> already holds a different geometry (other "
+                                                  "nt or nlvl): pass a different geometry_label"});
+  }
   h5e::dump(out, label + std::string("/nt"), nt_);
   h5e::dump(out, label + std::string("/r"), r_);
   h5e::dump(out, label + std::string("/size1"), size1_);
@@ -299,7 +364,14 @@ void herm_matrix_hodlr::write_to_hdf5(h5e::File &out, std::string label, std::st
   h5e::dump(out, label + std::string("/timing"), timing);
 }
 
+// HM-W4, HM-W5 (tier 2): writers that read every row 0..nt-1
+#define HNESSI_REQUIRE_ALL_ROWS_(where)                                                                             \
+  HNESSI_REQUIRE(tstpmk_ + k_ >= nt_ - 1, where, HNESSI_KV(tstpmk_), HNESSI_KV(k_), HNESSI_KV(nt_),                 \
+                 detail::note{"all rows 0..nt-1 must be computed (tstp() >= nt-1)"})
+
 void herm_matrix_hodlr::write_rho_to_hdf5(h5e::File &out, std::string label, dlr_info &dlr) {
+  HNESSI_REQUIRE_ALL_ROWS_("herm_matrix_hodlr::write_rho_to_hdf5");
+  check_dlr_("herm_matrix_hodlr::write_rho_to_hdf5", dlr);
   ZMatrix rho_t((nt_+1)*size1_*size2_, 1);
   ZMatrix rho(size1_, size2_);
   for(int i = -1; i < nt_; i++) {
@@ -355,6 +427,7 @@ void herm_matrix_hodlr::write_curr_to_hdf5(h5e::File &out, std::string label) {
 }
 
 void herm_matrix_hodlr::write_GR0_to_hdf5(h5e::File &out, std::string label) {
+    HNESSI_REQUIRE_ALL_ROWS_("herm_matrix_hodlr::write_GR0_to_hdf5");
     ZMatrix GR_t(nt_*size1_*size1_, 1);
     for(int i = 0; i < nt_; i++) {
       get_ret(i, 0, GR_t.data() + i*size1_*size1_);
@@ -370,6 +443,7 @@ void herm_matrix_hodlr::write_GR0_to_hdf5(h5e::File &out, std::string label) {
 }
 
 void herm_matrix_hodlr::write_GL0_to_hdf5(h5e::File &out, std::string label) {
+    HNESSI_REQUIRE_ALL_ROWS_("herm_matrix_hodlr::write_GL0_to_hdf5");
     ZMatrix GL_t(nt_*size1_*size1_, 1);
     for(int i = 0; i < nt_; i++) {
       get_les(0, i, GL_t.data() + i*size1_*size1_);

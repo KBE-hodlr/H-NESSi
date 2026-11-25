@@ -2,10 +2,49 @@
 #include "h_nessi/checks.hpp"
 #include "h_nessi/utils.hpp"
 
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <exception>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 
 namespace h_nessi {
+
+namespace {
+// WP6a side finding 4: an uncaught exception on one rank would leave the other ranks waiting in a collective. The
+// first mpi_comm installs this std::terminate handler (once per process): while MPI is active it prints the exception
+// with the rank and calls MPI_Abort; otherwise it chains to the previous handler.
+std::terminate_handler g_prev_terminate = nullptr;
+std::once_flag g_terminate_once;
+
+[[noreturn]] void mpi_terminate_handler() {
+  int init = 0, fin = 0;
+  MPI_Initialized(&init);
+  if(init) MPI_Finalized(&fin);
+  if(init && !fin) {
+    int rank = -1;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    std::string what = "no active exception";
+    if(std::exception_ptr p = std::current_exception()) {
+      try {
+        std::rethrow_exception(p);
+      } catch(const std::exception &e) {
+        what = e.what();
+      } catch(...) {
+        what = "non-standard exception";
+      }
+    }
+    std::fprintf(stderr, "h_nessi: std::terminate on MPI rank %d: %s\n  calling MPI_Abort(MPI_COMM_WORLD, 1)\n", rank,
+                 what.c_str());
+    std::fflush(stderr);
+    MPI_Abort(MPI_COMM_WORLD, 1);
+  }
+  if(g_prev_terminate) g_prev_terminate();
+  std::abort();
+}
+}  // namespace
 
 mpi_comm::mpi_comm(){};
 
@@ -17,14 +56,25 @@ mpi_comm::mpi_comm
  int ncomponents
 ):Nk_(Nk), Nt_(Nt), r_(r), max_component_size_(ncomponents*nao*nao), nao_(nao)
 {
+  // MP-1, MP-2 (tier 2)
+  HNESSI_REQUIRE(Nk >= 1 && Nt >= 1 && r >= 1 && nao >= 1 && ncomponents >= 1, "mpi_comm::mpi_comm", HNESSI_KV(Nk),
+                 HNESSI_KV(Nt), HNESSI_KV(r), HNESSI_KV(nao), HNESSI_KV(ncomponents));
+  int mpi_initialized = 0;
+  MPI_Initialized(&mpi_initialized);
+  HNESSI_REQUIRE_STATE(mpi_initialized, "mpi_comm::mpi_comm", HNESSI_KV(mpi_initialized),
+                       detail::note{"initialise MPI (MPI_Init_thread) before constructing an mpi_comm"});
+  std::call_once(g_terminate_once, [] { g_prev_terminate = std::set_terminate(mpi_terminate_handler); });
+
   int mpi_rank, mpi_size;
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
   MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
 
   // H28: the _nospawn routines call MPI from thread 0 inside an OpenMP parallel region, which requires at least
-  // MPI_THREAD_FUNNELED. Warn (do not fail: programs that use only the _spawn routines are fine with MPI_Init).
+  // MPI_THREAD_FUNNELED. Warn here (programs that use only the _spawn routines are fine with MPI_Init); every
+  // _nospawn call then requires it (MP-3).
   int thread_level = MPI_THREAD_SINGLE;
   MPI_Query_thread(&thread_level);
+  mpi_thread_level_ = thread_level;
   if(thread_level < MPI_THREAD_FUNNELED && mpi_rank==0){
     std::cerr << "h_nessi::mpi_comm warning: the MPI thread support level is below MPI_THREAD_FUNNELED. "
                  "The *_nospawn routines call MPI from inside an OpenMP parallel region and need at least "
@@ -108,6 +158,7 @@ mpi_comm::mpi_comm
 
   tau_alltp_buff = std::vector<std::complex<double>>(Nk_per_rank[mpi_rank]*r_*max_component_size_);
   tau_allk_buff = std::vector<std::complex<double>>(Nk_*max_Ntau*max_component_size_);
+  imag_rel_k_.assign(my_Nk, 0.);
 
   double mib = memory_usage();
   double mib_total = 0.0;
@@ -151,28 +202,114 @@ double mpi_comm::memory_usage() const
   bytes += init_tau_per_rank.capacity() * sizeof(int);
   bytes += Ntau_per_rank.capacity() * sizeof(int);
 
+  // check state (WP6b; memory rule: every member is counted)
+  bytes += imag_rel_k_.capacity() * sizeof(double);
+  bytes += sizeof(last_get_ti_) + sizeof(last_get_nLG_) + sizeof(last_get_ntv_) + sizeof(last_get_highlevel_) +
+           sizeof(mpi_thread_level_) + sizeof(imag_warned_);
+
   // convert to MiB
   double mib = static_cast<double>(bytes) / (1024.0 * 1024.0);
   return mib;
 }
 
+// WP6a side finding 2: the component-count checks follow the checks.hpp policy (HNESSI_REQUIRE): they throw
+// h_nessi::precondition_error outside a parallel region and print + abort inside a user region (_nospawn).
 void mpi_comm::check_component_count_(std::size_t ncomp, const char *what, const char *func) const
 {
-  if(ncomp > static_cast<std::size_t>(max_component_size_)){
-    throw std::invalid_argument(std::string("h_nessi::mpi_comm::") + func + ": " + what + ".size() = "
-                                + std::to_string(ncomp) + " exceeds max_component_size_ = ncomponents*nao*nao = "
-                                + std::to_string(max_component_size_)
-                                + " (construct mpi_comm with a larger ncomponents)");
-  }
+  std::string where = std::string("mpi_comm::") + func;
+  HNESSI_REQUIRE(ncomp <= static_cast<std::size_t>(max_component_size_), where.c_str(), HNESSI_KV(what),
+                 HNESSI_KV(ncomp), HNESSI_KV(max_component_size_),
+                 detail::note{"the number of lambdas exceeds max_component_size_ = ncomponents*nao*nao (construct "
+                              "mpi_comm with a larger ncomponents)"});
 }
 
 void mpi_comm::check_highlevel_components_(const char *func) const
 {
-  if(max_component_size_ < 2*nao_*nao_){
-    throw std::invalid_argument(std::string("h_nessi::mpi_comm::") + func
-                                + ": the herm_matrix_hodlr API uses 2*nao*nao = " + std::to_string(2*nao_*nao_)
-                                + " components per slot but max_component_size_ = ncomponents*nao*nao = "
-                                + std::to_string(max_component_size_) + " (construct mpi_comm with ncomponents >= 2)");
+  std::string where = std::string("mpi_comm::") + func;
+  HNESSI_REQUIRE(max_component_size_ >= 2*nao_*nao_, where.c_str(), HNESSI_KV(max_component_size_), HNESSI_KV(nao_),
+                 detail::note{"the herm_matrix_hodlr API uses 2*nao*nao components per slot (construct mpi_comm with "
+                              "ncomponents >= 2)"});
+}
+
+void mpi_comm::check_ti_(const char *func, int ti) const
+{
+  std::string where = std::string("mpi_comm::") + func;
+  HNESSI_REQUIRE(-1 <= ti && ti < Nt_, where.c_str(), HNESSI_KV(ti), HNESSI_KV(Nt_),
+                 detail::note{"ti = -1 (Matsubara) or 0 <= ti < Nt"});
+}
+
+void mpi_comm::check_objects_(const char *func, int ti, std::size_t n,
+                              const std::function<herm_matrix_hodlr &(int)> &at) const
+{
+  std::string where = std::string("mpi_comm::") + func;
+  HNESSI_REQUIRE(n == static_cast<std::size_t>(my_Nk), where.c_str(), HNESSI_KV(n), HNESSI_KV(my_Nk),
+                 detail::note{"hmh_vec must hold one object per local k-point (my_Nk)"});
+  for(int i = 0; i < my_Nk; i++) {
+    herm_matrix_hodlr &g = at(i);
+    HNESSI_REQUIRE(g.size1() == nao_ && g.size2() == nao_ && g.r() == r_ && g.nt() > ti, where.c_str(), HNESSI_KV(i),
+                   HNESSI_KV(g.size1()), HNESSI_KV(nao_), HNESSI_KV(g.r()), HNESSI_KV(r_), HNESSI_KV(g.nt()),
+                   HNESSI_KV(ti));
+    HNESSI_REQUIRE(ti < 0 || (g.tstpmk() <= ti && ti <= g.tstp()), where.c_str(), HNESSI_KV(i), HNESSI_KV(ti),
+                   HNESSI_KV(g.tstpmk()), HNESSI_KV(g.tstp()),
+                   detail::note{"row ti must be in the current window of every object"});
+  }
+}
+
+void mpi_comm::check_dlr_(const char *func, const dlr_info &dlr) const
+{
+  std::string where = std::string("mpi_comm::") + func;
+  HNESSI_REQUIRE(dlr.r() == r_ && dlr.size1() == nao_, where.c_str(), HNESSI_KV(dlr.r()), HNESSI_KV(r_),
+                 HNESSI_KV(dlr.size1()), HNESSI_KV(nao_));
+}
+
+void mpi_comm::require_funneled_(const char *func) const
+{
+  std::string where = std::string("mpi_comm::") + func;
+  HNESSI_REQUIRE_STATE(mpi_thread_level_ >= MPI_THREAD_FUNNELED, where.c_str(), HNESSI_KV(mpi_thread_level_),
+                       detail::note{"the _nospawn routines need MPI_THREAD_FUNNELED: initialise MPI with "
+                                    "MPI_Init_thread(..., MPI_THREAD_FUNNELED, &provided)"});
+}
+
+void mpi_comm::record_get_(int ti, int nLG, int ntv, bool highlevel)
+{
+  last_get_ti_ = ti;
+  last_get_nLG_ = nLG;
+  last_get_ntv_ = ntv;
+  last_get_highlevel_ = highlevel;
+}
+
+void mpi_comm::require_get_(const char *func, int ti, int nLR, int ntv, bool highlevel) const
+{
+  std::string where = std::string("mpi_comm::") + func;
+  HNESSI_REQUIRE_STATE(last_get_ti_ == ti && last_get_highlevel_ == highlevel &&
+                       (ti < 0 || last_get_nLG_ == nLR) && last_get_ntv_ == ntv, where.c_str(), HNESSI_KV(ti),
+                       HNESSI_KV(last_get_ti_), HNESSI_KV(highlevel), HNESSI_KV(last_get_highlevel_), HNESSI_KV(nLR),
+                       HNESSI_KV(last_get_nLG_), HNESSI_KV(ntv), HNESSI_KV(last_get_ntv_),
+                       detail::note{"a set must follow a get with the same ti, API (high-level or lambda) and "
+                                    "component counts: it reuses that get's counts and displacements (last_get_ti_ = "
+                                    "-2147483648: no get since the last set)"});
+}
+
+void mpi_comm::debug_collective_(const char *func, int ti, int n1, int n2) const
+{
+#ifndef NDEBUG
+  int v[6] = {ti, n1, n2, -ti, -n1, -n2}, m[6];
+  MPI_Allreduce(v, m, 6, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+  std::string where = std::string("mpi_comm::") + func;
+  HNESSI_ASSERT(m[0] == -m[3] && m[1] == -m[4] && m[2] == -m[5], where.c_str(), HNESSI_KV(ti), HNESSI_KV(n1),
+                HNESSI_KV(n2), HNESSI_KV(m[0]), HNESSI_KV(-m[3]));
+#else
+  (void)func; (void)ti; (void)n1; (void)n2;
+#endif
+}
+
+void mpi_comm::warn_imag_mat_(const char *func, double rel)
+{
+  if(rel > 1e-10 && !imag_warned_) {
+    imag_warned_ = true;
+    detail::warn(std::string("h_nessi::mpi_comm::") + func + ": Sigma^M has a relative imaginary part " +
+                 std::to_string(rel) + " (> 1e-10) that is dropped: G^M and Sigma^M are stored real (ISSUES D1). "
+                 "Warned once per mpi_comm object.");
   }
 }
 
@@ -185,16 +322,31 @@ void mpi_comm::set_my_t_block_(int ti, int mpi_rank, int mpi_size)
 
 int mpi_comm::alltp_buff_index(int loc_Nk, int tpi, int local_ki, int compi)
 {
+  // MP-16 (tier 1)
+  HNESSI_ASSERT(0 <= tpi && 0 <= local_ki && local_ki < loc_Nk && 0 <= compi && compi < max_component_size_ &&
+                (std::size_t)(tpi*loc_Nk*max_component_size_ + local_ki*max_component_size_ + compi) <
+                    std::max(t_alltp_buff.size(), tau_alltp_buff.size()),
+                "mpi_comm::alltp_buff_index", HNESSI_KV(tpi), HNESSI_KV(local_ki), HNESSI_KV(loc_Nk), HNESSI_KV(compi));
   return tpi*loc_Nk*max_component_size_ + local_ki*max_component_size_ + compi;
 };
 
 int mpi_comm::t_allk_buff_index(int tpi, int compi, int local_ki, int global_ki)
 {
+  // MP-17 (tier 1): valid after a get with ti >= 0
+  HNESSI_ASSERT(0 <= global_ki && global_ki < Nk_ && 0 <= tpi && tpi < my_Nt && 0 <= compi &&
+                compi < max_component_size_ && local_ki == global_ki - init_k_per_rank[k_rank_map[global_ki]],
+                "mpi_comm::t_allk_buff_index", HNESSI_KV(tpi), HNESSI_KV(my_Nt), HNESSI_KV(compi), HNESSI_KV(local_ki),
+                HNESSI_KV(global_ki));
   return t_recv_displs[k_rank_map[global_ki]] + tpi*max_component_size_*Nk_per_rank[k_rank_map[global_ki]] + local_ki*max_component_size_ + compi;
 };
 
 int mpi_comm::tau_allk_buff_index(int taui, int compi, int local_ki, int global_ki)
 {
+  // MP-17 (tier 1)
+  HNESSI_ASSERT(0 <= global_ki && global_ki < Nk_ && 0 <= taui && taui < my_Ntau && 0 <= compi &&
+                compi < max_component_size_ && local_ki == global_ki - init_k_per_rank[k_rank_map[global_ki]],
+                "mpi_comm::tau_allk_buff_index", HNESSI_KV(taui), HNESSI_KV(my_Ntau), HNESSI_KV(compi),
+                HNESSI_KV(local_ki), HNESSI_KV(global_ki));
   return tau_recv_displs[k_rank_map[global_ki]] + taui*max_component_size_*Nk_per_rank[k_rank_map[global_ki]] + local_ki*max_component_size_ + compi;
 };
 
@@ -205,8 +357,10 @@ void mpi_comm::mpi_get_and_comm_spawn
  std::vector<std::function<std::complex<double>(int, int, int)>> &getstv
 )
 {
+  check_ti_("mpi_get_and_comm_spawn", ti);
   if(ti>=0) check_component_count_(getsLG.size(), "getsLG", "mpi_get_and_comm_spawn");
   check_component_count_(getstv.size(), "getstv", "mpi_get_and_comm_spawn");
+  debug_collective_("mpi_get_and_comm_spawn", ti, ti >= 0 ? (int)getsLG.size() : 0, (int)getstv.size());
 
   int mpi_rank, mpi_size;
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
@@ -290,7 +444,7 @@ void mpi_comm::mpi_get_and_comm_spawn
   MPI_Alltoallv(tau_alltp_buff.data(), tau_send_counts.data(), tau_send_displs.data(), MPI_CXX_DOUBLE_COMPLEX,
                 tau_allk_buff.data(), tau_recv_counts.data(), tau_recv_displs.data(), MPI_CXX_DOUBLE_COMPLEX,
                 MPI_COMM_WORLD);
-
+  record_get_(ti, (int)getsLG.size(), (int)getstv.size(), false);   // ST-9
 }
 
 void mpi_comm::mpi_get_and_comm_nospawn
@@ -299,9 +453,11 @@ void mpi_comm::mpi_get_and_comm_nospawn
  std::vector<std::function<std::complex<double>(int, int, int)>> &getstv
 )
 {
-  // checks before any barrier; identical on every thread (shared arguments), so all threads throw together
+  // checks before any barrier; identical on every thread (shared arguments), so all threads fail together
+  check_ti_("mpi_get_and_comm_nospawn", ti);
   if(ti>=0) check_component_count_(getsLG.size(), "getsLG", "mpi_get_and_comm_nospawn");
   check_component_count_(getstv.size(), "getstv", "mpi_get_and_comm_nospawn");
+  require_funneled_("mpi_get_and_comm_nospawn");
 
   int mpi_rank, mpi_size;
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
@@ -310,6 +466,8 @@ void mpi_comm::mpi_get_and_comm_nospawn
   // B21: partition over the current team (1 outside a parallel region), not omp_get_max_threads()
   int thread_id = omp_get_thread_num();
   int nthreads = omp_get_num_threads();
+  if(thread_id == 0)
+    debug_collective_("mpi_get_and_comm_nospawn", ti, ti >= 0 ? (int)getsLG.size() : 0, (int)getstv.size());
 
   if(ti>=0){
     int tp_size = ti+1;
@@ -398,6 +556,7 @@ void mpi_comm::mpi_get_and_comm_nospawn
     MPI_Alltoallv(tau_alltp_buff.data(), tau_send_counts.data(), tau_send_displs.data(), MPI_CXX_DOUBLE_COMPLEX,
                   tau_allk_buff.data(), tau_recv_counts.data(), tau_recv_displs.data(), MPI_CXX_DOUBLE_COMPLEX,
                   MPI_COMM_WORLD);
+    record_get_(ti, (int)getsLG.size(), (int)getstv.size(), false);   // ST-9 (thread 0, published by the barrier)
   }
 
   #pragma omp barrier
@@ -409,8 +568,12 @@ void mpi_comm::mpi_comm_and_set_spawn
  std::vector<std::function<void(int, int, std::vector<std::complex<double>>&)>> &setstv
 )
 {
+  check_ti_("mpi_comm_and_set_spawn", ti);
   if(ti>=0) check_component_count_(setsLR.size(), "setsLR", "mpi_comm_and_set_spawn");
   check_component_count_(setstv.size(), "setstv", "mpi_comm_and_set_spawn");
+  require_get_("mpi_comm_and_set_spawn", ti, (int)setsLR.size(), (int)setstv.size(), false);   // ST-9
+  debug_collective_("mpi_comm_and_set_spawn", ti, ti >= 0 ? (int)setsLR.size() : 0, (int)setstv.size());
+  clear_get_();
 
   int mpi_rank, mpi_size;
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
@@ -490,9 +653,12 @@ void mpi_comm::mpi_comm_and_set_nospawn
  std::vector<std::function<void(int, int, std::vector<std::complex<double>>&)>> &setstv
 )
 {
-  // checks before any barrier; identical on every thread (shared arguments), so all threads throw together
+  // checks before any barrier; identical on every thread (shared arguments), so all threads fail together
+  check_ti_("mpi_comm_and_set_nospawn", ti);
   if(ti>=0) check_component_count_(setsLR.size(), "setsLR", "mpi_comm_and_set_nospawn");
   check_component_count_(setstv.size(), "setstv", "mpi_comm_and_set_nospawn");
+  require_funneled_("mpi_comm_and_set_nospawn");
+  require_get_("mpi_comm_and_set_nospawn", ti, (int)setsLR.size(), (int)setstv.size(), false);   // ST-9
 
   int mpi_rank, mpi_size;
   MPI_Comm_size(MPI_COMM_WORLD, &mpi_size);
@@ -501,6 +667,12 @@ void mpi_comm::mpi_comm_and_set_nospawn
   // B21: partition over the current team (1 outside a parallel region), not omp_get_max_threads()
   int thread_id = omp_get_thread_num();
   int nthreads = omp_get_num_threads();
+  // every thread has passed require_get_ before this barrier; then thread 0 consumes the get record (ST-9)
+  #pragma omp barrier
+  if(thread_id == 0) {
+    debug_collective_("mpi_comm_and_set_nospawn", ti, ti >= 0 ? (int)setsLR.size() : 0, (int)setstv.size());
+    clear_get_();
+  }
 
   if(ti>=0){
     int tp_size = ti+1;

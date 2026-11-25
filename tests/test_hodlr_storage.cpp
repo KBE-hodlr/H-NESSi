@@ -23,6 +23,20 @@ namespace {
 const cplx II(0, 1);
 }
 
+// mgs and updatetsvd are private since WP6b (doc 61 Q-12); the class grants this struct access for the unit tests.
+namespace h_nessi {
+struct herm_matrix_hodlr_test_access {
+  static double mgs(herm_matrix_hodlr &G, const ZMatrix &V, const ZRowVector &b, const ZRowVector &x,
+                    const ZRowVector &Vb) {
+    return G.mgs(V, b, x, Vb);
+  }
+  static void updatetsvd(herm_matrix_hodlr &G, block &B, const ZRowVector &row, int row_cur) {
+    G.updatetsvd(B, row, row_cur);
+  }
+};
+}  // namespace h_nessi
+using TA = h_nessi::herm_matrix_hodlr_test_access;
+
 // ------------------------------------------------------------------------------------------------ linear algebra
 TEST(LinearAlgebra, MgsOrthogonalises) {
   int rows = 15, cols = 10, nlvl = 3, sig = -1, kt = 5, r = 10, size = 1;
@@ -34,7 +48,7 @@ TEST(LinearAlgebra, MgsOrthogonalises) {
   ZMatrix Vnew = V.block(0, 0, cols, rank);
   ZRowVector x = ZRowVector::Random(cols), y(cols), Vb(cols);
   herm_matrix_hodlr G(cols, r, nlvl, epsilon, size, size, sig, kt);
-  double nrm = G.mgs(Vnew, x, y, Vb);
+  double nrm = TA::mgs(G, Vnew, x, y, Vb);
   double err = 0;
   for (int i = 0; i < rank; i++) err += std::abs(Vnew.col(i).dot(y.transpose()));
   EXPECT_LT(err, 1e-12) << "q must be orthogonal to the basis";
@@ -60,7 +74,7 @@ TEST(LinearAlgebra, IncrementalTsvdReproducesMatrix) {
   b.V() = y.adjoint() / y.norm();
   b.set_rank(1);
   herm_matrix_hodlr G(rows, r, nlvl, epsilon, size, size, sig, kt);
-  for (int i = 1; i < rows; i++) G.updatetsvd(b, M.row(i), i);
+  for (int i = 1; i < rows; i++) TA::updatetsvd(G, b, M.row(i), i);
   DColVector S1;
   svd(M, S1);
   EXPECT_EQ(b.epsrank(), (S1.array() >= epsilon).count());
@@ -426,22 +440,30 @@ TEST(HodlrCopy, SetTimestepCurrSourceUnchanged) {
   expect_same_state(s0, snapshot(B, "set2"), "destination after set_timestep_curr(G)");
 }
 
-// Window / geometry preconditions of the per-step copies (Debug-only asserts, tier 1).
-TEST(HodlrCopyDeathTest, WindowAndGeometryAsserts) {
-  GTEST_FLAG_SET(death_test_style, "threadsafe");
+// Window / geometry preconditions of the per-step copies (WP4 asserts promoted to tier 2 in WP6b, HM-T1..T5):
+// they throw h_nessi::precondition_error in every build.
+TEST(HodlrCopyChecks, WindowAndGeometryThrow) {
   int nt = 20, k = 2, r = 3;
   Integration::Integrator I(k);
   herm_matrix_hodlr A(nt, r, 2, 1e-10, 1, 1, -1, k), B(nt, r, 2, 1e-10, 1, 1, -1, k), C(nt, r, 2, 1e-10, 2, 2, -1, k);
   CopyFill{1, r, 1.0}.run(A, I, 9);  // A: [7,9], B: [0,2]
   A.get_timestep_curr(-1, B);        // fine in every build
-#ifndef NDEBUG
-  EXPECT_DEATH(A.get_timestep_curr(9, B), "tstp>=G.tstpmk\\(\\)");      // not in G's window
-  EXPECT_DEATH(A.get_timestep_curr(1, B), "tstp>=tstpmk_");             // not in the source's window
-  EXPECT_DEATH(B.set_timestep_curr(9, A), "tstp>=tstpmk_");             // not in *this's window
-  EXPECT_DEATH(A.get_timestep_curr(-1, C), "G.size1\\(\\)==size1_");    // geometry mismatch
-#else
-  GTEST_SKIP() << "asserts are off (NDEBUG): the window/geometry checks are Debug-only (tier 1)";
-#endif
+  EXPECT_THROW(A.get_timestep_curr(9, B), precondition_error);   // not in G's window
+  EXPECT_THROW(A.get_timestep_curr(1, B), precondition_error);   // not in the source's window
+  EXPECT_THROW(B.set_timestep_curr(9, A), precondition_error);   // not in *this's window
+  EXPECT_THROW(A.get_timestep_curr(-1, C), precondition_error);  // geometry mismatch
+  EXPECT_THROW(A.get_timestep_curr(C), precondition_error);
+  EXPECT_THROW(C.set_timestep_curr(A), precondition_error);
+  EXPECT_THROW(A.set_timestep_curr(nt, B), precondition_error);  // LX-11: outer bound
+  EXPECT_THROW(A.incr_timestep_curr(9, B, 1.0), precondition_error);  // HM-T5: G's slot 9 is not in G's window
+  EXPECT_THROW(A.incr_timestep_curr(-1, C, 1.0), precondition_error);
+  EXPECT_NO_THROW(A.incr_timestep_curr(-1, B, 1.0));
+  try {
+    A.get_timestep_curr(9, B);
+  } catch (const precondition_error &e) {
+    EXPECT_NE(std::string(e.what()).find("herm_matrix_hodlr::get_timestep_curr"), std::string::npos) << e.what();
+    EXPECT_NE(std::string(e.what()).find("G.tstpmk()=0"), std::string::npos) << e.what();
+  }
 }
 
 // B6: a = b is a deep copy of the complete state; later changes to either object do not reach the other.  The

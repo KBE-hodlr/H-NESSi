@@ -6,6 +6,7 @@
 #pragma once
 
 #include "utils.hpp"
+#include "checks.hpp"
 
 
 
@@ -95,7 +96,10 @@ class block {
     /** @brief Set the SVD rank.
      * @param epsrank New rank value.
      */
-    void set_epsrank(double epsrank) {epsrank_=epsrank;};
+    void set_epsrank(int epsrank) {
+      HNESSI_ASSERT(epsrank >= 0, "block::set_epsrank", HNESSI_KV(epsrank));   // BK-2 (int since WP6b, was double)
+      epsrank_=epsrank;
+    };
     /** @brief Set the number of rows in the block.
      * @param rows New number of rows.
      */

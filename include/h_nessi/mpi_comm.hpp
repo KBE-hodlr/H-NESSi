@@ -11,6 +11,7 @@
 #include <functional>
 #include <mpi.h>
 #include <omp.h>
+#include <climits>
 
 #include "mpi_comm_utils.hpp"
 #include "herm_matrix_hodlr.hpp"
@@ -38,13 +39,28 @@ namespace h_nessi {
  *     calling thread does all the work). MPI is called only by thread 0 of the team, between barriers, so MPI
  *     must provide at least `MPI_THREAD_FUNNELED` and thread 0 must be the thread that initialised MPI (true for
  *     a non-nested region started from the main thread). The constructor warns on rank 0 if
- *     `MPI_Query_thread` reports a lower level. Every `_nospawn` routine ends with a barrier, so on return all
- *     threads see all data written by the routine (buffers and herm_matrix_hodlr objects).
+ *     `MPI_Query_thread` reports a lower level, and every `_nospawn` call requires it (MP-3, error). Every
+ *     `_nospawn` routine ends with a barrier, so on return all threads see all data written by the routine
+ *     (buffers and herm_matrix_hodlr objects).
  *
- * Errors: the component-count checks (see below) throw `std::invalid_argument` at entry, before any parallel
- * work or barrier, and they depend only on shared arguments, so in a `_nospawn` call every thread of the team
- * throws the same exception. Catch it inside the parallel region (on every thread) or not at all: an exception
- * that leaves an OpenMP region calls `std::terminate` (libstdc++ prints the message first).
+ * Errors (WP6b, h_nessi/checks.hpp policy): every get/set checks at entry, before any parallel work or barrier,
+ *   - -1 <= ti < Nt (MP-6), the component counts (MP-4/5/7, see below),
+ *   - high-level API: one herm_matrix_hodlr per local k-point, each nao x nao with DLR rank r, nt > ti and, for
+ *     ti >= 0, row ti in its current window (MP-8); the dlr_info of a get has rank r and nao orbitals (MP-9),
+ *   - a set follows a get with the same ti, API level and component counts (ST-9: the set reuses the get's
+ *     counts and displacements; one set per get),
+ *   - `_nospawn`: MPI_THREAD_FUNNELED (MP-3).
+ * A failure throws h_nessi::precondition_error (a std::invalid_argument) or h_nessi::state_error outside a
+ * parallel region (all `_spawn` calls, and `_nospawn` called outside a region). Inside a user OpenMP region (a
+ * `_nospawn` call made, by contract, by every thread) the checks depend only on shared arguments, so every thread
+ * fails identically: each prints the message (MPI rank, thread) and the program aborts; it cannot be caught there.
+ * Errors inside the library-owned regions of the `_spawn` routines (also exceptions from user lambdas) are
+ * captured and rethrown on the calling thread. In Debug/RelWithAsserts builds every get/set also verifies with one
+ * MPI_Allreduce that all ranks pass the same ti and counts (MP-18).
+ * Uncaught exceptions: the constructor installs (once per process) a std::terminate handler that prints the
+ * exception with the MPI rank and calls MPI_Abort(MPI_COMM_WORLD, 1) while MPI is initialised (WP6a side
+ * finding 4), so an uncaught error on one rank ends the whole job instead of leaving the other ranks waiting in
+ * a collective. A handler installed before the first mpi_comm is chained (called if MPI is not active).
  *
  * Component counts: each (time, k) slot holds `max_component_size_ = ncomponents*nao*nao` complex numbers.
  * The high-level (herm_matrix_hodlr) API uses components `[0, 2*nao*nao)` and therefore requires
@@ -272,10 +288,38 @@ public:
   int nao_ = 0;
 
 private:
-  /// Throws std::invalid_argument if ncomp > max_component_size_ (lambda API; B20).
+  // ---- checks (checks.hpp policy: h_nessi::precondition_error / state_error; inside a user OpenMP region (the
+  // _nospawn routines) a failed check prints and aborts, identically on every thread) ------------------------------
+  /// MP-4, MP-5 (B20): ncomp <= max_component_size_ (lambda API).
   void check_component_count_(std::size_t ncomp, const char *what, const char *func) const;
-  /// Throws std::invalid_argument if max_component_size_ < 2*nao_*nao_ (high-level API needs ncomponents >= 2; B20).
+  /// MP-7 (B20): the high-level API needs max_component_size_ >= 2*nao_*nao_ (ncomponents >= 2).
   void check_highlevel_components_(const char *func) const;
+  /// MP-6: -1 <= ti < Nt_.
+  void check_ti_(const char *func, int ti) const;
+  /// MP-8: one object per local k-point, each nao x nao with DLR rank r_, row ti allocated and in its window.
+  void check_objects_(const char *func, int ti, std::size_t n, const std::function<herm_matrix_hodlr &(int)> &at) const;
+  /// MP-9: the dlr_info of a high-level get has the rank and orbital size of this communicator.
+  void check_dlr_(const char *func, const dlr_info &dlr) const;
+  /// MP-3: the _nospawn routines call MPI from inside an OpenMP region: MPI_THREAD_FUNNELED is required.
+  void require_funneled_(const char *func) const;
+  /// ST-9 (MP-5, MP-11): a set reuses the counts and displacements of the preceding get, which must have the same
+  /// ti, API level and component counts. record_get_ is called by the get (thread 0 in _nospawn), require_get_ by
+  /// the set (every thread, before any barrier), clear_get_ after the set (thread 0 in _nospawn).
+  void record_get_(int ti, int nLG, int ntv, bool highlevel);
+  void require_get_(const char *func, int ti, int nLR, int ntv, bool highlevel) const;
+  void clear_get_() { last_get_ti_ = INT_MIN; }
+  /// MP-18 (tier 1, Debug/RelWithAsserts only): every rank calls with the same ti and counts (one MPI_Allreduce).
+  void debug_collective_(const char *func, int ti, int n1, int n2) const;
+  /// MP-13 (Q-9: warn): the imaginary part of Sigma^M dropped by the ti = -1 set (largest |Im| / largest |.|).
+  void warn_imag_mat_(const char *func, double rel);
+
+  int last_get_ti_ = INT_MIN;      ///< ST-9: ti of the last get (INT_MIN: none since the last set)
+  int last_get_nLG_ = 0;           ///< ST-9: component counts of the last get
+  int last_get_ntv_ = 0;
+  bool last_get_highlevel_ = false;
+  int mpi_thread_level_ = MPI_THREAD_SINGLE;  ///< MP-3: provided thread level (queried by the constructor)
+  bool imag_warned_ = false;       ///< MP-13: the warning is printed once per object
+  std::vector<double> imag_rel_k_; ///< MP-13: per local k-point relative |Im Sigma^M| of the last ti = -1 set
   /// Sets my_first_t/my_Nt to this rank's t' block for timestep ti >= 0 (H30).
   void set_my_t_block_(int ti, int mpi_rank, int mpi_size);
 };

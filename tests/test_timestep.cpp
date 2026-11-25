@@ -74,6 +74,7 @@ ResA modeA(int nt, int nlvl, int k, double tol) {
     double tt = std::max(t, 0) * h;
     ZMatrix x(nao, nao);
     x << 0.5 + 0.2 * sin(tt), cplx(0.3, 0.1 * cos(tt)), cplx(0.3, -0.1 * cos(tt)), -0.4 + 0.1 * tt;
+    if (t == -1) x = x.real().cast<cplx>();  // h(-1) must be real (G^M is real; WP6b: green_from_H(inc_mat) checks it)
     H.get_map(t) = x;
   }
   auto eps = [&](int t) { return ZMatrix(H.get_map(t) - mu * ZMatrix::Identity(nao, nao)); };

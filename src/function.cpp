@@ -12,6 +12,9 @@ function::function() {
 }
 
 function::function(int nt, int size1, int size2) {
+  // FN-1 (tier 2): the element index i*size1+j assumes square matrices (ISSUES D2)
+  HNESSI_REQUIRE(nt >= 0 && size1 >= 1 && size1 == size2, "function::function", HNESSI_KV(nt), HNESSI_KV(size1),
+                 HNESSI_KV(size2), detail::note{"nt >= 0 and square orbital matrices (size1 == size2 >= 1)"});
   nt_ = nt;
   size1_ = size1;
   size2_ = size2;
@@ -63,8 +66,15 @@ function::function(h5e::File &in, std::string label) {
   size1_ = in.getDataSet(label + std::string("/size1")).read<int>();
   size2_ = in.getDataSet(label + std::string("/size2")).read<int>();
   element_size_ = in.getDataSet(label + std::string("/element_size")).read<int>();
+  // FN-6 (tier 2): stored sizes consistent (FN-1) and the data length matches
+  const char *where = "function::function(h5e::File&,label)";
+  HNESSI_REQUIRE(nt_ >= 0 && size1_ >= 1 && size1_ == size2_ && element_size_ == size1_*size2_, where, HNESSI_KV(nt_),
+                 HNESSI_KV(size1_), HNESSI_KV(size2_), HNESSI_KV(element_size_));
+  ZMatrix d = in.getDataSet(label + std::string("/data")).read<ZMatrix>();
+  HNESSI_REQUIRE(d.size() == (Eigen::Index)(nt_+1)*element_size_, where, HNESSI_KV(d.size()), HNESSI_KV(nt_),
+                 HNESSI_KV(element_size_), detail::note{"dataset data must hold (nt+1)*size1*size2 values"});
   data_.resize((nt_+1)*size1_*size2_);
-  ZMatrixMap(data_.data(), (nt_+1)*element_size_, 1) = in.getDataSet(label + std::string("/data")).read<ZMatrix>();
+  ZMatrixMap(data_.data(), (nt_+1)*element_size_, 1) = ZMatrixMap(d.data(), (nt_+1)*element_size_, 1);
 }
 
 
@@ -87,10 +97,12 @@ void function::write_to_hdf5(h5e::File &out, std::string label) {
 }
 
 void function::set_value(int t, int i, int j, cplx v) {
-  ptr(t)[i*size1_ + j] = v;
+  (*this)(t, i, j) = v;
 }
 
 void function::set_value(int t, ZMatrix &M) {
+  HNESSI_ASSERT(M.rows() == size1_ && M.cols() == size2_, "function::set_value", HNESSI_KV(M.rows()), HNESSI_KV(M.cols()),
+                HNESSI_KV(size1_));   // FN-4 (tier 1)
   ZMatrixMap(ptr(t), size1_, size2_) = M;
 }
 
@@ -99,6 +111,8 @@ void function::get_value(int t, ZMatrix &M) {
 }
 
 void function::set_constant(ZMatrix &M) {
+  HNESSI_REQUIRE(M.rows() == size1_ && M.cols() == size2_, "function::set_constant", HNESSI_KV(M.rows()),
+                 HNESSI_KV(M.cols()), HNESSI_KV(size1_));   // FN-5 (tier 2)
   for(int t = -1; t < nt_; t++) {
     ZMatrixMap(ptr(t), size1_, size2_) = M;
   }
@@ -121,5 +135,7 @@ void function::set_zero(void) {
 }
 
 cplx &function::operator()(int t, int i, int j) {
+  HNESSI_ASSERT(0 <= i && i < size1_ && 0 <= j && j < size2_, "function::operator()", HNESSI_KV(i), HNESSI_KV(j),
+                HNESSI_KV(size1_));   // FN-3 (tier 1)
   return ptr(t)[i*size1_ + j];
 }

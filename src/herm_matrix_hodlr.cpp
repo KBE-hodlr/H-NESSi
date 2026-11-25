@@ -152,6 +152,10 @@ void herm_matrix_hodlr::require_gmconv_current(const char *where, bool check_has
 }
 
 void herm_matrix_hodlr::init_shape(int nt,int nlvl){
+    // HM-C8 (tier 2, private since WP6b): init_shape reads the members, it is not a resize
+    HNESSI_REQUIRE(nt == nt_ && nlvl == nlvl_ && nt_ >= 1 && nlvl_ >= 1 && size1_ >= 1 && size2_ >= 1 && k_ >= 1,
+                   "herm_matrix_hodlr::init_shape", HNESSI_KV(nt), HNESSI_KV(nt_), HNESSI_KV(nlvl), HNESSI_KV(nlvl_),
+                   HNESSI_KV(size1_), HNESSI_KV(k_));
     // Fix the geometry of hierarchical structure
     nbox_=(int)round(pow(2,nlvl)-1);
     blkr1_=std::vector<int>(nbox_);
@@ -246,10 +250,28 @@ void herm_matrix_hodlr::init_shape(int nt,int nlvl){
       }
       t_to_dirlvl_[t] = lvl;
     }
+
+#ifndef NDEBUG
+    // HM-C9 (tier 1, O(nt) once): post-conditions of the geometry
+    int ndir_sum = 0;
+    for(int t = 0; t < nt_; t++) {
+      HNESSI_ASSERT(0 <= c1_dir_[t] && c1_dir_[t] <= t, "herm_matrix_hodlr::init_shape", HNESSI_KV(t),
+                    HNESSI_KV(c1_dir_[t]));
+      ndir_sum += ntri_[t];
+    }
+    HNESSI_ASSERT(ndir_ == ndir_sum, "herm_matrix_hodlr::init_shape", HNESSI_KV(ndir_), HNESSI_KV(ndir_sum));
+    for(int b = 0; b <= nbox_; b++)
+      HNESSI_ASSERT(blkdirheight_[b] >= 1, "herm_matrix_hodlr::init_shape", HNESSI_KV(b), HNESSI_KV(blkdirheight_[b]));
+    for(int b = 1; b < nbox_; b++)
+      HNESSI_ASSERT(blkr1_[b-1] < blkr1_[b], "herm_matrix_hodlr::init_shape", HNESSI_KV(b), HNESSI_KV(blkr1_[b]));
+#endif
 }
 
 int herm_matrix_hodlr::getbkl_indices(){
     int nbox=(int)round(pow(2,nlvl_))-1;
+    // HM-C10 (tier 1, private): called from init_shape after the geometry vectors are sized
+    HNESSI_ASSERT(nbox == nbox_ && (int)blkr1_.size() == nbox_ && (int)c1_dir_.size() == nt_,
+                  "herm_matrix_hodlr::getbkl_indices", HNESSI_KV(nbox), HNESSI_KV(nbox_), HNESSI_KV(nt_));
     int l;
     std::vector<int> is((nbox+1)*2);
     //  First row indices of all blocks
@@ -368,6 +390,9 @@ void herm_matrix_hodlr::initGMConvTensor(dlr_info &dlr){
 }
 
 int herm_matrix_hodlr::time2direct_col(int t1,int t2){
+    // HM-C19 (tier 1): (t1,t2) in the yellow direct triangle of row t1
+    HNESSI_ASSERT(0 <= t1 && t1 < nt_ && c1_dir_[t1] <= t2 && t2 <= t1, "herm_matrix_hodlr::time2direct_col",
+                  HNESSI_KV(t1), HNESSI_KV(t2), HNESSI_KV(nt_));
     int bb = t_to_dirlvl_[t1];
     int is = blkndirstart_[bb];
     int bh = blkdirheight_[bb];
@@ -382,23 +407,45 @@ int herm_matrix_hodlr::time2direct_col(int t1,int t2){
 
 // which block does (t1,t2) pair correspond
 int herm_matrix_hodlr::time2block(int t1,int t2){
-    assert(t2<c1_dir_[t1]);
+    // HM-C20, LX-13 (tier 1): range of t1 before c1_dir_[t1] is read
+    HNESSI_ASSERT(0 <= t1 && t1 < nt_ && 0 <= t2 && t2 < c1_dir_[t1], "herm_matrix_hodlr::time2block", HNESSI_KV(t1),
+                  HNESSI_KV(t2), HNESSI_KV(nt_));
+    int b = -1;
     for(int i=0;i<nbox_;i++){
-        if(blkc1_[i]<=t2 && t2<=blkc2_[i] && blkr1_[i]<=t1 && t1<=blkr2_[i]) return i;
+        if(blkc1_[i]<=t2 && t2<=blkc2_[i] && blkr1_[i]<=t1 && t1<=blkr2_[i]) { b = i; break; }
     }
-    assert(("Couldnt determine the block",1==2));
-    return -1;
+    // HM-C21, LX-12: unconditional error (only evaluated on the failure path); returning -1 made the callers index
+    // blkr1_[-1] in Release
+    HNESSI_REQUIRE(b >= 0, "herm_matrix_hodlr::time2block", HNESSI_KV(t1), HNESSI_KV(t2), HNESSI_KV(nt_),
+                   detail::note{"(t1,t2) is not inside a compressed block"});
+    return b;
 }
+
+// HM-T1..T5 (tier 2): the per-step copies and increments index both objects with this object's geometry
+void herm_matrix_hodlr::check_same_geometry_(const char *where, herm_matrix_hodlr &G) const {
+    HNESSI_REQUIRE(G.nt() == nt_ && G.nlvl() == nlvl_ && G.r() == r_ && G.size1() == size1_ && G.size2() == size2_ &&
+                   G.k() == k_ && G.sig() == sig_, where, HNESSI_KV(G.nt()), HNESSI_KV(nt_), HNESSI_KV(G.nlvl()),
+                   HNESSI_KV(nlvl_), HNESSI_KV(G.r()), HNESSI_KV(r_), HNESSI_KV(G.size1()), HNESSI_KV(size1_),
+                   HNESSI_KV(G.k()), HNESSI_KV(k_), HNESSI_KV(G.sig()), HNESSI_KV(sig_),
+                   detail::note{"both objects must have the same geometry"});
+}
+
+// tstp == -1, or tstp in the windows of both objects (tier 2)
+#define HNESSI_REQUIRE_TWO_WINDOWS_(where, tstp, G)                                                                 \
+    HNESSI_REQUIRE(tstp == -1 || (tstp >= tstpmk_ && tstp <= tstpmk_+k_ && tstp >= G.tstpmk() &&                 \
+                                  tstp <= G.tstpmk()+k_), where, HNESSI_KV(tstp), HNESSI_KV(tstpmk_),             \
+                   HNESSI_KV(G.tstpmk()), HNESSI_KV(k_),                                                          \
+                   detail::note{"tstp must be -1 or lie in the current windows [tstpmk, tstpmk+k] of both objects"})
 
 // Copy timestep tstp FROM *this INTO G (*this is not modified).
 // tstp == -1: Matsubara component; tstp >= 0: tstp must be in the current window of both objects.
 void herm_matrix_hodlr::get_timestep_curr(int tstp,herm_matrix_hodlr &G){
-    assert(G.nt()==nt_ && G.r()==r_ && G.size1()==size1_ && G.size2()==size2_ && G.k()==k_);
-    assert(tstp >= -1 && tstp <= nt_);
+    // HM-T1 (tier 2; WP4 asserts promoted)
+    check_same_geometry_("herm_matrix_hodlr::get_timestep_curr", G);
+    HNESSI_REQUIRE_TWO_WINDOWS_("herm_matrix_hodlr::get_timestep_curr", tstp, G);
     if(tstp==-1){
         memcpy(G.mat(), mat_.data(), r_ * size1_ * size2_ * sizeof(double));
     }else{ // set last kt timesteps together
-        assert(tstp>=tstpmk_ && tstp <= tstpmk_+k_ && tstp>=G.tstpmk() && tstp <= G.tstpmk()+k_);
         memcpy(G.curr_timestep_ret_ptr(tstp,0),this->curr_timestep_ret_ptr(tstp,0),(nt_ +1) * size1_ * size2_* sizeof(cplx));
         memcpy(G.curr_timestep_les_ptr(0,tstp),this->curr_timestep_les_ptr(0,tstp),(nt_ +1) * size1_ * size2_ * sizeof(cplx));
         memcpy(G.tvptr(tstp,0),this->tvptr(tstp,0),r_ * size1_ * size2_ * sizeof(cplx));
@@ -409,6 +456,7 @@ void herm_matrix_hodlr::get_timestep_curr(int tstp,herm_matrix_hodlr &G){
 // Copy the current window (last k+1 timesteps) FROM *this INTO G and give G the same window.
 // Only the window is copied, not the archived history (use operator= for a full copy).
 void herm_matrix_hodlr::get_timestep_curr(herm_matrix_hodlr &G){
+    check_same_geometry_("herm_matrix_hodlr::get_timestep_curr", G);   // HM-T2 (tier 2)
     G.set_tstpmk(tstpmk_);
     for(int i=tstpmk_;i<=tstpmk_+k_;i++){
         get_timestep_curr(i,G);
@@ -418,12 +466,13 @@ void herm_matrix_hodlr::get_timestep_curr(herm_matrix_hodlr &G){
 // Copy timestep tstp FROM G INTO *this (G is not modified); same preconditions as get_timestep_curr.
 // set is only a reasonable operation for directly stored timesteps
 void herm_matrix_hodlr::set_timestep_curr(int tstp,herm_matrix_hodlr &G){
-    assert(G.nt()==nt_ && G.r()==r_ && G.size1()==size1_ && G.size2()==size2_ && G.k()==k_);
-    assert(tstp >= -1 && tstp <= nt_);
+    // HM-T3 (tier 2; WP4 asserts promoted, LX-11)
+    check_same_geometry_("herm_matrix_hodlr::set_timestep_curr", G);
+    HNESSI_REQUIRE_TWO_WINDOWS_("herm_matrix_hodlr::set_timestep_curr", tstp, G);
     if(tstp==-1){
         memcpy(mat_.data(), G.mat(), r_ * size1_ * size2_ * sizeof(double));
     }else{
-        assert(tstp>=tstpmk_ && tstp <= tstpmk_+k_ && tstp>=G.tstpmk() && tstp <= G.tstpmk()+k_);
+        if(tstp == tstpmk_+k_) can_extrap_ = false;   // ST-6
         memcpy(this->curr_timestep_ret_ptr(tstp,0),G.curr_timestep_ret_ptr(tstp,0),(nt_ + 1) * size1_ * size2_ * sizeof(cplx));
         memcpy(this->curr_timestep_les_ptr(0,tstp),G.curr_timestep_les_ptr(0,tstp),(nt_ + 1) * size1_ * size2_ * sizeof(cplx));
         memcpy(this->tvptr(tstp,0),G.tvptr(tstp,0),r_ * size1_ * size2_ * sizeof(cplx));
@@ -433,6 +482,7 @@ void herm_matrix_hodlr::set_timestep_curr(int tstp,herm_matrix_hodlr &G){
 
 // Copy the current window (last k+1 timesteps) FROM G INTO *this and give *this the same window.
 void herm_matrix_hodlr::set_timestep_curr(herm_matrix_hodlr &G){
+    check_same_geometry_("herm_matrix_hodlr::set_timestep_curr", G);   // HM-T4 (tier 2)
     tstpmk_=G.tstpmk();
     for(int i=tstpmk_;i<=tstpmk_+k_;i++){
         set_timestep_curr(i,G);
@@ -440,8 +490,10 @@ void herm_matrix_hodlr::set_timestep_curr(herm_matrix_hodlr &G){
 }
 
 void herm_matrix_hodlr::incr_timestep_curr(int tstp,herm_matrix_hodlr &G,cplx alpha){
-    assert(tstp >= -1 && tstp <= nt_);
-    
+    // HM-T5, LX-11 (tier 2): G's slot tstp is read as well, so tstp must be in both windows
+    check_same_geometry_("herm_matrix_hodlr::incr_timestep_curr", G);
+    HNESSI_REQUIRE_TWO_WINDOWS_("herm_matrix_hodlr::incr_timestep_curr", tstp, G);
+
     cplx *x1,*x2;
     double *xM1,*xM2;
     if(tstp==-1){
@@ -452,7 +504,7 @@ void herm_matrix_hodlr::incr_timestep_curr(int tstp,herm_matrix_hodlr &G,cplx al
             xM1[i]+=std::real(alpha) * xM2[i];
         }
     }else{
-        assert(tstp>=tstpmk_ && tstp <= tstpmk_+k_);
+        if(tstp == tstpmk_+k_) can_extrap_ = false;   // ST-6
         // Ret
         int len= (tstp + 1) * size1_ * size2_;
         x1=this->curr_timestep_ret_ptr(tstp,0);
@@ -484,7 +536,9 @@ void herm_matrix_hodlr::incr_timestep_curr(int tstp,herm_matrix_hodlr &G,cplx al
 }
 
 void herm_matrix_hodlr::smul_curr(int tstp,cplx alpha){
-    assert(tstp >= -1 && tstp <= nt_);
+    // HM-T6 (tier 1, LX-11: outer bound tightened to the window)
+    HNESSI_ASSERT(tstp == -1 || (tstp >= tstpmk_ && tstp <= tstpmk_+k_), "herm_matrix_hodlr::smul_curr",
+                  HNESSI_KV(tstp), HNESSI_KV(tstpmk_), HNESSI_KV(k_));
     cplx *x;
     double *xM;
     if(tstp==-1){
@@ -494,7 +548,7 @@ void herm_matrix_hodlr::smul_curr(int tstp,cplx alpha){
             xM[i]*=std::real(alpha);
         }
     }else{
-        assert(tstp>=tstpmk_ && tstp <= tstpmk_+k_);
+        if(tstp == tstpmk_+k_) can_extrap_ = false;   // ST-6
         // Ret
         int len= (tstp + 1) * size1_ * size2_;
         x=this->curr_timestep_ret_ptr(tstp,0);
@@ -556,6 +610,8 @@ double herm_matrix_hodlr::get_memory_usage(bool print_memory_usage) {
     geometry += I * blklen_.size();
     geometry += I * les_dir_square_first_index_.size();
     geometry += I * ret_corr_index_t_.size();
+    // check state (ST-2): gmconv_valid_, gmconv_hash_ (memory rule: every member is counted)
+    geometry += (sizeof(gmconv_valid_) + sizeof(gmconv_hash_)) / 1e9;
 
     matdata = D * r_ * size1_ * size2_;
 

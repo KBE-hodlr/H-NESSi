@@ -61,12 +61,16 @@ void make_poly_integ(int k, const std::vector<long double> &P, std::vector<long 
 
 
 void make_poly_interp(int k, std::vector<double> &P){
+  // IN-10 (tier 1): k >= 0 and the output is pre-sized
+  HNESSI_ASSERT(k >= 0 && (long)P.size() == (long)((k+1)*(k+1)), "Integration::make_poly_interp", HNESSI_KV(k), HNESSI_KV(P.size()));
   std::vector<long double> PL((k+1)*(k+1));
   make_poly_interp(k, PL);
   for(int i = 0; i < (k+1)*(k+1); i++) P[i] = static_cast<double>(PL[i]);
 }
 
 void make_poly_diff(int k, std::vector<double> &D){
+  // IN-10 (tier 1): k >= 0 and the output is pre-sized
+  HNESSI_ASSERT(k >= 0 && (long)D.size() == (long)((k+1)*(k+1)), "Integration::make_poly_diff", HNESSI_KV(k), HNESSI_KV(D.size()));
   std::vector<long double> PL((k+1)*(k+1));
   std::vector<long double> DL((k+1)*(k+1));
   make_poly_interp(k, PL);
@@ -75,6 +79,8 @@ void make_poly_diff(int k, std::vector<double> &D){
 }
 
 void make_poly_integ(int k, std::vector<double> &I){
+  // IN-10 (tier 1): k >= 0 and the output is pre-sized
+  HNESSI_ASSERT(k >= 0 && (long)I.size() == (long)((k+1)*(k+1)*(k+1)), "Integration::make_poly_integ", HNESSI_KV(k), HNESSI_KV(I.size()));
   std::vector<long double> PL((k+1)*(k+1));
   std::vector<long double> IL((k+1)*(k+1)*(k+1));
   make_poly_interp(k, PL);
@@ -83,6 +89,8 @@ void make_poly_integ(int k, std::vector<double> &I){
 }
 
 void make_bd_weights(int k, std::vector<double> &BD){
+  // IN-10 (tier 1): k >= 0 and the output is pre-sized
+  HNESSI_ASSERT(k >= 0 && (long)BD.size() == (long)(k+2), "Integration::make_bd_weights", HNESSI_KV(k), HNESSI_KV(BD.size()));
   int k2=k+2;
   std::vector<long double> P(k2*k2);
   std::vector<long double> D(k2*k2);
@@ -94,6 +102,8 @@ void make_bd_weights(int k, std::vector<double> &BD){
 }
 
 void make_start(int k, std::vector<double> &s){
+  // IN-10 (tier 1): k >= 0 and the output is pre-sized
+  HNESSI_ASSERT(k >= 0 && (long)s.size() == (long)((k+1)*(k+1)), "Integration::make_start", HNESSI_KV(k), HNESSI_KV(s.size()));
   int k1=k+1,k2=k+2;
   long double x, npow;
   std::vector<long double> PP(k2*k2);
@@ -121,6 +131,8 @@ int pascal(int row, int col){
 }
 
 void make_Omega(int k, std::vector<double> &O){
+  // IN-10 (tier 1): k >= 0 and the output is pre-sized
+  HNESSI_ASSERT(k >= 0 && (long)O.size() == (long)((k+1)*(k+1)), "Integration::make_Omega", HNESSI_KV(k), HNESSI_KV(O.size()));
   int k1=k+1;
   Eigen::Matrix<long double,-1,-1> A(k1,k1);
   A.setZero();
@@ -151,6 +163,8 @@ void make_Omega(int k, std::vector<double> &O){
 }
 
 void make_ex_weights(int k, std::vector<double> &E) {
+  // IN-10 (tier 1): k >= 0 and the output is pre-sized
+  HNESSI_ASSERT(k >= 0 && (long)E.size() == (long)(k+1), "Integration::make_ex_weights", HNESSI_KV(k), HNESSI_KV(E.size()));
   std::vector<long double> PL((k+1)*(k+1));
   std::vector<long double> EL((k+1));
   make_poly_interp(k, PL);

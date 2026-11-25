@@ -47,6 +47,7 @@
 #define HNESSI_CHECKS_HPP
 
 #include <atomic>
+#include <cstdint>
 #include <exception>
 #include <mutex>
 #include <sstream>
@@ -173,6 +174,46 @@ private:
   std::exception_ptr ptr_;
   std::atomic<bool> failed_{false};
   std::mutex m_;
+};
+
+/**
+ * ST-10: records which thread is using an object (dyson, dlr_info), so that concurrent use of one object by two
+ * threads is detected (ISSUES H3: one dyson and one dlr_info per thread). Copies and assignments start free, so the
+ * owning class stays copyable. Cost: one atomic load and one compare-exchange per outermost call.
+ */
+class single_thread_owner {
+public:
+  single_thread_owner() = default;
+  single_thread_owner(const single_thread_owner &) noexcept {}
+  single_thread_owner &operator=(const single_thread_owner &) noexcept { return *this; }
+  /**
+   * Acquires the object for the calling thread. Returns true if this call acquired it (outermost call), false if the
+   * calling thread already holds it (nested call). If another thread holds it, fails with h_nessi::state_error
+   * (OpenMP policy: inside a user parallel region the message is printed and the program aborts).
+   */
+  bool acquire(const char *where);
+  void release() noexcept { owner_.store(0, std::memory_order_release); }
+  /** true if some thread holds the object (for tests). */
+  bool held() const noexcept { return owner_.load(std::memory_order_acquire) != 0; }
+
+private:
+  std::atomic<std::uintptr_t> owner_{0};
+};
+
+/** RAII: acquire a single_thread_owner for the scope (release only if this scope acquired it). */
+class owner_scope {
+public:
+  owner_scope(single_thread_owner &o, const char *where) : o_(o), outer_(o.acquire(where)) {}
+  ~owner_scope() {
+    if (outer_) o_.release();
+  }
+  owner_scope(const owner_scope &) = delete;
+  owner_scope &operator=(const owner_scope &) = delete;
+  bool outer() const noexcept { return outer_; }
+
+private:
+  single_thread_owner &o_;
+  bool outer_;
 };
 
 }  // namespace detail

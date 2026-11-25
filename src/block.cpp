@@ -1,6 +1,7 @@
 #include <iostream>
 #include "h_nessi/block.hpp"
 #include "h_nessi/utils.hpp"
+#include "h_nessi/checks.hpp"
 
 #include <Eigen/Core>
 
@@ -18,6 +19,9 @@ block::block(){
 }
 
 block::block(int rows,int cols,int epsrank,double svdtol) {
+    // BK-1 (tier 1)
+    HNESSI_ASSERT(rows >= 0 && cols >= 0 && epsrank >= 0 && svdtol >= 0, "block::block", HNESSI_KV(rows),
+                  HNESSI_KV(cols), HNESSI_KV(epsrank), HNESSI_KV(svdtol));
     rows_=rows;
     cols_=cols;
     epsrank_=epsrank;
@@ -28,6 +32,7 @@ block::block(int rows,int cols,int epsrank,double svdtol) {
 }
 
 void block::set_rank(int epsrank){
+        HNESSI_ASSERT(epsrank >= 0, "block::set_rank", HNESSI_KV(epsrank));   // BK-2 (tier 1)
         epsrank_=epsrank;
 }
 

@@ -35,8 +35,29 @@ static std::vector<A2A> g_a2a;
 static std::vector<double> g_red;
 static std::atomic<long> g_cnt_mismatch{0};
 static int g_thread_level = MPI_THREAD_FUNNELED;  // what MPI_Query_thread reports (H28 test changes it)
+static int g_mpi_initialized = 1;                 // what MPI_Initialized reports (MP-2 test changes it)
+static std::vector<std::vector<int>> g_ared;      // MPI_Allreduce (MP-18, Debug builds) per simulated rank
 extern "C" {
 int MPI_Query_thread(int *provided) { *provided = g_thread_level; return 0; }
+int MPI_Initialized(int *flag) { *flag = g_mpi_initialized; return 0; }
+int MPI_Finalized(int *flag) { *flag = 0; return 0; }
+int MPI_Abort(MPI_Comm, int code) {  // the mpi_comm std::terminate handler ends here (death test)
+  std::fprintf(stderr, "shim MPI_Abort(%d)\n", code);
+  std::fflush(stderr);
+  std::_Exit(code);
+}
+// MPI_INT / MPI_MAX only (what mpi_comm's Debug collective check uses)
+int MPI_Allreduce(const void *sb, void *rb, int n, MPI_Datatype, MPI_Op, MPI_Comm) {
+  g_ared[g_rank].assign((const int *)sb, (const int *)sb + n);
+  g_bar->arrive_and_wait();
+  for (int i = 0; i < n; i++) {
+    int m = g_ared[0][i];
+    for (int p = 1; p < g_P; p++) m = std::max(m, g_ared[p][i]);
+    ((int *)rb)[i] = m;
+  }
+  g_bar->arrive_and_wait();
+  return 0;
+}
 int MPI_Comm_size(MPI_Comm, int *s) { *s = g_P; return 0; }
 int MPI_Comm_rank(MPI_Comm, int *r) { *r = g_rank; return 0; }
 int MPI_Alltoallv(const void *sb, const int sc[], const int sd[], MPI_Datatype st, void *rb, const int rc[], const int rd[],
@@ -396,6 +417,7 @@ void launch(int P, const std::function<void()> &f) {
   g_P = P;
   g_a2a.assign(g_P, {});
   g_red.assign(g_P, 0.);
+  g_ared.assign(g_P, {});
   std::barrier<> bar(g_P);
   g_bar = &bar;
   std::vector<std::thread> th;
@@ -563,34 +585,34 @@ TEST(MpiCommChecks, TooManyLambdas) {
   });
 }
 
-// (c) inside a user parallel region every thread of the team throws the same exception (no thread is left waiting
-// at a barrier), so a per-thread catch inside the region works.
-TEST(MpiCommChecks, NospawnEveryThreadThrowsInsideRegion) {
-  hn_test::run_isolated([] {
-    std::atomic<int> nthrow{0};
-    int team = 0;
-    launch(1, [&]() {
-      int nao = 1, Nk = 5, k = 2, nt = 8, r = 0, T = 2;
-      dlr_info dlr(r, LAMBDA, EPSDLR, BETA, nao, XI);
-      mpi_comm comm(Nk, nt, r, nao, 1);
-      std::vector<herm_matrix_hodlr> G;
-      for (int i = 0; i < comm.my_Nk; i++) G.emplace_back(nt, r, 1, 1e-10, nao, nao, XI, k);
-      auto g3 = make_gets(3), g1 = make_gets(1);
-      auto s3 = make_sets(3), s1 = make_sets(1);
+// (c) WP6a side finding 2 (WP6b): the component-count checks follow the checks.hpp OpenMP policy. Inside a user parallel
+// region (where _nospawn runs by contract) a failed check cannot be thrown out of the region: every thread prints the
+// message (with MPI rank and thread) and the program aborts. Outside a region the same call throws (tests (a), (b)).
+namespace {
+void nospawn_bad_count_in_region(int which) {
+  launch(1, [&]() {
+    int nao = 1, Nk = 5, k = 2, nt = 8, r = 0, T = 2;
+    dlr_info dlr(r, LAMBDA, EPSDLR, BETA, nao, XI);
+    mpi_comm comm(Nk, nt, r, nao, 1);
+    std::vector<herm_matrix_hodlr> G;
+    for (int i = 0; i < comm.my_Nk; i++) G.emplace_back(nt, r, 1, 1e-10, nao, nao, XI, k);
+    auto g3 = make_gets(3), g1 = make_gets(1);
 #pragma omp parallel
-      {
-        g_rank = 0;
-#pragma omp master
-        team = omp_get_num_threads();
-        try { comm.mpi_get_and_comm_nospawn(T, G, dlr); } catch (const std::invalid_argument &) { nthrow++; }
-        try { comm.mpi_comm_and_set_nospawn(T, G); } catch (const std::invalid_argument &) { nthrow++; }
-        try { comm.mpi_get_and_comm_nospawn(T, g3, g1); } catch (const std::invalid_argument &) { nthrow++; }
-        try { comm.mpi_comm_and_set_nospawn(T, s1, s3); } catch (const std::invalid_argument &) { nthrow++; }
-      }
-    });
-    EXPECT_GE(team, 2);
-    EXPECT_EQ(nthrow.load(), 4 * team);
+    {
+      g_rank = 0;
+      if (which == 0) comm.mpi_get_and_comm_nospawn(T, G, dlr);
+      else comm.mpi_get_and_comm_nospawn(T, g3, g1);
+    }
   });
+}
+}  // namespace
+TEST(MpiCommChecksDeathTest, NospawnCheckInsideRegionAborts) {
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
+  ASSERT_GE(omp_get_max_threads(), 2) << "test needs OMP_NUM_THREADS >= 2";
+  EXPECT_DEATH(nospawn_bad_count_in_region(0),
+               "check failed inside a user OpenMP parallel region: h_nessi::mpi_comm::mpi_get_and_comm_nospawn: "
+               "max_component_size_ >= 2\\*nao_\\*nao_ violated");
+  EXPECT_DEATH(nospawn_bad_count_in_region(1), "exceeds max_component_size_");
 }
 
 // WP6a OpenMP error policy, item 3: an error raised inside a library-owned parallel region of a _spawn routine (a
@@ -611,7 +633,9 @@ TEST(MpiCommChecks, SpawnRegionErrorIsRethrownCatchable) {
         comm.mpi_get_and_comm_spawn(T, G, dlr2);
         ADD_FAILURE() << "no exception";
       } catch (const h_nessi::precondition_error &e) {
-        EXPECT_NE(std::string(e.what()).find("h_nessi::herm_matrix_hodlr::get_tv_reversed: dlr.r() == r_"), std::string::npos)
+        // WP6b: the dlr pairing is checked at entry (MP-9) before the library region; the in-region capture is
+        // exercised by the throwing user lambdas below
+        EXPECT_NE(std::string(e.what()).find("h_nessi::mpi_comm::mpi_get_and_comm_spawn: dlr.r() == r_"), std::string::npos)
             << e.what();
       }
       EXPECT_THROW(comm.mpi_get_and_comm_spawn(-1, G, dlr2), h_nessi::precondition_error);
@@ -802,4 +826,161 @@ TEST(MpiCommThreadLevel, WarnsBelowFunneled) {
     if (level < MPI_THREAD_FUNNELED) EXPECT_NE(err.find("MPI_Init_thread"), std::string::npos) << err;
   }
   g_thread_level = MPI_THREAD_FUNNELED;
+}
+
+// ------------------------------------------------------------------ WP6b entry checks (doc 61 MP-*, ST-9)
+TEST(MpiCommChecksWP6b, ConstructorAndThreadLevel) {
+  hn_test::run_isolated([] {
+    launch(1, [&]() {
+      EXPECT_THROW(mpi_comm(0, 8, 5, 1), h_nessi::precondition_error);  // MP-1
+      EXPECT_THROW(mpi_comm(4, 8, 0, 1), h_nessi::precondition_error);
+      EXPECT_THROW(mpi_comm(4, 8, 5, 1, 0), h_nessi::precondition_error);
+      g_mpi_initialized = 0;  // MP-2
+      EXPECT_THROW(mpi_comm(4, 8, 5, 1), h_nessi::state_error);
+      g_mpi_initialized = 1;
+      // MP-3: below FUNNELED the constructor warns, the _nospawn routines refuse, the _spawn routines work
+      g_thread_level = MPI_THREAD_SINGLE;
+      testing::internal::CaptureStderr();
+      mpi_comm comm(4, 8, 5, 1, 2);
+      testing::internal::GetCapturedStderr();
+      g_thread_level = MPI_THREAD_FUNNELED;
+      auto g1 = make_gets(1);
+      auto s1 = make_sets(1);
+      EXPECT_THROW(comm.mpi_get_and_comm_nospawn(2, g1, g1), h_nessi::state_error);
+      EXPECT_NO_THROW(comm.mpi_get_and_comm_spawn(2, g1, g1));
+      EXPECT_THROW(comm.mpi_comm_and_set_nospawn(2, s1, s1), h_nessi::state_error);
+      EXPECT_NO_THROW(comm.mpi_comm_and_set_spawn(2, s1, s1));
+    });
+  });
+}
+
+TEST(MpiCommChecksWP6b, TimeIndexObjectsAndDlr) {
+  hn_test::run_isolated([] {
+    launch(1, [&]() {
+      int nao = 1, Nk = 4, k = 2, nt = 8, r = 0;
+      dlr_info dlr(r, LAMBDA, EPSDLR, BETA, nao, XI);
+      int r2 = 0;
+      dlr_info dlr_nao(r2, LAMBDA, EPSDLR, BETA, 2, XI);
+      mpi_comm comm(Nk, nt, r, nao, 2);
+      std::vector<herm_matrix_hodlr> G, Gshort, G2;
+      for (int i = 0; i < comm.my_Nk; i++) {
+        G.emplace_back(nt, r, 1, 1e-10, nao, nao, XI, k);
+        G2.emplace_back(nt, r, 1, 1e-10, 2, 2, XI, k);
+      }
+      for (int i = 0; i + 1 < comm.my_Nk; i++) Gshort.emplace_back(nt, r, 1, 1e-10, nao, nao, XI, k);
+      auto g1 = make_gets(1);
+      EXPECT_THROW(comm.mpi_get_and_comm_spawn(nt, g1, g1), h_nessi::precondition_error);  // MP-6
+      EXPECT_THROW(comm.mpi_get_and_comm_spawn(-2, G, dlr), h_nessi::precondition_error);
+      try {
+        comm.mpi_get_and_comm_spawn(1, Gshort, dlr);  // MP-8: one object per local k-point
+        ADD_FAILURE() << "no exception";
+      } catch (const h_nessi::precondition_error &e) {
+        EXPECT_NE(std::string(e.what()).find("one object per local k-point"), std::string::npos) << e.what();
+      }
+      EXPECT_THROW(comm.mpi_get_and_comm_spawn(1, G2, dlr), h_nessi::precondition_error);  // nao
+      EXPECT_THROW(comm.mpi_get_and_comm_spawn(k + 1, G, dlr), h_nessi::precondition_error);  // row k+1 not in window
+      EXPECT_THROW(comm.mpi_get_and_comm_spawn(1, G, dlr_nao), h_nessi::precondition_error);  // MP-9
+      EXPECT_NO_THROW(comm.mpi_get_and_comm_spawn(k, G, dlr));
+      EXPECT_THROW(comm.mpi_comm_and_set_spawn(k, Gshort), h_nessi::precondition_error);
+      EXPECT_NO_THROW(comm.mpi_comm_and_set_spawn(k, G));
+    });
+  });
+}
+
+// ST-9 (MP-5, MP-11): a set reuses the counts/displacements of the preceding get
+TEST(MpiCommChecksWP6b, SetFollowsMatchingGet) {
+  hn_test::run_isolated([] {
+    launch(1, [&]() {
+      int nao = 1, Nk = 4, k = 2, nt = 8, r = 0;
+      dlr_info dlr(r, LAMBDA, EPSDLR, BETA, nao, XI);
+      mpi_comm comm(Nk, nt, r, nao, 3);
+      std::vector<herm_matrix_hodlr> G;
+      for (int i = 0; i < comm.my_Nk; i++) G.emplace_back(nt, r, 1, 1e-10, nao, nao, XI, k);
+      auto g1 = make_gets(1), g2 = make_gets(2);
+      auto s1 = make_sets(1), s2 = make_sets(2);
+      try {
+        comm.mpi_comm_and_set_spawn(1, s1, s1);  // no get yet
+        ADD_FAILURE() << "no exception";
+      } catch (const h_nessi::state_error &e) {
+        EXPECT_NE(std::string(e.what()).find("a set must follow a get with the same ti"), std::string::npos) << e.what();
+      }
+      comm.mpi_get_and_comm_spawn(1, g1, g1);
+      EXPECT_THROW(comm.mpi_comm_and_set_spawn(2, s1, s1), h_nessi::state_error);  // other ti
+      EXPECT_THROW(comm.mpi_comm_and_set_spawn(1, s2, s1), h_nessi::state_error);  // other counts
+      EXPECT_THROW(comm.mpi_comm_and_set_spawn(1, G), h_nessi::state_error);       // other API level
+      EXPECT_NO_THROW(comm.mpi_comm_and_set_spawn(1, s1, s1));
+      EXPECT_THROW(comm.mpi_comm_and_set_spawn(1, s1, s1), h_nessi::state_error);  // one set per get
+      comm.mpi_get_and_comm_spawn(-1, g2, g1);
+      EXPECT_NO_THROW(comm.mpi_comm_and_set_spawn(-1, s1, s1));  // ti = -1: getsLG/setsLR are not used
+      comm.mpi_get_and_comm_spawn(k, G, dlr);
+      EXPECT_THROW(comm.mpi_comm_and_set_nospawn(k, s2, s2), h_nessi::state_error);
+      EXPECT_NO_THROW(comm.mpi_comm_and_set_nospawn(k, G));
+    });
+  });
+}
+
+// MP-13 (Q-9: warn): the ti = -1 set drops an imaginary Sigma^M
+TEST(MpiCommChecksWP6b, ImaginarySigmaMatWarnsOnce) {
+  hn_test::run_isolated([] {
+    std::string err;
+    launch(1, [&]() {
+      int nao = 1, Nk = 4, k = 2, nt = 8, r = 0;
+      dlr_info dlr(r, LAMBDA, EPSDLR, BETA, nao, XI);
+      mpi_comm comm(Nk, nt, r, nao, 2);
+      std::vector<herm_matrix_hodlr> G;
+      for (int i = 0; i < comm.my_Nk; i++) G.emplace_back(nt, r, 1, 1e-10, nao, nao, XI, k);
+      testing::internal::CaptureStderr();
+      for (int rep = 0; rep < 2; rep++) {
+        comm.mpi_get_and_comm_spawn(-1, G, dlr);
+        for (int kg = 0; kg < Nk; kg++)
+          for (int n = 0; n < r; n++) comm.map_mat(kg, n)(0, 0) = cplx(1.0, 0.01);
+        comm.mpi_comm_and_set_spawn(-1, G);
+      }
+      err = testing::internal::GetCapturedStderr();
+    });
+    size_t n = 0;
+    for (size_t pos = err.find("relative imaginary part"); pos != std::string::npos; pos = err.find("relative imaginary part", pos + 1)) n++;
+    EXPECT_EQ(n, 1u) << err;
+  });
+}
+
+// WP6a side finding 4: an uncaught exception after an mpi_comm was constructed ends in MPI_Abort (with the message)
+namespace {
+void terminate_after_mpi_comm() {
+  launch(1, [&]() { mpi_comm comm(4, 8, 5, 1); });
+  try {
+    throw std::runtime_error("uncaught on purpose");
+  } catch (...) {
+    std::terminate();
+  }
+}
+}  // namespace
+TEST(MpiCommChecksWP6bDeathTest, TerminateHandlerCallsMpiAbort) {
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
+  EXPECT_DEATH(terminate_after_mpi_comm(), "std::terminate on MPI rank 0: uncaught on purpose");
+  EXPECT_DEATH(terminate_after_mpi_comm(), "shim MPI_Abort\\(1\\)");
+}
+
+// MP-15..17 (tier 1): the buffer maps
+TEST(MpiCommChecksWP6bDeathTest, Tier1Maps) {
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
+#ifndef NDEBUG
+  auto body = [](int which) {
+    launch(1, [&]() {
+      mpi_comm comm(4, 8, 5, 1, 2);
+      if (which == 0) comm.map_ret(0, 0);  // before any get: my_first_t = -1
+      auto g1 = make_gets(1);
+      comm.mpi_get_and_comm_spawn(3, g1, g1);
+      if (which == 1) comm.map_les(4, 0);  // k out of range
+      if (which == 2) comm.map_tv(0, 5);   // tau out of range
+      if (which == 3) comm.t_allk_buff_index(4, 0, 0, 0);  // t' out of this rank's block (my_Nt = 4)
+    });
+  };
+  EXPECT_DEATH(body(0), "mpi_comm::map_ret");
+  EXPECT_DEATH(body(1), "mpi_comm::map_les");
+  EXPECT_DEATH(body(2), "mpi_comm::map_tv");
+  EXPECT_DEATH(body(3), "mpi_comm::t_allk_buff_index");
+#else
+  GTEST_SKIP() << "asserts are off (NDEBUG): the map checks are tier 1";
+#endif
 }

@@ -19,6 +19,13 @@ void dyson::write_timing(h5e::File &file, std::string label) {
 }
 
 void dyson::write_checkpoint_hdf5(h5e::File &file, std::string label) {
+  call_scope cs(*this);
+  // ST-11 (D-9): the DLR parameters, verified by the checkpoint constructor
+  h5e::dump(file, label + "/xi", xi_);
+  h5e::dump(file, label + "/r", r_);
+  h5e::dump(file, label + "/beta", beta_);
+  h5e::dump(file, label + "/eps", dlr_eps_);
+  h5e::dump(file, label + "/lambda", dlr_lambda_);
   h5e::dump(file, label + "/nao", nao_);
   h5e::dump(file, label + "/es", es_);
   h5e::dump(file, label + "/k", k_);
@@ -74,6 +81,9 @@ dlr_(dlr)
   profile_ = profile;
   timing = DMatrix::Zero(profile_ ? nt : 0, 25);
   herm_diag_.assign(nt_+1, 0.0);
+  herm_copy_.assign(es_, 0.);
+  dlr_eps_ = dlr.eps();
+  dlr_lambda_ = dlr.lambda();
 }
 
 std::vector<double> dyson::memory_usage_bytes(void) {
@@ -95,6 +105,12 @@ std::vector<double> dyson::memory_usage_bytes(void) {
     epsnaotmp = Z * (epsnao_tmp_.size() + epsnao_tmp_2_.size());
     qxm = Z * (Q_.size() + X_.size() + M_.size() + iden_.size() + bound_.size());
     tim = D * timing.rows() * timing.cols() + D * herm_diag_.size();   // timing + Hermiticity diagnostic (D-11)
+    // check state (memory rule: every member is counted): D-11 deferred slice (herm_copy_ + scalars), ST-3, ST-4,
+    // ST-10, ST-11, DY-S7
+    tim += Z * herm_copy_.size();
+    tim += sizeof(herm_copy_t_) + sizeof(herm_pend_) + sizeof(herm_pend_rel_) + sizeof(g0_valid_) + sizeof(stamp_G_) +
+           sizeof(stamp_tstp_) + sizeof(stamp_mask_) + sizeof(owner_) + sizeof(dlr_eps_) + sizeof(dlr_lambda_) +
+           sizeof(les00_warned_);
 
     return {tautmp, g0, g0conv, epsnaotmp, qxm, tim, tautmp + g0 + g0conv + epsnaotmp + qxm + tim};
 }
@@ -163,8 +179,30 @@ dlr_(dlr)
   HNESSI_REQUIRE(!profile_ || (timing.rows() == nt_ && timing.cols() == 25), "dyson::dyson(h5e::File&,label,dlr)",
                  HNESSI_KV(timing.rows()), HNESSI_KV(timing.cols()), HNESSI_KV(nt_));
   herm_diag_.assign(nt_+1, 0.0);
+  herm_copy_.assign(es_, 0.);
+  dlr_eps_ = dlr.eps();
+  dlr_lambda_ = dlr.lambda();
   // ST-3: the saved G0 (DG0_, DG0ConvMat_) is not checkpointed, so g0_valid_ stays false
   g0_valid_ = false;
+
+  // ST-11 (D-9, DY-C3): the dlr_info must have the statistics and DLR parameters of the run that wrote the checkpoint
+  // (doubles: relative tolerance 1e-12). Checkpoints written before WP6b do not store them and are not verified.
+  if(in.exist(label + std::string("/xi"))) {
+    int cxi = in.getDataSet(label + std::string("/xi")).read<int>();
+    int cr = in.getDataSet(label + std::string("/r")).read<int>();
+    double cbeta = in.getDataSet(label + std::string("/beta")).read<double>();
+    double ceps = in.getDataSet(label + std::string("/eps")).read<double>();
+    double clambda = in.getDataSet(label + std::string("/lambda")).read<double>();
+    auto same = [](double a, double b) { return std::abs(a - b) <= 1e-12 * std::max(std::abs(a), std::abs(b)); };
+    HNESSI_REQUIRE_STATE(cxi == xi_ && cr == r_ && same(cbeta, beta_) && same(ceps, dlr_eps_) &&
+                         same(clambda, dlr_lambda_), "dyson::dyson(h5e::File&,label,dlr)", HNESSI_KV(cxi),
+                         HNESSI_KV(xi_), HNESSI_KV(cr), HNESSI_KV(r_), HNESSI_KV(cbeta), HNESSI_KV(beta_),
+                         HNESSI_KV(ceps), HNESSI_KV(dlr_eps_), HNESSI_KV(clambda), HNESSI_KV(dlr_lambda_),
+                         detail::note{"the dlr_info differs from the one of the run that wrote the checkpoint"});
+  } else {
+    detail::warn("h_nessi::dyson::dyson(h5e::File&,'" + label + "'): the checkpoint does not store the DLR parameters "
+                 "(written before WP6b); xi, r, beta, eps and lambda of the dlr_info are not verified");
+  }
 }
 
 // =====================================================================================================================
@@ -228,11 +266,40 @@ double dyson::ensure_finite_(double err, const char *where) {
 // throws above herm_err_tol_ before anything is modified; then, if enabled, it is replaced by (h+h^dagger)/2. Entries
 // that are already Hermitian are not written (no race when threads share an h that is already Hermitian), and
 // (a+conj(conj(a)))/2 == a exactly, so a slice symmetrised once is never changed again.
-double dyson::hermitize_(cplx *H0, int t0, int t1, const char *where) {
+// Slice `newest` (the time step T of a dyson_timestep* call) follows maintainer decision (a) of WP6a side finding 1:
+// the tolerances are enforced on the h(T) of the corrector solves, not on the h(T) built from the extrapolated
+// predictor (see the members herm_copy_t_ .. herm_pend_rel_).
+void dyson::herm_enforce_(double rel, int t, const char *where) {
+  HNESSI_REQUIRE(rel <= herm_err_tol_, where, HNESSI_KV(rel), HNESSI_KV(t), HNESSI_KV(herm_err_tol_),
+                 detail::note{"h(t) is not Hermitian: rel = ||h(t)-h(t)^dagger||_F/||h(t)||_F (see "
+                              "dyson::set_hermiticity_tolerances)"});
+  if(rel > herm_warn_tol_ && !herm_warned_) {
+    herm_warned_ = true;
+    std::ostringstream msg;
+    msg << "h_nessi::" << where << ": h(t) has a relative anti-Hermitian part " << rel << " at t=" << t
+        << " (> herm_warn_tol=" << herm_warn_tol_ << ")"
+        << (herm_symmetrize_ ? "; h(t) is replaced in place by (h+h^dagger)/2" : "; h(t) is used as is (check only)")
+        << ". Warned once per dyson object; see dyson::antihermiticity_per_slice().";
+    detail::warn(msg.str());
+  }
+}
+
+double dyson::hermitize_(cplx *H0, int t0, int t1, const char *where, int newest) {
+  auto slice_is_copy = [&](const cplx *hp) {
+    for(int i = 0; i < es_; i++) if(hp[i] != herm_copy_[i]) return false;
+    return true;
+  };
+  // a deferred slice of an earlier step that is still unchanged was used as is by the last solve: enforce it now
+  if(herm_pend_ && herm_copy_t_ != newest && t0 <= herm_copy_t_ && herm_copy_t_ <= t1) {
+    herm_pend_ = false;
+    if(slice_is_copy(H0 + (std::ptrdiff_t)herm_copy_t_ * es_)) herm_enforce_(herm_pend_rel_, herm_copy_t_, where);
+  }
   double maxrel = 0;
-  int tworst = t0;
   for(int t = t0; t <= t1; t++) {
     cplx *hp = H0 + (std::ptrdiff_t)t * es_;
+    const bool is_newest = (t == newest);
+    // the newest slice, unchanged since it was measured by an earlier solve of this step: nothing new to check
+    if(is_newest && herm_copy_t_ == t && slice_is_copy(hp)) continue;
     double dn = 0, hn = 0;
     for(int i = 0; i < nao_; i++) {
       cplx d = hp[i*nao_+i];
@@ -245,11 +312,21 @@ double dyson::hermitize_(cplx *H0, int t0, int t1, const char *where) {
       }
     }
     double rel = dn == 0 ? 0. : std::sqrt(dn / hn);
-    if(t >= -1 && t+1 < (int)herm_diag_.size()) herm_diag_[t+1] = std::max(herm_diag_[t+1], rel);
-    if(rel > maxrel) { maxrel = rel; tworst = t; }
-    HNESSI_REQUIRE(rel <= herm_err_tol_, where, HNESSI_KV(rel), HNESSI_KV(t), HNESSI_KV(herm_err_tol_),
-                   detail::note{"h(t) is not Hermitian: rel = ||h(t)-h(t)^dagger||_F/||h(t)||_F (see "
-                                "dyson::set_hermiticity_tolerances)"});
+    maxrel = std::max(maxrel, rel);
+    if(is_newest) {
+      // diagnostic: the value of the latest version of h(T) used by a solve
+      if(t >= -1 && t+1 < (int)herm_diag_.size()) herm_diag_[t+1] = rel;
+      if(herm_copy_t_ == t) {   // rewritten during the step (corrector): enforce now, drop the predictor value
+        herm_pend_ = false;
+        herm_enforce_(rel, t, where);
+      } else {                  // first solve of the step (predictor): defer
+        herm_pend_ = true;
+        herm_pend_rel_ = rel;
+      }
+    } else {
+      if(t >= -1 && t+1 < (int)herm_diag_.size()) herm_diag_[t+1] = std::max(herm_diag_[t+1], rel);
+      herm_enforce_(rel, t, where);
+    }
     if(herm_symmetrize_ && dn != 0) {
       for(int i = 0; i < nao_; i++) {
         cplx &d = hp[i*nao_+i];
@@ -264,17 +341,12 @@ double dyson::hermitize_(cplx *H0, int t0, int t1, const char *where) {
         }
       }
     }
+    if(is_newest) {
+      std::copy(hp, hp + es_, herm_copy_.begin());
+      herm_copy_t_ = t;
+    }
   }
   herm_last_ = maxrel;
-  if(maxrel > herm_warn_tol_ && !herm_warned_) {
-    herm_warned_ = true;
-    std::ostringstream msg;
-    msg << "h_nessi::" << where << ": h(t) has a relative anti-Hermitian part " << maxrel << " at t=" << tworst
-        << " (> herm_warn_tol=" << herm_warn_tol_ << ")"
-        << (herm_symmetrize_ ? "; h(t) is replaced in place by (h+h^dagger)/2" : "; h(t) is used as is (check only)")
-        << ". Warned once per dyson object; see dyson::antihermiticity_per_slice().";
-    detail::warn(msg.str());
-  }
   return maxrel;
 }
 
@@ -320,6 +392,49 @@ void dyson::require_real_(const cplx *hp, const char *where) {
                               "complex h(-1) would be truncated (ISSUES D1)"});
 }
 
+// ST-4 (DY-S6, DY-T7): component order for (G, tstp). A component records its bit after a successful solve; a later
+// component checks the bits it needs. A different G or tstp starts a new record.
+void dyson::stamp_(herm_matrix_hodlr &G, int tstp, unsigned bit) {
+  if(stamp_G_ != &G || stamp_tstp_ != tstp) {
+    stamp_G_ = &G;
+    stamp_tstp_ = tstp;
+    stamp_mask_ = 0;
+  }
+  stamp_mask_ |= bit;
+}
+
+void dyson::require_stamp_(const char *where, herm_matrix_hodlr &G, int tstp, unsigned bits, const char *hint) {
+  unsigned have = (stamp_G_ == &G && stamp_tstp_ == tstp) ? stamp_mask_ : 0u;
+  HNESSI_REQUIRE_STATE((have & bits) == bits, where, HNESSI_KV(tstp), HNESSI_KV(have), HNESSI_KV(bits),
+                       detail::note{hint});
+}
+
+// DY-S7 (tier 2): the _nobc/_2leg bootstraps use G^<(0,0), set by the caller, as the boundary value. It must be
+// anti-Hermitian (G^<(0,0) = i xi rho with a Hermitian density matrix); relative tolerance herm_err_tol_. An all-zero
+// G^<(0,0) is legal (empty orbitals) but usually means it was not set: warned once per dyson object.
+void dyson::check_les00_(const char *where, herm_matrix_hodlr &G) {
+  ZMatrixMap L(G.curr_timestep_les_ptr(0, 0), nao_, nao_);
+  double n = L.norm(), a = (L + L.adjoint()).norm();
+  double rel = n == 0 ? 0. : a / n;
+  HNESSI_REQUIRE(rel <= herm_err_tol_, where, HNESSI_KV(rel), HNESSI_KV(herm_err_tol_),
+                 detail::note{"G^<(0,0) (the initial condition, set by the caller) must be anti-Hermitian: "
+                              "rel = ||G^<(0,0)+G^<(0,0)^dagger||_F/||G^<(0,0)||_F"});
+  if(n == 0 && !les00_warned_) {
+    les00_warned_ = true;
+    detail::warn(std::string("h_nessi::") + where + ": G^<(0,0) is zero; the _nobc/_2leg bootstraps use it as the "
+                 "initial condition (set it from the initial density matrix, G^<(0,0) = i xi rho). Warned once.");
+  }
+}
+
+// DY-M10, DY-F10 (tier 2, bosons): every eigenvalue of h - mu must be > 0 (otherwise bose() divides by ~0 or the
+// Matsubara G0 diverges). eval0 are the eigenvalues of mu - h.
+void dyson::require_bosonic_spectrum_(const DColVector &eval0, const char *where) {
+  if(xi_ != 1 || eval0.size() == 0) return;
+  double emin = -eval0.maxCoeff();   // smallest eigenvalue of h - mu
+  HNESSI_REQUIRE(emin > 0, where, HNESSI_KV(emin),
+                 detail::note{"bosons: every eigenvalue of h - mu must be positive"});
+}
+
 void dyson::set_hermiticity_tolerances(double warn_tol, double err_tol) {
   HNESSI_REQUIRE(warn_tol >= 0 && err_tol >= 0 && warn_tol <= err_tol, "dyson::set_hermiticity_tolerances",
                  HNESSI_KV(warn_tol), HNESSI_KV(err_tol));
@@ -333,7 +448,7 @@ void dyson::enter_timestep_(const char *where, int tstp, herm_matrix_hodlr &G, h
   check_solver_args_(where, G, Sigma, I, h, mu);
   check_step_(where, tstp, G, Sigma);
   if(uses_tv) G.require_gmconv_current(where);   // ST-2 (DY-T5)
-  if(hlo <= hhi) hermitize_(H, hlo, hhi, where);  // D-11 (DY-T4)
+  if(hlo <= hhi) hermitize_(H, hlo, hhi, where, tstp);  // D-11 (DY-T4); slice tstp: corrector-based tolerance
 }
 
 // all checks of a bootstrap entry point (slices 0..k of h are read when reads_h)
@@ -350,7 +465,7 @@ void dyson::enter_start_(const char *where, herm_matrix_hodlr &G, herm_matrix_ho
 // =====================================================================================================================
 
 double dyson::dyson_timestep(int tstp, herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h){
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_timestep";
   if(cs.outer()) {
     check_function_(where, H, tstp);
@@ -366,7 +481,7 @@ double dyson::dyson_timestep(int tstp, herm_matrix_hodlr &G, double mu, function
 }
 
 std::vector<double> dyson::dyson_timestep_errinfo(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h){
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_timestep_errinfo";
   if(cs.outer()) enter_timestep_(where, tstp, G, Sigma, I, h, mu, H, 0, tstp, true);
   G.can_extrap() = false;
@@ -384,7 +499,7 @@ std::vector<double> dyson::dyson_timestep_errinfo(int tstp, herm_matrix_hodlr &G
 }
 
 double dyson::dyson_timestep(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h){
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_timestep";
   if(cs.outer()) enter_timestep_(where, tstp, G, Sigma, I, h, mu, H, 0, tstp, true);
   double err=0.0;
@@ -399,7 +514,7 @@ double dyson::dyson_timestep(int tstp, herm_matrix_hodlr &G, double mu, cplx *H,
 }
 
 double dyson::dyson_timestep_nobc(int tstp, herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h){
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_timestep_nobc";
   if(cs.outer()) {
     check_function_(where, H, tstp);
@@ -417,7 +532,7 @@ double dyson::dyson_timestep_nobc(int tstp, herm_matrix_hodlr &G, double mu, fun
 }
 
 double dyson::dyson_timestep_nobc(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h){
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_timestep_nobc";
   if(cs.outer()) enter_timestep_(where, tstp, G, Sigma, I, h, mu, H, 0, tstp, true);
   double err=0.0;
@@ -432,7 +547,7 @@ double dyson::dyson_timestep_nobc(int tstp, herm_matrix_hodlr &G, double mu, cpl
 }
 
 double dyson::dyson_timestep_2leg(int tstp, herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h){
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_timestep_2leg";
   if(cs.outer()) {
     check_function_(where, H, tstp);
@@ -449,7 +564,7 @@ double dyson::dyson_timestep_2leg(int tstp, herm_matrix_hodlr &G, double mu, fun
 }
 
 double dyson::dyson_timestep_2leg(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h){
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_timestep_2leg";
   if(cs.outer()) enter_timestep_(where, tstp, G, Sigma, I, h, mu, H, 0, tstp, false);
   double err=0.0;
@@ -467,7 +582,7 @@ double dyson::dyson_timestep_2leg(int tstp, herm_matrix_hodlr &G, double mu, cpl
 // =====================================================================================================================
 
 double dyson::dyson_start_tv(herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_start_tv";
   if(cs.outer()) { check_function_(where, H, k_); enter_start_(where, G, Sigma, I, h, mu, H.ptr(0), true, true); }
   double err = dyson_start_tv(G, mu, H.ptr(0), Sigma, I, h);
@@ -475,15 +590,17 @@ double dyson::dyson_start_tv(herm_matrix_hodlr &G, double mu, function &H, herm_
 }
 
 double dyson::dyson_start_ret(herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_start_ret";
-  if(cs.outer()) { check_function_(where, H, k_); enter_start_(where, G, Sigma, I, h, mu, H.ptr(0), false, false); }
+  if(cs.outer()) { check_function_(where, H, k_); enter_start_(where, G, Sigma, I, h, mu, H.ptr(0), false, false);
+    require_stamp_(where, G, boot_stamp_, st4_tv, "call dyson_start_tv for this G first (or use dyson_start)");   // ST-4 (DY-S6)
+  }
   double err = dyson_start_ret(G, mu, H.ptr(0), Sigma, I, h);
   return cs.outer() ? ensure_finite_(err, where) : err;
 }
 
 double dyson::dyson_start_ret_ntti(herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h, bool imp_tp0) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_start_ret_ntti";
   if(cs.outer()) { check_function_(where, H, k_); enter_start_(where, G, Sigma, I, h, mu, H.ptr(0), true, false); }
   double err = dyson_start_ret_ntti(G, mu, H.ptr(0), Sigma, I, h, imp_tp0);
@@ -491,33 +608,41 @@ double dyson::dyson_start_ret_ntti(herm_matrix_hodlr &G, double mu, function &H,
 }
 
 double dyson::dyson_start_les(herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_start_les";
-  if(cs.outer()) { check_function_(where, H, k_); enter_start_(where, G, Sigma, I, h, mu, H.ptr(0), true, false); }
+  if(cs.outer()) { check_function_(where, H, k_); enter_start_(where, G, Sigma, I, h, mu, H.ptr(0), true, false);
+    require_stamp_(where, G, boot_stamp_, st4_tv, "call dyson_start_tv for this G first (or use dyson_start)");   // ST-4 (DY-S6)
+  }
   double err = dyson_start_les(G, mu, H.ptr(0), Sigma, I, h);
   return cs.outer() ? ensure_finite_(err, where) : err;
 }
 
 double dyson::dyson_start_les_ntti(herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_start_les_ntti";
-  if(cs.outer()) { check_function_(where, H, k_); enter_start_(where, G, Sigma, I, h, mu, H.ptr(0), true, false); }
+  if(cs.outer()) { check_function_(where, H, k_); enter_start_(where, G, Sigma, I, h, mu, H.ptr(0), true, false);
+    require_stamp_(where, G, boot_stamp_, st4_tv | st4_ret_ntti, "call dyson_start_tv and dyson_start_ret_ntti for this G first (or use dyson_start_ntti)");   // ST-4 (DY-S6)
+  }
   double err = dyson_start_les_ntti(G, mu, H.ptr(0), Sigma, I, h);
   return cs.outer() ? ensure_finite_(err, where) : err;
 }
 
 double dyson::dyson_start_les_ntti_nobc(herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_start_les_ntti_nobc";
-  if(cs.outer()) { check_function_(where, H, k_); enter_start_(where, G, Sigma, I, h, mu, H.ptr(0), true, false); }
+  if(cs.outer()) { check_function_(where, H, k_); enter_start_(where, G, Sigma, I, h, mu, H.ptr(0), true, false);
+    require_stamp_(where, G, boot_stamp_, st4_tv | st4_ret_ntti, "call dyson_start_tv and dyson_start_ret_ntti for this G first (or use dyson_start_ntti_nobc)");   // ST-4 (DY-S6)
+  }
   double err = dyson_start_les_ntti_nobc(G, mu, H.ptr(0), Sigma, I, h);
   return cs.outer() ? ensure_finite_(err, where) : err;
 }
 
 double dyson::dyson_start_les_2leg(herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_start_les_2leg";
-  if(cs.outer()) { check_function_(where, H, k_); enter_start_(where, G, Sigma, I, h, mu, H.ptr(0), true, false); }
+  if(cs.outer()) { check_function_(where, H, k_); enter_start_(where, G, Sigma, I, h, mu, H.ptr(0), true, false);
+    require_stamp_(where, G, boot_stamp_, st4_ret_ntti, "call dyson_start_ret_ntti for this G first (or use dyson_start_2leg)");   // ST-4 (DY-S6)
+  }
   double err = dyson_start_les_2leg(G, mu, H.ptr(0), Sigma, I, h);
   return cs.outer() ? ensure_finite_(err, where) : err;
 }
@@ -525,35 +650,46 @@ double dyson::dyson_start_les_2leg(herm_matrix_hodlr &G, double mu, function &H,
 
 
 double dyson::dyson_start(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_start";
   if(cs.outer()) enter_start_(where, G, Sigma, I, h, mu, H, true, true);
   G.can_extrap() = false;
   Sigma.can_extrap() = false;
   // We enforce Time-Translational Invariance for the first k timesteps
 
+  // DY-S4, LX-19: TTI of h, Sigma^R and Sigma^< on the bootstrap rows, with a relative tolerance:
+  // ||A - B||_F <= tti_rel * max(||A||_F, ||B||_F) + tti_abs (the absolute floor accepts round-off around zero)
+  const double tti_rel = 1e-12, tti_abs = 1e-14;
+  auto tti_tol = [&](const ZMatrixMap &A, const ZMatrixMap &B) {
+    return tti_rel * std::max(A.norm(), B.norm()) + tti_abs;
+  };
   // check TTI of H
   for(int t = 1; t <= k_; t++) {
-    double diff = (ZMatrixMap(H, nao_, nao_) - ZMatrixMap(H + t*es_, nao_, nao_)).norm();
-    HNESSI_REQUIRE(diff <= 1e-13, "dyson::dyson_start", HNESSI_KV(t), HNESSI_KV(diff),
-                   detail::note{"H is not TTI for 0 <= t <= k: ||H(t)-H(0)||_F must be <= 1e-13"});
+    ZMatrixMap A(H, nao_, nao_), B(H + t*es_, nao_, nao_);
+    double diff = (A - B).norm(), tol = tti_tol(A, B);
+    HNESSI_REQUIRE(diff <= tol, "dyson::dyson_start", HNESSI_KV(t), HNESSI_KV(diff), HNESSI_KV(tol),
+                   HNESSI_KV(A.norm()), detail::note{"H is not TTI for 0 <= t <= k: H(t) must equal H(0)"});
   }
 
   // check TTI of Sigma Les
   for(int tp = 0; tp <= k_; tp++) {
     for(int t = 0; t <= tp; t++) {
-      double diff = (ZMatrixMap(Sigma.curr_timestep_les_ptr(0,tp-t), nao_, nao_) - ZMatrixMap(Sigma.curr_timestep_les_ptr(t,tp), nao_, nao_)).norm();
-      HNESSI_REQUIRE(diff <= 1e-13, "dyson::dyson_start", HNESSI_KV(t), HNESSI_KV(tp), HNESSI_KV(diff),
-                     detail::note{"Sigma^< is not TTI for 0 <= t <= k"});
+      ZMatrixMap A(Sigma.curr_timestep_les_ptr(0,tp-t), nao_, nao_), B(Sigma.curr_timestep_les_ptr(t,tp), nao_, nao_);
+      double diff = (A - B).norm(), tol = tti_tol(A, B);
+      HNESSI_REQUIRE(diff <= tol, "dyson::dyson_start", HNESSI_KV(t), HNESSI_KV(tp), HNESSI_KV(diff), HNESSI_KV(tol),
+                     HNESSI_KV(A.norm()), detail::note{"Sigma^< is not TTI for 0 <= t <= k: "
+                                                       "Sigma^<(t,tp) must equal Sigma^<(0,tp-t)"});
     }
   }
 
   // check TTI of Sigma Ret
   for(int t = 0; t <= k_; t++) {
     for(int tp = 0; tp <= t; tp++) {
-      double diff = (ZMatrixMap(Sigma.curr_timestep_ret_ptr(t-tp,0), nao_, nao_) - ZMatrixMap(Sigma.curr_timestep_ret_ptr(t,tp), nao_, nao_)).norm();
-      HNESSI_REQUIRE(diff <= 1e-13, "dyson::dyson_start", HNESSI_KV(t), HNESSI_KV(tp), HNESSI_KV(diff),
-                     detail::note{"Sigma^R is not TTI for 0 <= t <= k"});
+      ZMatrixMap A(Sigma.curr_timestep_ret_ptr(t-tp,0), nao_, nao_), B(Sigma.curr_timestep_ret_ptr(t,tp), nao_, nao_);
+      double diff = (A - B).norm(), tol = tti_tol(A, B);
+      HNESSI_REQUIRE(diff <= tol, "dyson::dyson_start", HNESSI_KV(t), HNESSI_KV(tp), HNESSI_KV(diff), HNESSI_KV(tol),
+                     HNESSI_KV(A.norm()), detail::note{"Sigma^R is not TTI for 0 <= t <= k: "
+                                                       "Sigma^R(t,tp) must equal Sigma^R(t-tp,0)"});
     }
   }
 
@@ -568,7 +704,7 @@ double dyson::dyson_start(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_
 }
 
 double dyson::dyson_start(herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_start";
   if(cs.outer()) { check_function_(where, H, k_); enter_start_(where, G, Sigma, I, h, mu, H.ptr(0), true, true); }
   G.can_extrap() = false;
@@ -578,7 +714,7 @@ double dyson::dyson_start(herm_matrix_hodlr &G, double mu, function &H, herm_mat
 }
 
 double dyson::dyson_start_ntti(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h, bool imp_tp0) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_start_ntti";
   if(cs.outer()) enter_start_(where, G, Sigma, I, h, mu, H, true, true);
   G.can_extrap() = false;
@@ -594,7 +730,7 @@ double dyson::dyson_start_ntti(herm_matrix_hodlr &G, double mu, cplx *H, herm_ma
 }
 
 double dyson::dyson_start_ntti(herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h, bool imp_tp0) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_start_ntti";
   if(cs.outer()) { check_function_(where, H, k_); enter_start_(where, G, Sigma, I, h, mu, H.ptr(0), true, true); }
   G.can_extrap() = false;
@@ -604,7 +740,7 @@ double dyson::dyson_start_ntti(herm_matrix_hodlr &G, double mu, function &H, her
 }
 
 double dyson::dyson_start_ntti_nobc(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h, bool imp_tp0) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_start_ntti_nobc";
   if(cs.outer()) enter_start_(where, G, Sigma, I, h, mu, H, true, true);
   G.can_extrap() = false;
@@ -620,7 +756,7 @@ double dyson::dyson_start_ntti_nobc(herm_matrix_hodlr &G, double mu, cplx *H, he
 }
 
 double dyson::dyson_start_ntti_nobc(herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h, bool imp_tp0) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_start_ntti_nobc";
   if(cs.outer()) { check_function_(where, H, k_); enter_start_(where, G, Sigma, I, h, mu, H.ptr(0), true, true); }
   G.can_extrap() = false;
@@ -630,7 +766,7 @@ double dyson::dyson_start_ntti_nobc(herm_matrix_hodlr &G, double mu, function &H
 }
 
 double dyson::dyson_start_2leg(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h, bool imp_tp0) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_start_2leg";
   if(cs.outer()) enter_start_(where, G, Sigma, I, h, mu, H, true, false);
   G.can_extrap() = false;
@@ -645,7 +781,7 @@ double dyson::dyson_start_2leg(herm_matrix_hodlr &G, double mu, cplx *H, herm_ma
 }
 
 double dyson::dyson_start_2leg(herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h, bool imp_tp0) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_start_2leg";
   if(cs.outer()) { check_function_(where, H, k_); enter_start_(where, G, Sigma, I, h, mu, H.ptr(0), true, false); }
   G.can_extrap() = false;

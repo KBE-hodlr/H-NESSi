@@ -16,6 +16,16 @@
  */
 namespace h_nessi {
 
+  /*
+   * Preconditions of Bubble1/Bubble2 (tier 2, h_nessi::precondition_error; doc 61 BU-*): C is a different object from
+   * A and B (aliasing is forbidden, audit Q-10); every orbital index is inside its object; A, B and C have the same
+   * DLR rank r; tstp == -1 or tstp lies in the current windows [tstpmk, tstpmk+k] of A, B and C (Bubble1 also needs
+   * dlr to match B, checked by B's evaluators). Statistics (not checked, doc 61 N9): the products are Langreth
+   * products of two-time functions, so C is expected to have the statistics of the product, xi_C = xi_A * xi_B
+   * (e.g. a polarisation from two fermionic G is bosonic). Bubble1 takes the Matsubara sign from B (-xi_B).
+   * Both write C's tv row tstp but not its tv_trans row (ISSUES H27, WP6c).
+   */
+
   /**
    * @brief C_{c1,c2}(t1,t2) = ii * A_{a1,a2}(t1,t2) * B_{b2,b1}(t2,t1)
    */

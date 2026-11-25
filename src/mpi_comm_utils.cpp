@@ -1,9 +1,13 @@
 #include "h_nessi/mpi_comm_utils.hpp"
+#include "h_nessi/checks.hpp"
 
 #include <algorithm>
 #include <cstring>
 
 std::array<int, 3> get_my_index(int thread_id, int thread_num, int size, int t0i){
+  // MU-1 (tier 1)
+  HNESSI_ASSERT(thread_num >= 1 && 0 <= thread_id && thread_id < thread_num && size >= 0, "get_my_index",
+                HNESSI_KV(thread_id), HNESSI_KV(thread_num), HNESSI_KV(size));
 
   int th_my_init_tp, th_my_end_tp, th_my_Ntp, th_Ntp_per_thread;
 
@@ -46,6 +50,9 @@ std::array<int, 3> get_my_index(int thread_id, int thread_num, int size, int t0i
 }
 
 std::array<int, 3> get_my_tauindex(int tid, int ntasks, int r){
+  // MU-2 (tier 1)
+  HNESSI_ASSERT(ntasks >= 1 && 0 <= tid && tid < ntasks && r >= 0, "get_my_tauindex", HNESSI_KV(tid), HNESSI_KV(ntasks),
+                HNESSI_KV(r));
 
   int my_Ntau, Ntau_per_rank, my_init_tau, my_end_tau;
 
@@ -82,16 +89,20 @@ std::array<int, 3> get_my_tauindex(int tid, int ntasks, int r){
 }
   
 int iflatten2(int kxi, int kyi, int Nk){
+  HNESSI_ASSERT(0 <= kxi && kxi < Nk && 0 <= kyi && kyi < Nk, "iflatten2", HNESSI_KV(kxi), HNESSI_KV(kyi), HNESSI_KV(Nk));  // MU-3
   int i = kxi*Nk+kyi;
   return i;
   }
 
 int iflatten3(int kxi, int kyi, int taui, int Nk, int Ntau){
+  HNESSI_ASSERT(0 <= kxi && kxi < Nk && 0 <= kyi && kyi < Nk && 0 <= taui && taui < Ntau, "iflatten3", HNESSI_KV(kxi),
+                HNESSI_KV(kyi), HNESSI_KV(taui), HNESSI_KV(Nk), HNESSI_KV(Ntau));  // MU-3
   int i = kxi*(Nk*Ntau)+kyi*Ntau+taui;
   return i;
   }
 
 int minus_xi(int x, int Nk){
+  HNESSI_ASSERT(0 <= x && x < Nk, "minus_xi", HNESSI_KV(x), HNESSI_KV(Nk));  // MU-3
   int i;
   if(x == 0){
     i = x;
@@ -102,6 +113,7 @@ int minus_xi(int x, int Nk){
 }
 
 int inverse_xi(int x, int Nk){
+  HNESSI_ASSERT(0 <= x && x < Nk, "inverse_xi", HNESSI_KV(x), HNESSI_KV(Nk));  // MU-3
   int i = Nk-1-x;
   return i;
 }
@@ -123,6 +135,9 @@ MemInfo getMemoryInfo() {
     if (mem.total && mem.free && mem.available)
       break;
   }
+  // MU-4 (warning): without /proc/meminfo the caller would silently get zeros
+  if (!(mem.total > 0))
+    h_nessi::detail::warn("getMemoryInfo: /proc/meminfo could not be read; the returned memory sizes are zero");
 
   return mem;
 }

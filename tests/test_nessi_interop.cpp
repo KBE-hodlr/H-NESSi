@@ -68,7 +68,23 @@ struct EqPair {
     CM H = const_h(nao, complex_h);
     {
       dyson D(nt, nao, k, *dlr);
-      D.green_from_H(*G, mu, ZMatrix(H), h, k, true);  // rows 0..k, tv rows 0..k, mat
+      // rows 0..k, tv rows 0..k, mat. WP6b (DY-F9): green_from_H refuses a complex h together with G^M (G^M is real,
+      // ISSUES D1); for the complex-h case G^M is set here to the real part of the free Matsubara function, which is
+      // what green_from_H stored before WP6b (fermions only).
+      D.green_from_H(*G, mu, ZMatrix(H), h, k, !complex_h);
+      if (complex_h) {
+        Eigen::SelfAdjointEigenSolver<ZMatrix> es(ZMatrix(mu * ZMatrix::Identity(nao, nao) - ZMatrix(H)));
+        for (int m = 0; m < r; m++) {
+          double tau = dlr->it0B(m);
+          DColVector f(nao);
+          for (int i = 0; i < nao; i++) {
+            double w = es.eigenvalues()(i);
+            f(i) = std::exp(w * tau) / (1.0 + std::exp(w * beta));
+          }
+          DMatrix gm = (-es.eigenvectors() * f.asDiagonal() * es.eigenvectors().adjoint()).real();
+          G->set_mat(m, gm);
+        }
+      }
     }
     Gn = new NGF(nt - 1, ntau, nao, xi);  // NESSi nt = last index
     cdmatrix Hn = H;
@@ -205,7 +221,9 @@ TEST_P(NessiPerturb, EachComponentDetectedOnlyByItsFunction) {
       EXPECT_NEAR(d.tv, ad, 1e-10) << "t=" << t;
       EXPECT_EQ(d.mat, b.mat);
       EXPECT_EQ(d.currm, b.currm);
-      EXPECT_EQ(distance_norm2_tv(t + 1, *P.G, g, *P.dlr), distance_norm2_tv(t + 1, *P.G, *P.Gn, *P.dlr));
+      // another computed row (WP6b: rows above G.tstp() are not computed and are refused, HM-I2)
+      const int to = t < P.G->tstp() ? t + 1 : t - 1;
+      EXPECT_EQ(distance_norm2_tv(to, *P.G, g, *P.dlr), distance_norm2_tv(to, *P.G, *P.Gn, *P.dlr));
     }
     {  // M(tau_m) -> only mat and curr(-1)
       NGF g(*P.Gn);

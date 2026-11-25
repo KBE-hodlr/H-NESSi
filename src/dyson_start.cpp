@@ -5,8 +5,16 @@ using namespace std::chrono;
 
 namespace h_nessi {
 
+namespace {
+// DY-S10 (tier 2): the bootstrap block systems must be non-singular (once per solve, O(n) after the O(n^3) LU)
+void ensure_lu(const Eigen::FullPivLU<ZMatrix> &lu, const char *where) {
+  HNESSI_ENSURE(lu.isInvertible(), where, HNESSI_KV(lu.rank()), HNESSI_KV(lu.rows()),
+                detail::note{"the bootstrap linear system is singular (or not finite)"});
+}
+}  // namespace
+
 double dyson::dyson_start_tv(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_start_tv";
   if(cs.outer()) enter_start_(where, G, Sigma, I, h, mu, H, true, true);
 
@@ -89,6 +97,7 @@ double dyson::dyson_start_tv(herm_matrix_hodlr &G, double mu, cplx *H, herm_matr
 
     // Solve MX=Q
     Eigen::FullPivLU<ZMatrix> lu(MMap);
+    ensure_lu(lu, where);   // DY-S10 (tier 2)
     ZMatrixMap(X_.data(), k_*nao_, nao_) = lu.solve(QMap);
 
     for(l=0; l<k_; l++){
@@ -98,13 +107,17 @@ double dyson::dyson_start_tv(herm_matrix_hodlr &G, double mu, cplx *H, herm_matr
     }
   }
 
+  stamp_(G, boot_stamp_, st4_tv);   // ST-4
   return cs.outer() ? ensure_finite_(err, where) : err;
 }
 
 double dyson::dyson_start_ret(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_start_ret";
-  if(cs.outer()) enter_start_(where, G, Sigma, I, h, mu, H, false, false);
+  if(cs.outer()) {
+    enter_start_(where, G, Sigma, I, h, mu, H, false, false);
+    require_stamp_(where, G, boot_stamp_, st4_tv, "call dyson_start_tv for this G first (or use dyson_start)");   // ST-4 (DY-S6)
+  }
 
   // We enforce TTI for 0 <= t <= k
   // This is guaranteed using checks in the dyson_start() routine
@@ -132,7 +145,7 @@ double dyson::dyson_start_ret(herm_matrix_hodlr &G, double mu, cplx *H, herm_mat
 }
 
 double dyson::dyson_start_ret_ntti(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h, bool imp_tp0) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_start_ret_ntti";
   if(cs.outer()) enter_start_(where, G, Sigma, I, h, mu, H, true, false);
 
@@ -183,6 +196,7 @@ double dyson::dyson_start_ret_ntti(herm_matrix_hodlr &G, double mu, cplx *H, her
 
     // Solve MX=Q for X
     Eigen::FullPivLU<ZMatrix> lu(ZMatrixMap(M_.data(), (k_-m)*nao_, (k_-m)*nao_));
+    ensure_lu(lu, where);   // DY-S10 (tier 2)
     ZMatrixMap(X_.data(), (k_-m)*nao_, nao_) = lu.solve(ZMatrixMap(Q_.data(), (k_-m)*nao_, nao_));
 
     // Put X into G
@@ -205,20 +219,25 @@ double dyson::dyson_start_ret_ntti(herm_matrix_hodlr &G, double mu, cplx *H, her
 
       // Solve XM=Q for X, i.e. M^T X^T = Q^T
       Eigen::FullPivLU<ZMatrix> lu(ZMatrixMap(M_.data(), nao_, nao_).transpose());
+      ensure_lu(lu, where);   // DY-S10 (tier 2)
       ZMatrixMap(X_.data(), nao_, nao_) = lu.solve(ZMatrixMap(Q_.data(), nao_, nao_).transpose()).transpose();
       err += (ZColVectorMap(GR0.data() + (m-1)*es_, es_) - ZColVectorMap(X_.data(), es_)).norm();
       ZMatrixMap(G.curr_timestep_ret_ptr(m,0), nao_, nao_).noalias() = ZMatrixMap(X_.data(), nao_, nao_);
     }
   }
 
+  stamp_(G, boot_stamp_, st4_ret_ntti);   // ST-4
   return cs.outer() ? ensure_finite_(err, where) : err;
 }
 
 
 double dyson::dyson_start_les(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_start_les";
-  if(cs.outer()) enter_start_(where, G, Sigma, I, h, mu, H, true, false);
+  if(cs.outer()) {
+    enter_start_(where, G, Sigma, I, h, mu, H, true, false);
+    require_stamp_(where, G, boot_stamp_, st4_tv, "call dyson_start_tv for this G first (or use dyson_start)");   // ST-4 (DY-S6)
+  }
 
   // We enforce TTI for 0 <= t <= k
   // This is guaranteed using checks in the dyson_start() routine
@@ -236,9 +255,12 @@ double dyson::dyson_start_les(herm_matrix_hodlr &G, double mu, cplx *H, herm_mat
 
 
 double dyson::dyson_start_les_ntti(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_start_les_ntti";
-  if(cs.outer()) enter_start_(where, G, Sigma, I, h, mu, H, true, false);
+  if(cs.outer()) {
+    enter_start_(where, G, Sigma, I, h, mu, H, true, false);
+    require_stamp_(where, G, boot_stamp_, st4_tv | st4_ret_ntti, "call dyson_start_tv and dyson_start_ret_ntti for this G first (or use dyson_start_ntti)");   // ST-4 (DY-S6)
+  }
 
   double err = 0;
   for(int tp = 0; tp <= k_; tp++) {
@@ -287,6 +309,7 @@ double dyson::dyson_start_les_ntti(herm_matrix_hodlr &G, double mu, cplx *H, her
       }
     }
     Eigen::FullPivLU<ZMatrix> lu2(MIC);
+    ensure_lu(lu2, where);   // DY-S10 (tier 2)
     XIC = lu2.solve(QIC);
     for(int i = m; i <= k_; i++) {
       if(rho_version_ == 1) err += i==m ? 0 : (ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose()).norm();
@@ -345,6 +368,8 @@ double dyson::dyson_start_les_ntti(herm_matrix_hodlr &G, double mu, cplx *H, her
     }
 
     Eigen::FullPivLU<ZMatrix> lu3(MIC);
+
+    ensure_lu(lu3, where);   // DY-S10 (tier 2)
     XIC = lu3.solve(QIC);
     for(int i = 1; i <= k_; i++) {
       err += (ZMatrixMap(XIC.data()+(i-1)*es_, nao_, nao_) - ZMatrixMap(DIC.data() + (i-1)*es_, nao_, nao_)).norm();
@@ -357,9 +382,13 @@ double dyson::dyson_start_les_ntti(herm_matrix_hodlr &G, double mu, cplx *H, her
 
 
 double dyson::dyson_start_les_ntti_nobc(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_start_les_ntti_nobc";
-  if(cs.outer()) enter_start_(where, G, Sigma, I, h, mu, H, true, false);
+  if(cs.outer()) {
+    enter_start_(where, G, Sigma, I, h, mu, H, true, false);
+    require_stamp_(where, G, boot_stamp_, st4_tv | st4_ret_ntti, "call dyson_start_tv and dyson_start_ret_ntti for this G first (or use dyson_start_ntti_nobc)");   // ST-4 (DY-S6)
+  }
+  check_les00_(where, G);   // DY-S7: the caller set G^<(0,0)
 
   cplx cplxi = cplx(0,1);
 
@@ -400,6 +429,7 @@ double dyson::dyson_start_les_ntti_nobc(herm_matrix_hodlr &G, double mu, cplx *H
     }
   }
   Eigen::FullPivLU<ZMatrix> lu(MIC);
+  ensure_lu(lu, where);   // DY-S10 (tier 2)
   XIC = lu.solve(QIC);
   for(int i = 1; i <= k_; i++) {
     err += (ZMatrixMap(G.curr_timestep_les_ptr(0,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose()).norm();
@@ -445,6 +475,7 @@ double dyson::dyson_start_les_ntti_nobc(herm_matrix_hodlr &G, double mu, cplx *H
       }
     }
     Eigen::FullPivLU<ZMatrix> lu2(MIC);
+    ensure_lu(lu2, where);   // DY-S10 (tier 2)
     XIC = lu2.solve(QIC);
     for(int i = m; i <= k_; i++) {
       if(rho_version_ == 1) err += i==m ? 0 : (ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose()).norm();
@@ -501,6 +532,8 @@ double dyson::dyson_start_les_ntti_nobc(herm_matrix_hodlr &G, double mu, cplx *H
     }
 
     Eigen::FullPivLU<ZMatrix> lu3(MIC);
+
+    ensure_lu(lu3, where);   // DY-S10 (tier 2)
     XIC = lu3.solve(QIC);
     for(int i = 1; i <= k_; i++) {
       err += (ZMatrixMap(XIC.data()+(i-1)*es_, nao_, nao_) - ZMatrixMap(DIC.data() + (i-1)*es_, nao_, nao_)).norm();
@@ -512,9 +545,13 @@ double dyson::dyson_start_les_ntti_nobc(herm_matrix_hodlr &G, double mu, cplx *H
 }
 
 double dyson::dyson_start_les_2leg(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_start_les_2leg";
-  if(cs.outer()) enter_start_(where, G, Sigma, I, h, mu, H, true, false);
+  if(cs.outer()) {
+    enter_start_(where, G, Sigma, I, h, mu, H, true, false);
+    require_stamp_(where, G, boot_stamp_, st4_ret_ntti, "call dyson_start_ret_ntti for this G first (or use dyson_start_2leg)");   // ST-4 (DY-S6)
+  }
+  check_les00_(where, G);   // DY-S7: the caller set G^<(0,0)
 
   cplx cplxi = cplx(0,1);
 
@@ -555,6 +592,7 @@ double dyson::dyson_start_les_2leg(herm_matrix_hodlr &G, double mu, cplx *H, her
     }
   }
   Eigen::FullPivLU<ZMatrix> lu(MIC);
+  ensure_lu(lu, where);   // DY-S10 (tier 2)
   XIC = lu.solve(QIC);
   for(int i = 1; i <= k_; i++) {
     err += (ZMatrixMap(G.curr_timestep_les_ptr(0,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose()).norm();
@@ -599,6 +637,7 @@ double dyson::dyson_start_les_2leg(herm_matrix_hodlr &G, double mu, cplx *H, her
       }
     }
     Eigen::FullPivLU<ZMatrix> lu2(MIC);
+    ensure_lu(lu2, where);   // DY-S10 (tier 2)
     XIC = lu2.solve(QIC);
     for(int i = m; i <= k_; i++) {
       if(rho_version_ == 1) err += i==m ? 0 : (ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose()).norm();
@@ -656,6 +695,8 @@ double dyson::dyson_start_les_2leg(herm_matrix_hodlr &G, double mu, cplx *H, her
     }
   
     Eigen::FullPivLU<ZMatrix> lu3(MIC);
+  
+    ensure_lu(lu3, where);   // DY-S10 (tier 2)
     XIC = lu3.solve(QIC);
     for(int i = 1; i <= k_; i++) {
       err += (ZMatrixMap(XIC.data()+(i-1)*es_, nao_, nao_) - ZMatrixMap(DIC.data() + (i-1)*es_, nao_, nao_)).norm();

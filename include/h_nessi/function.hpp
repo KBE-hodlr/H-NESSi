@@ -9,6 +9,7 @@
 #define FUNCTION_DECL
 
 #include "utils.hpp"
+#include "checks.hpp"
 #include <vector>
 
 
@@ -114,7 +115,12 @@ public:
    * @param t Time slice index. a value of -1 corresponds to the initial value on the Matsubara axis.
    * @return Pointer to matrix data for time slice t.
    */
-  inline cplx *ptr(int t) { return data_.data() + (t+1) * element_size_; }
+  // Index preconditions are tier 1 (HNESSI_ASSERT, FN-2, FN-3): -1 <= t < nt (a moved-from object has nt = -2 and
+  // admits no t, FN-7), 0 <= i < size1, 0 <= j < size2.
+  inline cplx *ptr(int t) {
+    HNESSI_ASSERT(-1 <= t && t < nt_, "function::ptr", HNESSI_KV(t), HNESSI_KV(nt_));
+    return data_.data() + (t+1) * element_size_;
+  }
 
   /**
    * @brief Returns the value of the function at time t and matrix index i,j
@@ -123,7 +129,11 @@ public:
    * @param j col index of matrix
    * @return value of function 
    */
-  inline cplx value(int t, int i, int j) { return data_[(t+1) * element_size_ + i*size1_ +j]; }
+  inline cplx value(int t, int i, int j) {
+    HNESSI_ASSERT(0 <= i && i < size1_ && 0 <= j && j < size2_, "function::value", HNESSI_KV(i), HNESSI_KV(j),
+                  HNESSI_KV(size1_));
+    return ptr(t)[i*size1_ +j];
+  }
 
   /**
    * @brief Parenthesis operator for mutable element access.
@@ -144,7 +154,7 @@ public:
    * @param t Time slice index. a value of -1 corresponds to the initial value on the Matsubara axis.
    * @return Map of matrix valued function at time t
    */
-  inline ZMatrixMap get_map(int t) { return ZMatrixMap(data_.data() + (t+1) * element_size_, size1_, size2_); }
+  inline ZMatrixMap get_map(int t) { return ZMatrixMap(ptr(t), size1_, size2_); }
 
   /**
    * @brief Sets the value of the matrix at time slice t.

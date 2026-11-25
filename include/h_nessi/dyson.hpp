@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <unsupported/Eigen/MatrixFunctions>
 #include <chrono>
+#include <climits>
 
 #include "function.hpp"
 #include "herm_matrix_hodlr.hpp"
@@ -118,22 +119,55 @@ private:
   double herm_last_ = 0;         /**< largest relative anti-Hermitian part found by the last call */
   std::vector<double> herm_diag_; /**< herm_diag_[t+1], -1<=t<nt: largest relative anti-Hermitian part of h(t) found
                                        before symmetrisation (per-step diagnostic, size nt+1) */
+  // D-11, WP6a side finding 1 (maintainer decision (a)): the tolerances are enforced on the h(T) used by the corrector
+  // solves, not on the h(T) built from the extrapolated predictor. The newest slice T of a time step is measured and
+  // symmetrised on its first solve, but its warn/throw tolerances are deferred: a later solve of the same step that
+  // finds a rewritten h(T) enforces the new value (the predictor value is dropped); if h(T) is never rewritten, the
+  // deferred value is enforced at the next call that reads slice T (the next time step).
+  int herm_copy_t_ = INT_MIN;      /**< slice whose symmetrised value is held in herm_copy_ (the newest slice) */
+  std::vector<cplx> herm_copy_;    /**< h(herm_copy_t_) as left by the last measurement (size es) */
+  bool herm_pend_ = false;         /**< herm_pend_rel_ of slice herm_copy_t_ is measured but not yet enforced */
+  double herm_pend_rel_ = 0;       /**< deferred relative anti-Hermitian part of slice herm_copy_t_ */
   // ST-3: dyson_mat(fixHam=true) needs the G0 saved by an earlier fixHam=false call (not checkpointed)
   bool g0_valid_ = false;
+  // ST-4: order of the solver components within one time step / the bootstrap (bits of the components solved for
+  // (stamp_G_, stamp_tstp_); stamp_tstp_ == boot_stamp_ for the bootstrap)
+  const herm_matrix_hodlr *stamp_G_ = nullptr;
+  int stamp_tstp_ = INT_MIN;
+  unsigned stamp_mask_ = 0;
+  enum : unsigned { st4_ret = 1u, st4_tv = 2u, st4_ret_ntti = 4u };
+  static constexpr int boot_stamp_ = -2;
+  // ST-10 (DY-Z2): one dyson object per thread
+  detail::single_thread_owner owner_;
+  // ST-11 (D-9): DLR parameters of the dlr_info this object was built with (stored in the checkpoint)
+  double dlr_eps_ = 0, dlr_lambda_ = 0;
+  // DY-S7: the all-zero G^<(0,0) warning of the _nobc/_2leg bootstraps is printed once
+  bool les00_warned_ = false;
 
-  /** RAII guard counting the nesting of public calls (dispatchers call public components). */
+  /** RAII guard of every public call: ST-10 ownership (only the outermost call acquires it) and the nesting of public
+   * calls (dispatchers call public components; the entry checks run only in the outermost call). */
   struct call_scope {
-    int &depth;
-    explicit call_scope(int &d) : depth(d) { ++depth; }
-    ~call_scope() { --depth; }
-    bool outer() const { return depth == 1; }
+    dyson &d;
+    detail::owner_scope own;
+    explicit call_scope(dyson &dd) : d(dd), own(dd.owner_, "dyson") { ++d.api_depth_; }
+    ~call_scope() { --d.api_depth_; }
+    bool outer() const { return d.api_depth_ == 1; }
   };
+  friend struct dyson_test_access;
   void check_solver_args_(const char *where, herm_matrix_hodlr &G, herm_matrix_hodlr &Sigma, Integration::Integrator &I,
                           double h, double mu);
   void check_step_(const char *where, int tstp, herm_matrix_hodlr &G, herm_matrix_hodlr &Sigma);
   void check_boot_(const char *where, herm_matrix_hodlr &G, herm_matrix_hodlr &Sigma);
   void check_function_(const char *where, function &H, int tlast);
-  double hermitize_(cplx *H0, int t0, int t1, const char *where);
+  double hermitize_(cplx *H0, int t0, int t1, const char *where, int newest = INT_MIN);
+  void herm_enforce_(double rel, int t, const char *where);
+  // ST-4
+  void stamp_(herm_matrix_hodlr &G, int tstp, unsigned bit);
+  void require_stamp_(const char *where, herm_matrix_hodlr &G, int tstp, unsigned bits, const char *hint);
+  // DY-S7: G^<(0,0) set by the caller for the _nobc/_2leg bootstraps
+  void check_les00_(const char *where, herm_matrix_hodlr &G);
+  // DY-M10/F10: bosonic spectrum of h - mu (eigenvalues eval0 of mu - h)
+  void require_bosonic_spectrum_(const DColVector &eval0, const char *where);
   double hermitize_real_(DMatrix &H, const char *where);
   void require_real_(const cplx *h, const char *where);
   double ensure_finite_(double err, const char *where);
@@ -146,6 +180,7 @@ private:
                        bool fixHam);
   void ensure_mat_finite_(const char *where);
   void check_it_args_(const char *where, int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G);
+  void check_gamma_args_(const char *where, herm_matrix_hodlr &G, herm_matrix_hodlr &Delta);
   void check_free_args_(const char *where, herm_matrix_hodlr &G, double mu, const ZMatrix &H, double h, int tmax);
 
 public:
@@ -184,6 +219,10 @@ public:
    * ||h(t)-h(t)^dagger||_F / ||h(t)||_F of each slice is recorded (before symmetrisation) per slice; a warning is
    * printed once per dyson object above the warning tolerance (default 1e-4) and h_nessi::precondition_error is
    * thrown above the error tolerance (default 1e-2), before the slice is modified.
+   * Predictor/corrector (WP6b): in dyson_timestep*(T) the tolerances of the newest slice h(T) apply to the h(T) of the
+   * corrector solves. The first solve of step T (h(T) built from the extrapolated predictor) symmetrises h(T) but
+   * defers its check; a later solve of the step that finds h(T) rewritten enforces the new value at once; an h(T)
+   * never rewritten during the step is enforced by the next call that reads it. Switch drives on smoothly.
    * @{
    */
   void set_hermiticity_tolerances(double warn_tol, double err_tol);

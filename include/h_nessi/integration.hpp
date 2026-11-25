@@ -11,6 +11,7 @@
 #ifndef INTEGRATION_DECL
 #define INTEGRATION_DECL
 
+#include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <complex>
@@ -138,6 +139,7 @@ namespace Integration {
 			Integration::make_start(k_, gregory_start_);
 			Integration::make_Omega(k_, gregory_Omega_);
 			Integration::make_ex_weights(k_, ex_weights_);
+			check_weights_();
 		}
 
 		/** @brief Return stored order k. */
@@ -151,25 +153,22 @@ namespace Integration {
 		 * @return Coefficient value.
 		 */
 		 double poly_interp(int a, int l) const {
-	    	assert(a<=k_);
-	    	assert(l<=k_);
-			      return poly_interp_[a*(k_+1)+l];
+			HNESSI_ASSERT(0 <= a && a <= k_ && 0 <= l && l <= k_, "Integration::Integrator::poly_interp", HNESSI_KV(a), HNESSI_KV(l), HNESSI_KV(k_));  // IN-3, LX-16
+			return poly_interp_[a*(k_+1)+l];
 	    }
 		/**
 		 * @brief Access polynomial differentiation coefficient D[m,l].
 		 */
 			double poly_diff(int m, int l) const {
-	    	assert(m<=k_);
-			assert(l<=k_);
-			    return poly_diff_[m*(k_+1)+l];
+			HNESSI_ASSERT(0 <= m && m <= k_ && 0 <= l && l <= k_, "Integration::Integrator::poly_diff", HNESSI_KV(m), HNESSI_KV(l), HNESSI_KV(k_));  // IN-4
+			return poly_diff_[m*(k_+1)+l];
 	    }
 		/**
 		 * @brief Access polynomial integration coefficient I[m,n,l].
 		 */
 		double poly_integ(int m, int n, int l) const {
-	 		assert(m<=k_);
-			assert(n<=k_);
-			assert(l<=k_);
+			HNESSI_ASSERT(0 <= m && m <= k_ && 0 <= n && n <= k_ && 0 <= l && l <= k_, "Integration::Integrator::poly_integ", HNESSI_KV(m), HNESSI_KV(n),
+			              HNESSI_KV(l), HNESSI_KV(k_));  // IN-5
 			return poly_integ_[m*(k_+1)*(k_+1)+n*(k_+1)+l];
 		}
 		/**
@@ -178,7 +177,7 @@ namespace Integration {
 		 * @return weight value
 		 */
 		double bd_weights(int l) const {
-			assert(l<=k_+1);
+			HNESSI_ASSERT(0 <= l && l <= k_+1, "Integration::Integrator::bd_weights", HNESSI_KV(l), HNESSI_KV(k_));  // IN-6
 			return bd_weights_[l];
 		}
 		/**
@@ -188,6 +187,10 @@ namespace Integration {
 		 * @return weight value
 		 */
 		double gregory_weights(int n, int j) const {
+			// IN-7 (tier 1): a negative index or j > max(n, k) reads outside the tables (for n <= k the start weights
+			// of the integral 0..n cover all k+1 interpolation points, so j <= k is valid there)
+			HNESSI_ASSERT(0 <= n && 0 <= j && j <= std::max(n, k_), "Integration::Integrator::gregory_weights", HNESSI_KV(n),
+			              HNESSI_KV(j), HNESSI_KV(k_));
 			if(n<=k_&&j<=k_){
 				return gregory_start_[n*(k_+1)+j];
 			}
@@ -203,28 +206,44 @@ namespace Integration {
 		}
 		/** @brief Access boundary correction weights used in Gregory integration. */
 		double omega(int j) const {
-			assert(j<=k_);
+			HNESSI_ASSERT(0 <= j && j <= k_, "Integration::Integrator::omega", HNESSI_KV(j), HNESSI_KV(k_));  // IN-8
 			return gregory_Omega_[gregory_omega_offset_ + j];
 		}
 		/** @brief Start integration weights table accessor. */
 		double start(int i, int j) const {
-			assert(i<=k_);
-			assert(j<=k_);
+			HNESSI_ASSERT(0 <= i && i <= k_ && 0 <= j && j <= k_, "Integration::Integrator::start", HNESSI_KV(i), HNESSI_KV(j), HNESSI_KV(k_));  // IN-9
 			return gregory_start_[i*(k_+1)+j];
 		}
 		/** @brief Omega integration weights accessor. (boundary correction regions overlap)*/
 		double Omega(int i, int j) const {
-			assert(i<=k_);
-			assert(j<=k_);
+			HNESSI_ASSERT(0 <= i && i <= k_ && 0 <= j && j <= k_, "Integration::Integrator::Omega", HNESSI_KV(i), HNESSI_KV(j), HNESSI_KV(k_));  // IN-9
 			return gregory_Omega_[i*(k_+1)+j];
 		}
 		/** @brief Extrapolation weights accessor. */
 		double ex_weights(int j) const {
-			assert(j<=k_);
+			HNESSI_ASSERT(0 <= j && j <= k_, "Integration::Integrator::ex_weights", HNESSI_KV(j), HNESSI_KV(k_));  // IN-8
 			return ex_weights_[j];
 		}
 
 		private:
+			// IN-2 (tier 2, once per construction): every weight finite; the backward-difference weights differentiate
+			// a constant to zero and the extrapolation weights reproduce a constant (detects an ill-conditioned
+			// long-double solve for large k, ISSUES P3)
+			void check_weights_() const {
+				auto finite = [](const std::vector<double> &v) {
+					for(double x : v) if(!std::isfinite(x)) return false;
+					return true;
+				};
+				bool all_finite = finite(poly_interp_) && finite(poly_diff_) && finite(poly_integ_) && finite(bd_weights_) &&
+				                  finite(ex_weights_) && finite(gregory_start_) && finite(gregory_Omega_);
+				HNESSI_ENSURE(all_finite, "Integration::Integrator::Integrator", HNESSI_KV(k_));
+				double sbd = 0, sex = 0;
+				for(double x : bd_weights_) sbd += x;
+				for(double x : ex_weights_) sex += x;
+				HNESSI_ENSURE(std::abs(sbd) < 1e-10 && std::abs(sex - 1) < 1e-10, "Integration::Integrator::Integrator",
+				              HNESSI_KV(k_), HNESSI_KV(sbd), HNESSI_KV(sex - 1),
+				              h_nessi::detail::note{"the integration weights are inaccurate (ill-conditioned for this k)"});
+			}
 			int k_;
 			std::vector<double> poly_interp_;
 			std::vector<double> poly_diff_;

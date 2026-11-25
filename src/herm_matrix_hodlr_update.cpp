@@ -3,10 +3,18 @@
 #include <string>
 
 #include "h_nessi/herm_matrix_hodlr.hpp"
+#include "h_nessi/checks.hpp"
 
 namespace h_nessi {
 
 void herm_matrix_hodlr::update_blocks(Integration::Integrator &I) {
+  // HM-U1 (tier 2, state): an extra (k+2)-th final call would index ntri_[nt], timing(nt,.) (ISSUES H1f)
+  HNESSI_REQUIRE_STATE(nt_ >= 1 && 0 <= tstpmk_ && tstpmk_ < nt_, "herm_matrix_hodlr::update_blocks",
+                       HNESSI_KV(tstpmk_), HNESSI_KV(nt_),
+                       detail::note{"every row is already archived: update_blocks is called once per time step and k+1 "
+                                    "times after the last step"});
+  // HM-U2 (tier 2): the left-edge pre-weighting uses I.omega(tbar), tbar <= k (doc 12 §4.1)
+  HNESSI_REQUIRE(I.k() == k_, "herm_matrix_hodlr::update_blocks", HNESSI_KV(I.k()), HNESSI_KV(k_));
   std::chrono::time_point<std::chrono::system_clock> start, end;
   std::chrono::duration<double, std::micro> dur;
 
@@ -21,6 +29,9 @@ void herm_matrix_hodlr::update_blocks(Integration::Integrator &I) {
 
   // Put directly stored data into triangles (row and column)
   int ndir = ntri_[tstpmk_];
+  // HM-U6 (tier 1): row tstpmk of the yellow triangle and its square row index ndir-1
+  HNESSI_ASSERT(ndir >= 1 && c1_dir_[tstpmk_] == tstpmk_-ndir+1, "herm_matrix_hodlr::update_blocks", HNESSI_KV(ndir),
+                HNESSI_KV(tstpmk_), HNESSI_KV(c1_dir_[tstpmk_]));
   cplx *dataptr = curr_timestep_ret_ptr(tstpmk_, tstpmk_);
   for(int i = 0; i < ndir; i++) {
     ZMatrixMap(retptr_col(tstpmk_, tstpmk_-i), size1_, size2_) = ZMatrixMap(dataptr - i*size1_*size2_, size1_, size2_);
@@ -52,6 +63,9 @@ void herm_matrix_hodlr::update_blocks(Integration::Integrator &I) {
     start = std::chrono::system_clock::now();
     int bindex = blocks_list[b];
     ZMatrix y(1,blkc2_[bindex]-blkc1_[bindex]+1);
+    // HM-U5 (tier 1): the block has archived exactly the rows blkr1..tstpmk-1
+    HNESSI_ASSERT(blklen_[bindex] == tstpmk_ - blkr1_[bindex], "herm_matrix_hodlr::update_blocks", HNESSI_KV(bindex),
+                  HNESSI_KV(blklen_[bindex]), HNESSI_KV(tstpmk_), HNESSI_KV(blkr1_[bindex]));
     end = std::chrono::system_clock::now();
     dur = end-start;
     timing(tstpmk_, 6) += dur.count();
@@ -134,6 +148,9 @@ void herm_matrix_hodlr::update_blocks(Integration::Integrator &I) {
   end = std::chrono::system_clock::now();
   dur = end-start;
   timing(tstpmk_, 5) = dur.count();
+  // HM-U4 (tier 1): segment index of row tstpmk used for les_dir_square_ below
+  HNESSI_ASSERT(built_blocks_ == t_to_dirlvl_[tstpmk_], "herm_matrix_hodlr::update_blocks", HNESSI_KV(built_blocks_),
+                HNESSI_KV(t_to_dirlvl_[tstpmk_]), HNESSI_KV(tstpmk_));
 
   int nao_ = size1_;
   int es_ = nao_*nao_;
@@ -197,6 +214,9 @@ double herm_matrix_hodlr::mgs(const ZMatrix &V,const ZRowVector &b,const ZRowVec
 
 double herm_matrix_hodlr::mgs(const ZMatrix &V, const ZRowVector &b, const ZRowVector &x_, const ZRowVector &Vb_) {
     int rank = V.cols();
+    // HM-U11 (tier 1): x_ and Vb_ are written through const_cast and must be real (sized) objects
+    HNESSI_ASSERT(V.rows() == b.size() && Vb_.size() >= rank, "herm_matrix_hodlr::mgs", HNESSI_KV(V.rows()),
+                  HNESSI_KV(b.size()), HNESSI_KV(Vb_.size()), HNESSI_KV(rank));
     ZRowVector& Vb = const_cast<ZRowVector&>(Vb_);
     ZRowVector& x = const_cast<ZRowVector&>(x_);
 
@@ -255,6 +275,12 @@ void herm_matrix_hodlr::updatetsvd(block &B,const ZRowVector &row,int row_cur, b
   start = std::chrono::system_clock::now();
   int cols=B.cols();
   int rank=B.epsrank();
+  // HM-U8 (tier 1): the block holds row_cur rows of rank `rank`
+  HNESSI_ASSERT(row.size() == cols && B.U().rows() == row_cur && B.S().size() == rank && B.U().cols() == rank &&
+                B.V().cols() == rank && B.V().rows() == cols && rank <= std::min(row_cur, cols),
+                "herm_matrix_hodlr::updatetsvd", HNESSI_KV(row.size()), HNESSI_KV(cols), HNESSI_KV(B.U().rows()),
+                HNESSI_KV(row_cur), HNESSI_KV(B.S().size()), HNESSI_KV(B.U().cols()), HNESSI_KV(B.V().cols()),
+                HNESSI_KV(rank));
   double nrm;
   ZRowVector Vrow(rank);
   ZMatrix uu(rank+1,rank+1); //Temporal U matrix
@@ -477,5 +503,13 @@ void herm_matrix_hodlr::updatetsvd(block &B,const ZRowVector &row,int row_cur, b
     timing(tstpmk_, 21) += dur.count();
 
   }
+#ifndef NDEBUG
+  // HM-U9 (tier 1): new rank <= min(rows, cols); singular values finite, >= 0, non-increasing
+  HNESSI_ASSERT(B.epsrank() <= std::min(row_cur+1, cols) && B.S().size() == B.epsrank(), "herm_matrix_hodlr::updatetsvd",
+                HNESSI_KV(B.epsrank()), HNESSI_KV(row_cur), HNESSI_KV(cols));
+  for(int i = 0; i < B.S().size(); i++)
+    HNESSI_ASSERT(std::isfinite(B.S()(i)) && B.S()(i) >= 0 && (i == 0 || B.S()(i) <= B.S()(i-1)),
+                  "herm_matrix_hodlr::updatetsvd", HNESSI_KV(i), HNESSI_KV(B.S()(i)));
+#endif
 }
 } // namespace

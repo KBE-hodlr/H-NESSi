@@ -152,6 +152,16 @@ template <class T>
 inline void parse_word(const char *word, T &x, const char *fn, const char *type) {
   std::stringstream s(word);
   if (!(s >> x)) throw error(fn, std::string("cannot interpret '") + word + "' as " + type);
+  // RI-3: the whole token must be consumed ("1.5" is not an int, "2x" is not a number); trailing whitespace is fine
+  s >> std::ws;
+  if (!s.eof()) throw error(fn, std::string("cannot interpret '") + word + "' as " + type + " (trailing characters)");
+}
+// RI-4: counts of the vector readers
+inline void require_dim(int dim, const char *fn) {
+  if (dim < 0) throw error(fn, "dim = " + std::to_string(dim) + " < 0");
+}
+inline void require_nt(int nt, const char *fn) {
+  if (nt < -1) throw error(fn, "nt = " + std::to_string(nt) + " < -1");
 }
 }  // namespace input_detail
 }  // namespace h_nessi
@@ -168,7 +178,7 @@ inline void read_param(std::vector<char *> &words, int m, int &data) {
 inline void read_param(std::vector<char *> &words, int m, bool &data) {
   h_nessi::input_detail::require_words(words, m, 1, "read_param(bool)");  // B15: an empty value used to segfault
   std::stringstream s(words[m]);
-  if (!(s >> std::boolalpha >> data))
+  if (!(s >> std::boolalpha >> data) || !(s >> std::ws).eof())  // RI-3: the whole token
     throw h_nessi::input_detail::error("read_param(bool)", std::string("cannot interpret '") + words[m] +
                                                                "' as bool (expected true or false)");
 }
@@ -181,12 +191,14 @@ inline void read_param(std::vector<char *> &words, int m, h_nessi::cplx &data) {
   data.imag(imag);
 }
 inline void read_param(std::vector<char *> &words, int m, h_nessi::DColVector &data, int dim) {
+  h_nessi::input_detail::require_dim(dim, "read_param(DColVector)");
   data = h_nessi::DColVector(dim);
   h_nessi::input_detail::require_words(words, m, dim, "read_param(DColVector)");
   for (int i1 = 0; i1 < dim; i1++)
     h_nessi::input_detail::parse_word(words[m + i1], data(i1), "read_param(DColVector)", "double");
 }
 inline void read_param(std::vector<char *> &words, int m, std::vector<double> &data, int dim) {
+  h_nessi::input_detail::require_dim(dim, "read_param(std::vector<double>)");
   h_nessi::input_detail::require_words(words, m, dim, "read_param(std::vector<double>)");
   if ((int)data.size() < dim) data.resize(dim);  // RI-2: was written without a size check
   for (int i1 = 0; i1 < dim; i1++)
@@ -223,6 +235,7 @@ inline void find_param(char *file, const char *flag, h_nessi::DColVector &x, int
 
 inline void find_param(char *file, const char *flag, std::vector<double> &x, int dim) {
   try {
+    h_nessi::input_detail::require_dim(dim, "find_param(std::vector<double>)");   // RI-4
     x.resize(dim);
     char line[INPUT_LINELEN], *pch;
     std::vector<char *> words;
@@ -240,6 +253,8 @@ inline void find_param(char *file, const char *flag, std::vector<double> &x, int
 // otherwise, a time-independent value is read from words[m], words[m+1], ...
 inline void read_param_tvector(std::vector<char *> &words, int m, std::vector<h_nessi::DColVector> &data, int dim, int nt) {
   char *pch;
+  h_nessi::input_detail::require_dim(dim, "read_param_tvector(DColVector)");
+  h_nessi::input_detail::require_nt(nt, "read_param_tvector(DColVector)");
   data.resize(nt + 2);
   for (int tstp = -1; tstp <= nt; tstp++) data[tstp + 1] = h_nessi::DColVector(dim);
   h_nessi::input_detail::require_words(words, m, 1, "read_param_tvector(DColVector)");
@@ -257,6 +272,7 @@ inline void read_param_tvector(std::vector<char *> &words, int m, std::vector<h_
 }
 inline void read_param_tvector(std::vector<char *> &words, int m, std::vector<h_nessi::cplx> &data, int nt) {
   char *pch;
+  h_nessi::input_detail::require_nt(nt, "read_param_tvector(cplx)");
   data.resize(nt + 2);
   h_nessi::input_detail::require_words(words, m, 1, "read_param_tvector(cplx)");
   // test whether the first word is a file
@@ -272,6 +288,7 @@ inline void read_param_tvector(std::vector<char *> &words, int m, std::vector<h_
 }
 inline void read_param_tvector(std::vector<char *> &words, int m, std::vector<double> &data, int nt) {
   char *pch;
+  h_nessi::input_detail::require_nt(nt, "read_param_tvector(double)");
   data.resize(nt + 2);
   h_nessi::input_detail::require_words(words, m, 1, "read_param_tvector(double)");
   // test whether the first word is a file

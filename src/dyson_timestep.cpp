@@ -5,9 +5,15 @@ using namespace std::chrono;
 
 namespace h_nessi {
 
+namespace {
+// DY-T11 (tier 1): a step's linear system is non-singular. A non-finite system is left to the always-on DY-P1 check of
+// the returned error (numerical_error), so it is not asserted here.
+inline bool lu_ok(const Eigen::FullPivLU<ZMatrix> &lu) { return lu.isInvertible() || !lu.matrixLU().allFinite(); }
+}  // namespace
+
 double dyson::dyson_timestep_ret(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma,
                                Integration::Integrator &I, double h){
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_timestep_ret";
   if(cs.outer()) enter_timestep_(where, tstp, G, Sigma, I, h, mu, H, 0, tstp-1, false);
 
@@ -93,6 +99,7 @@ double dyson::dyson_timestep_ret(int tstp, herm_matrix_hodlr &G, double mu, cplx
   // Solve XM=Q for X (M^T * X^T = Q^T)
   // We already constructed Q and M to be transposed
   Eigen::FullPivLU<ZMatrix> lu(MMap);
+  HNESSI_ASSERT(lu_ok(lu), "dyson::dyson_timestep", HNESSI_KV(lu.rank()));   // DY-T11 (tier 1)
   XMap = lu.solve(QMap);
 
   // Place results into directly stored slice, calculate error compared to previous iteration
@@ -136,6 +143,7 @@ double dyson::dyson_timestep_ret(int tstp, herm_matrix_hodlr &G, double mu, cplx
     // Solve XM=Q (M^T * X^T = Q^T) for X
     // Calculate error and put into directly stored slice
     Eigen::FullPivLU<ZMatrix> lu2(MMapSmall); // we already did the transposition of M above
+  HNESSI_ASSERT(lu_ok(lu2), "dyson::dyson_timestep", HNESSI_KV(lu2.rank()));   // DY-T11 (tier 1)
     XMapSmall.noalias() = lu2.solve(QMapSmall.transpose()).transpose();
     err += (ZMatrixMap(G.curr_timestep_ret_ptr(tstp,tstp-n) , nao_, nao_) - XMapSmall).norm();
     ZMatrixMap(G.curr_timestep_ret_ptr(tstp,tstp-n), nao_, nao_).noalias() = XMapSmall;
@@ -148,6 +156,9 @@ double dyson::dyson_timestep_ret(int tstp, herm_matrix_hodlr &G, double mu, cplx
           int blkrows = Sigma.blklen(next_block);
           int blkcols = Sigma.ret().data().blocks()[next_block][k][j].cols();
           int epsrank = Sigma.ret().data().blocks()[next_block][k][j].epsrank();
+          // DY-T9 (tier 1): the block fits the dyson scratch ((nt+1)/2*nao, HM-U10)
+          HNESSI_ASSERT(epsrank*nao_ <= (int)epsnao_tmp_.size(), "dyson::dyson_timestep_ret", HNESSI_KV(epsrank),
+                        HNESSI_KV(nao_), HNESSI_KV(epsnao_tmp_.size()));
           ZMatrixMap tmp(epsnao_tmp_.data(), epsrank, nao_);
           ZMatrixMap tmp2(epsnao_tmp_2_.data(), epsrank, nao_);
 
@@ -209,14 +220,18 @@ double dyson::dyson_timestep_ret(int tstp, herm_matrix_hodlr &G, double mu, cplx
   if(profile_) timing(tstp, 5) = intdircorrdur.count();
   if(profile_) timing(tstp, 6) = intcorrdur.count();
 
+  stamp_(G, tstp, st4_ret);   // ST-4
   return cs.outer() ? ensure_finite_(err, where) : err;
 }
 
 double dyson::dyson_timestep_les_nobc(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma,
                                Integration::Integrator &I, double h){
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_timestep_les_nobc";
-  if(cs.outer()) enter_timestep_(where, tstp, G, Sigma, I, h, mu, H, 0, tstp, false);
+  if(cs.outer()) {
+    enter_timestep_(where, tstp, G, Sigma, I, h, mu, H, 0, tstp, false);
+    require_stamp_(where, G, tstp, st4_ret | st4_tv, "call dyson_timestep_ret and dyson_timestep_tv for this tstp and G first (or use dyson_timestep_nobc)");   // ST-4 (DY-T7)
+  }
 
   assert(tstp > I.get_k());
   assert(Sigma.nt() > tstp);
@@ -320,6 +335,7 @@ double dyson::dyson_timestep_les_nobc(int tstp, herm_matrix_hodlr &G, double mu,
     }
   }
   Eigen::FullPivLU<ZMatrix> luIC(ZMatrixMap(M_.data(), nao_, nao_));
+  HNESSI_ASSERT(lu_ok(luIC), "dyson::dyson_timestep", HNESSI_KV(luIC.rank()));   // DY-T11 (tier 1)
   ZMatrixMap(X_.data(), nao_, nao_) = luIC.solve(ZMatrixMap(Q_.data(), nao_, nao_));
   memset(M_.data(),0,sizeof(cplx)*k_*k_*es_);
 
@@ -360,6 +376,7 @@ double dyson::dyson_timestep_les_nobc(int tstp, herm_matrix_hodlr &G, double mu,
 
   // Solve Mx=Q
   Eigen::FullPivLU<ZMatrix> lu(MMap);
+  HNESSI_ASSERT(lu_ok(lu), "dyson::dyson_timestep", HNESSI_KV(lu.rank()));   // DY-T11 (tier 1)
   ZMatrixMap(X_.data() + es_, k_*nao_, nao_).noalias() = lu.solve(ZMatrixMap(Q_.data() + es_, k_*nao_, nao_));
 
   for(int i = 1; i <= k_; i++) {
@@ -387,7 +404,8 @@ double dyson::dyson_timestep_les_nobc(int tstp, herm_matrix_hodlr &G, double mu,
         }
       }
       next_block++;
-      next_block_apply_at = Sigma.blkc2(next_block);
+      // DY-T10: past the last block there is nothing left to apply (m-1 >= k never equals -1)
+      next_block_apply_at = next_block < Sigma.nbox() ? Sigma.blkc2(next_block) : -1;
     }
     else {
       break;
@@ -502,6 +520,7 @@ double dyson::dyson_timestep_les_nobc(int tstp, herm_matrix_hodlr &G, double mu,
 
     // Solve MX=Q
     Eigen::FullPivLU<ZMatrix> lu2(MMapSmall);
+    HNESSI_ASSERT(lu_ok(lu2), "dyson::dyson_timestep", HNESSI_KV(lu2.rank()));   // DY-T11 (tier 1)
     ZMatrixMap(X_.data() + m*es_, nao_, nao_) = lu2.solve(ZMatrixMap(Q_.data() + m*es_, nao_, nao_)).transpose();
   }
 
@@ -526,9 +545,12 @@ double dyson::dyson_timestep_les_nobc(int tstp, herm_matrix_hodlr &G, double mu,
 
 double dyson::dyson_timestep_les_2leg(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma,
                                Integration::Integrator &I, double h){
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_timestep_les_2leg";
-  if(cs.outer()) enter_timestep_(where, tstp, G, Sigma, I, h, mu, H, 0, tstp, false);
+  if(cs.outer()) {
+    enter_timestep_(where, tstp, G, Sigma, I, h, mu, H, 0, tstp, false);
+    require_stamp_(where, G, tstp, st4_ret, "call dyson_timestep_ret for this tstp and G first (or use dyson_timestep_2leg)");   // ST-4 (DY-T7)
+  }
 
   assert(tstp > I.get_k());
   assert(Sigma.nt() > tstp);
@@ -632,6 +654,7 @@ double dyson::dyson_timestep_les_2leg(int tstp, herm_matrix_hodlr &G, double mu,
     }
   }
   Eigen::FullPivLU<ZMatrix> luIC(ZMatrixMap(M_.data(), nao_, nao_));
+  HNESSI_ASSERT(lu_ok(luIC), "dyson::dyson_timestep", HNESSI_KV(luIC.rank()));   // DY-T11 (tier 1)
   ZMatrixMap(X_.data(), nao_, nao_) = luIC.solve(ZMatrixMap(Q_.data(), nao_, nao_));
 
   memset(M_.data(),0,sizeof(cplx)*k_*k_*es_);
@@ -672,6 +695,7 @@ double dyson::dyson_timestep_les_2leg(int tstp, herm_matrix_hodlr &G, double mu,
 
   // Solve Mx=Q
   Eigen::FullPivLU<ZMatrix> lu(MMap);
+  HNESSI_ASSERT(lu_ok(lu), "dyson::dyson_timestep", HNESSI_KV(lu.rank()));   // DY-T11 (tier 1)
   ZMatrixMap(X_.data() + es_, k_*nao_, nao_).noalias() = lu.solve(ZMatrixMap(Q_.data() + es_, k_*nao_, nao_));
 
   for(int i = 1; i <= k_; i++) {
@@ -699,7 +723,8 @@ double dyson::dyson_timestep_les_2leg(int tstp, herm_matrix_hodlr &G, double mu,
         }
       }
       next_block++;
-      next_block_apply_at = Sigma.blkc2(next_block);
+      // DY-T10: past the last block there is nothing left to apply (m-1 >= k never equals -1)
+      next_block_apply_at = next_block < Sigma.nbox() ? Sigma.blkc2(next_block) : -1;
     }
     else {
       break;
@@ -814,6 +839,7 @@ double dyson::dyson_timestep_les_2leg(int tstp, herm_matrix_hodlr &G, double mu,
 
     // Solve MX=Q
     Eigen::FullPivLU<ZMatrix> lu2(MMapSmall);
+    HNESSI_ASSERT(lu_ok(lu2), "dyson::dyson_timestep", HNESSI_KV(lu2.rank()));   // DY-T11 (tier 1)
     ZMatrixMap(X_.data() + m*es_, nao_, nao_) = lu2.solve(ZMatrixMap(Q_.data() + m*es_, nao_, nao_)).transpose();
   }
 
@@ -838,9 +864,12 @@ double dyson::dyson_timestep_les_2leg(int tstp, herm_matrix_hodlr &G, double mu,
 
 double dyson::dyson_timestep_les(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma,
                                Integration::Integrator &I, double h){
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_timestep_les";
-  if(cs.outer()) enter_timestep_(where, tstp, G, Sigma, I, h, mu, H, 0, tstp, false);
+  if(cs.outer()) {
+    enter_timestep_(where, tstp, G, Sigma, I, h, mu, H, 0, tstp, false);
+    require_stamp_(where, G, tstp, st4_ret | st4_tv, "call dyson_timestep_ret and dyson_timestep_tv for this tstp and G first (or use dyson_timestep)");   // ST-4 (DY-T7)
+  }
 
   assert(tstp > I.get_k());
   assert(Sigma.nt() > tstp);
@@ -924,6 +953,7 @@ double dyson::dyson_timestep_les(int tstp, herm_matrix_hodlr &G, double mu, cplx
   }
   // Solve Mx=Q
   Eigen::FullPivLU<ZMatrix> lu(MMap);
+  HNESSI_ASSERT(lu_ok(lu), "dyson::dyson_timestep", HNESSI_KV(lu.rank()));   // DY-T11 (tier 1)
   ZMatrixMap(X_.data() + es_, k_*nao_, nao_).noalias() = lu.solve(ZMatrixMap(Q_.data() + es_, k_*nao_, nao_));
   for(int i = 1; i <= k_; i++) {
     ZMatrixMap(X_.data() + i*es_, nao_, nao_) = ZMatrixMap(X_.data() + i*es_, nao_, nao_).transpose().eval();
@@ -950,7 +980,8 @@ double dyson::dyson_timestep_les(int tstp, herm_matrix_hodlr &G, double mu, cplx
         }
       }
       next_block++;
-      next_block_apply_at = Sigma.blkc2(next_block);
+      // DY-T10: past the last block there is nothing left to apply (m-1 >= k never equals -1)
+      next_block_apply_at = next_block < Sigma.nbox() ? Sigma.blkc2(next_block) : -1;
     }
     else {
       break;
@@ -1065,6 +1096,7 @@ double dyson::dyson_timestep_les(int tstp, herm_matrix_hodlr &G, double mu, cplx
 
     // Solve MX=Q
     Eigen::FullPivLU<ZMatrix> lu2(MMapSmall);
+    HNESSI_ASSERT(lu_ok(lu2), "dyson::dyson_timestep", HNESSI_KV(lu2.rank()));   // DY-T11 (tier 1)
     ZMatrixMap(X_.data() + m*es_, nao_, nao_) = lu2.solve(ZMatrixMap(Q_.data() + m*es_, nao_, nao_)).transpose();
   }
 
@@ -1089,7 +1121,7 @@ double dyson::dyson_timestep_les(int tstp, herm_matrix_hodlr &G, double mu, cplx
 
 double dyson::dyson_timestep_tv(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma,
                                Integration::Integrator &I, double h){
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::dyson_timestep_tv";
   if(cs.outer()) enter_timestep_(where, tstp, G, Sigma, I, h, mu, H, tstp, tstp, true);
 
@@ -1151,6 +1183,7 @@ double dyson::dyson_timestep_tv(int tstp, herm_matrix_hodlr &G, double mu, cplx 
                                              - h*I.omega(0) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(tstp, tstp), nao_, nao_);
 
   Eigen::FullPivLU<ZMatrix> lu(MMap);
+  HNESSI_ASSERT(lu_ok(lu), "dyson::dyson_timestep", HNESSI_KV(lu.rank()));   // DY-T11 (tier 1)
 
   // Solve MX=Q
   for(int m=0; m<r_; m++) {
@@ -1168,6 +1201,7 @@ double dyson::dyson_timestep_tv(int tstp, herm_matrix_hodlr &G, double mu, cplx 
   if(profile_) timing(tstp, 8) = int1dur.count();
   if(profile_) timing(tstp, 9) = int2dur.count();
 
+  stamp_(G, tstp, st4_tv);   // ST-4
   return cs.outer() ? ensure_finite_(err, where) : err;
 }
 

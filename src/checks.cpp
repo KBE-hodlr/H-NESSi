@@ -83,6 +83,18 @@ void warn(const std::string &message) {
   std::fflush(stderr);
 }
 
+bool single_thread_owner::acquire(const char *where) {
+  // a per-thread token: the address of a thread_local (non-zero, distinct for concurrently running threads)
+  const std::uintptr_t me = reinterpret_cast<std::uintptr_t>(&library_region_depth());
+  if (owner_.load(std::memory_order_acquire) == me) return false;  // nested call on the owning thread
+  std::uintptr_t expected = 0;
+  if (owner_.compare_exchange_strong(expected, me, std::memory_order_acq_rel)) return true;
+  fail(error_kind::state,
+       format_message(where, "the object is not in use by another thread", {"", "two threads use the same object "
+                      "concurrently; use one object per thread (ISSUES H3)"}),
+       __FILE__, __LINE__);
+}
+
 void omp_exception_collector::rethrow() {
   std::exception_ptr p;
   {

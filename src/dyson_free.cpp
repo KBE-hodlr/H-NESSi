@@ -9,7 +9,9 @@ namespace h_nessi {
 #define EXPMAX 100
 
 // 1/(1+exp(omega*beta))
+// UT-3 (tier 1): beta > 0; bose: omega*beta != 0 (1/arg below; the callers check h - mu > 0 for bosons, DY-M10/F10)
 double fermi(double beta, double omega) {
+    HNESSI_ASSERT(beta > 0, "fermi", HNESSI_KV(beta));
     double arg = omega * beta;
     if (fabs(arg) > EXPMAX) {
         return (arg > 0.0 ? 0.0 : 1.0);
@@ -56,6 +58,7 @@ DColVector fermi_exp(double beta,double tau,DColVector &omega){
 
 // 1/(exp(w*b)-1)
 double bose(double beta, double omega) {
+    HNESSI_ASSERT(beta > 0 && omega * beta != 0, "bose", HNESSI_KV(beta), HNESSI_KV(omega));
     double arg = omega * beta;
     if (arg < 0)
         return (-1.0 - bose(beta, -omega));
@@ -102,12 +105,13 @@ DColVector bose_exp(double beta,double tau,DColVector &omega){
 
 
 void dyson::green_from_H_mat(double *g0, double mu, ZMatrix H) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::green_from_H_mat";
   if(cs.outer()) {
     HNESSI_REQUIRE(H.rows() == nao_ && H.cols() == nao_ && std::isfinite(mu), where, HNESSI_KV(H.rows()),
                    HNESSI_KV(H.cols()), HNESSI_KV(nao_), HNESSI_KV(mu));
     hermitize_(H.data() + es_, -1, -1, where);   // D-11 on the local copy (H is passed by value), recorded as h(-1)
+    require_real_(H.data(), where);              // DY-F9 (D1): G^M is real
   }
   double tau;
   // Make Hamiltonian and solve eigen problem
@@ -118,6 +122,7 @@ void dyson::green_from_H_mat(double *g0, double mu, ZMatrix H) {
   evec0 = eigensolver.eigenvectors();
   eval0 = eigensolver.eigenvalues();
   eval0m = -eval0;
+  require_bosonic_spectrum_(eval0, "dyson::green_from_H_mat");   // DY-M10/DY-F10 (also inside dyson_mat)
 
   // Matsubara
   for(int m = 0; m < r_; m++) {
@@ -148,12 +153,13 @@ void dyson::check_free_args_(const char *where, herm_matrix_hodlr &G, double mu,
 }
 
 void dyson::green_from_H(herm_matrix_hodlr &G, double mu, function &H, double h, int tmax, bool inc_mat) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::green_from_H";
   if(cs.outer()) {
     check_function_(where, H, -1);
     check_free_args_(where, G, mu, H.get_map(-1), h, tmax);
     hermitize_(H.ptr(0), -1, -1, where);   // D-11, in place on slice -1 of the user's function
+    if(inc_mat) require_real_(H.ptr(-1), where);   // DY-F9 (D1): G^M is stored real
   }
   green_from_H( G, mu, H.get_map(-1), h, tmax, inc_mat);
 }
@@ -164,11 +170,13 @@ void dyson::green_from_H(herm_matrix_hodlr &G, double mu, function &H, double h,
 // G^R(n,j) = -iU_{n,j} = U_{n,0} (U_{j,0})^\dagger
 // G^L(j,n) = -siU_{j,0} f_s(h-mu) (U_{n,0})^\dagger
 void dyson::green_from_H(herm_matrix_hodlr &G, double mu, ZMatrix H, double h, int tmax, bool inc_mat) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::green_from_H";
   if(cs.outer()) {
     check_free_args_(where, G, mu, H, h, tmax);
     hermitize_(H.data() + es_, -1, -1, where);   // D-11 on the local copy (H is passed by value), recorded as h(-1)
+    // DY-F9 (D1, decided as dyson_mat): G^M is stored real, a complex h would silently lose Im G^M
+    if(inc_mat) require_real_(H.data(), where);
   }
 
   int sign = G.sig();
@@ -184,6 +192,7 @@ void dyson::green_from_H(herm_matrix_hodlr &G, double mu, ZMatrix H, double h, i
   evec0 = eigensolver.eigenvectors();
   eval0 = eigensolver.eigenvalues();
   eval0m = -eval0;
+  require_bosonic_spectrum_(eval0, "dyson::green_from_H");   // DY-F10
 
   // Matsubara
   if(inc_mat) {
@@ -243,13 +252,26 @@ void dyson::green_from_H(herm_matrix_hodlr &G, double mu, ZMatrix H, double h, i
 }
 
 void dyson::green_from_H_dm(herm_matrix_hodlr &G, double mu, ZMatrix H, ZMatrix &rho, double h, int tmax) {
-  call_scope cs(api_depth_);
+  call_scope cs(*this);
   const char *where = "dyson::green_from_H_dm";
   if(cs.outer()) {
     check_free_args_(where, G, mu, H, h, tmax);
     HNESSI_REQUIRE(rho.rows() == nao_ && rho.cols() == nao_, where, HNESSI_KV(rho.rows()), HNESSI_KV(rho.cols()),
                    HNESSI_KV(nao_));
     hermitize_(H.data() + es_, -1, -1, where);   // D-11 on the local copy (H is passed by value), recorded as h(-1)
+    // DY-F7 (tier 2): rho is a density matrix (D-1: rho = -G^M(beta^-) = xi i G^<(0,0)): Hermitian, and its
+    // eigenvalues are occupations (fermions: in [0,1], bosons: >= 0); tolerance herm_err_tol_ (relative for the
+    // Hermiticity, absolute for the occupations)
+    double rn = rho.norm(), ra = (rho - rho.adjoint()).norm();
+    double rrel = rn == 0 ? 0. : ra / rn;
+    HNESSI_REQUIRE(rrel <= herm_err_tol_, where, HNESSI_KV(rrel), HNESSI_KV(herm_err_tol_),
+                   detail::note{"rho must be the (Hermitian) density matrix: rel = ||rho-rho^dagger||_F/||rho||_F"});
+    Eigen::SelfAdjointEigenSolver<ZMatrix> rs(0.5 * (rho + rho.adjoint()), Eigen::EigenvaluesOnly);
+    double occ_min = rs.eigenvalues().minCoeff(), occ_max = rs.eigenvalues().maxCoeff();
+    HNESSI_REQUIRE(occ_min >= -herm_err_tol_ && (xi_ == 1 || occ_max <= 1 + herm_err_tol_), where, HNESSI_KV(occ_min),
+                   HNESSI_KV(occ_max), HNESSI_KV(xi_),
+                   detail::note{"the eigenvalues of rho are occupations (fermions: 0..1, bosons: >= 0); rho is the "
+                                "density matrix -G^M(beta^-), not G^M(0^+)"});
   }
 
   int sign = G.sig();
@@ -265,6 +287,7 @@ void dyson::green_from_H_dm(herm_matrix_hodlr &G, double mu, ZMatrix H, ZMatrix 
   evec0 = eigensolver.eigenvectors();
   eval0 = eigensolver.eigenvalues();
   eval0m = -eval0;
+  require_bosonic_spectrum_(eval0, "dyson::green_from_H_dm");   // DY-F10
 
   // Ut
   ZMatrixMap IHdt = ZMatrixMap(X_.data(), nao_, nao_);
@@ -305,6 +328,7 @@ void dyson::green_from_H_dm(herm_matrix_hodlr &G, double mu, ZMatrix H, ZMatrix 
 }
 
 void dyson::extrapolate_2leg(herm_matrix_hodlr &G, Integration::Integrator &I) {
+  call_scope cs(*this);   // ST-10
   int tstp = G.tstpmk() + G.k();
   int l, j, jcut;
 
@@ -372,6 +396,7 @@ void dyson::extrapolate_2leg(herm_matrix_hodlr &G, Integration::Integrator &I) {
 }
 
 void dyson::extrapolate(herm_matrix_hodlr &G, Integration::Integrator &I) {
+  call_scope cs(*this);   // ST-10
   int tstp = G.tstpmk() + G.k();
   int l, j, jcut;
 

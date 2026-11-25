@@ -2,10 +2,29 @@
 #define BUBBLE_IMPL
 
 #include "h_nessi/bubble.hpp"
+#include "h_nessi/checks.hpp"
 
 namespace h_nessi {
 
+namespace {
+// BU-1, BU-2, BU-3, BU-6 (tier 2, once per call)
+void check_bubble(const char *where, int tstp, herm_matrix_hodlr &C, int c1, int c2, herm_matrix_hodlr &A, int a1,
+                  int a2, herm_matrix_hodlr &B, int b1, int b2) {
+  HNESSI_REQUIRE(&C != &A && &C != &B, where, detail::note{"C must not alias A or B (it is written while they are read)"});
+  HNESSI_REQUIRE(0 <= c1 && c1 < C.size1() && 0 <= c2 && c2 < C.size2() && 0 <= a1 && a1 < A.size1() && 0 <= a2 &&
+                 a2 < A.size2() && 0 <= b1 && b1 < B.size1() && 0 <= b2 && b2 < B.size2(), where, HNESSI_KV(c1),
+                 HNESSI_KV(c2), HNESSI_KV(a1), HNESSI_KV(a2), HNESSI_KV(b1), HNESSI_KV(b2), HNESSI_KV(C.size1()),
+                 HNESSI_KV(A.size1()), HNESSI_KV(B.size1()));
+  HNESSI_REQUIRE(A.r() == B.r() && B.r() == C.r(), where, HNESSI_KV(A.r()), HNESSI_KV(B.r()), HNESSI_KV(C.r()));
+  auto in_window = [tstp](herm_matrix_hodlr &X) { return X.tstpmk() <= tstp && tstp <= X.tstpmk() + X.k(); };
+  HNESSI_REQUIRE(tstp == -1 || (tstp >= 0 && tstp < C.nt() && in_window(A) && in_window(B) && in_window(C)), where,
+                 HNESSI_KV(tstp), HNESSI_KV(A.tstpmk()), HNESSI_KV(B.tstpmk()), HNESSI_KV(C.tstpmk()), HNESSI_KV(C.nt()),
+                 detail::note{"tstp must be -1 or lie in the current windows of A, B and C"});
+}
+}  // namespace
+
   void Bubble1(int tstp, herm_matrix_hodlr &C, int c1, int c2, herm_matrix_hodlr &A, int a1, int a2, herm_matrix_hodlr &B, int b1, int b2, dlr_info &dlr) {
+    check_bubble("Bubble1", tstp, C, c1, c2, A, a1, a2, B, b1, b2);   // the dlr pairing is checked by B's evaluators
     if(tstp == -1) {
       // C_{c1,c2}(tau) = -    A_{a1,a2}(tau) * B_{b2,b1}(-tau)
       //                = -\xi A_{a1,a2}(tau) * B_{b2,b1}(beta-tau)
@@ -47,6 +66,7 @@ namespace h_nessi {
   }
 
   void Bubble2(int tstp, herm_matrix_hodlr &C, int c1, int c2, herm_matrix_hodlr &A, int a1, int a2, herm_matrix_hodlr &B, int b1, int b2) {
+    check_bubble("Bubble2", tstp, C, c1, c2, A, a1, a2, B, b1, b2);
     if(tstp == -1) {
       // C_{c1,c2}(tau) = - A_{a1,a2}(tau) * B_{b1,b2}(tau)
 

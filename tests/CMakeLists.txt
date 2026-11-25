@@ -86,6 +86,7 @@ hn_add_test_exe(test_bootstrap MODULE bootstrap SOURCES test_bootstrap.cpp)
 hn_add_test_exe(test_mpi_comm MODULE mpi_comm SOURCES test_mpi_comm.cpp ENV "OMP_NUM_THREADS=4")
 hn_add_test_exe(test_read_inputfile MODULE read_inputfile SOURCES test_read_inputfile.cpp)
 hn_add_test_exe(test_checks MODULE checks SOURCES test_checks.cpp)
+hn_add_test_exe(test_checks_wp6b MODULE checks SOURCES test_checks_wp6b.cpp)
 
 # NESSi interoperability (WP-N, B8): only with -DINCLUDE_NESSI=ON; labels "unit;nessi" (ctest -L nessi).
 if(INCLUDE_NESSI)
