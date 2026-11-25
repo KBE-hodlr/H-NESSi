@@ -502,7 +502,7 @@ TEST_P(DysonMatFixHam, ReusesSavedG0) {
 INSTANTIATE_TEST_SUITE_P(Dlr, DysonMatFixHam,
                          ::testing::Values(std::make_tuple(-1, 1), std::make_tuple(-1, 2), std::make_tuple(1, 1), std::make_tuple(1, 2)));
 
-// H29: dyson_mat must not write to Sigma (mat, every tv row and tv_trans, conv tensor) nor to G.GMConvTensMatrix_.
+// H29: dyson_mat must not write to Sigma (mat, every tv row, conv tensor) nor to G.GMConvTensMatrix_.
 TEST_P(DysonMatFixHam, LeavesSigmaAndConvTensorUnchanged) {
   auto [xi, nao] = GetParam();
   MatSetup P(nao, xi);
@@ -515,7 +515,7 @@ TEST_P(DysonMatFixHam, LeavesSigmaAndConvTensorUnchanged) {
   D.dyson_mat(G, 0., P.H, P.S, false, 1.0);
   G.initGMConvTensor(P.dlr);
   std::vector<double> smat(P.S.mat(), P.S.mat() + P.r * nao * nao);
-  std::vector<C> stv = P.S.tv().data_vector(), stvt = P.S.tv().data_trans_vector();
+  std::vector<C> stv = P.S.tv().data_vector();
   DMatrix sconv = P.S.GMConvTensMatrix(), gconv = G.GMConvTensMatrix();
   DMatrix hm = P.h0;
   for (bool fix : {false, true}) {
@@ -524,7 +524,6 @@ TEST_P(DysonMatFixHam, LeavesSigmaAndConvTensorUnchanged) {
   }
   EXPECT_TRUE(std::equal(smat.begin(), smat.end(), P.S.mat())) << "Sigma^M changed";
   EXPECT_TRUE(stv == P.S.tv().data_vector()) << "Sigma^tv changed";
-  EXPECT_TRUE(stvt == P.S.tv().data_trans_vector()) << "Sigma^tv tv_trans changed";
   EXPECT_TRUE(sconv == P.S.GMConvTensMatrix()) << "Sigma conv tensor changed";
   EXPECT_TRUE(gconv == G.GMConvTensMatrix()) << "G conv tensor changed";
 }

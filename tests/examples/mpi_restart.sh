@@ -1,5 +1,7 @@
 #!/bin/bash
-# B16 (example): mpi_example must resume from a checkpoint and reproduce the uninterrupted run.
+# B16 (fixed in WP8): mpi_example must resume from a checkpoint and reproduce the uninterrupted run bitwise.
+# A run with __time_limit=0 stops after its first time step and writes the checkpoint; the restart run
+# (__checkpoint=true, same output/checkpoint dirs) continues to Nt. obs.h5 must equal the uninterrupted run exactly.
 # usage: mpi_restart.sh MAIN_X H5FLAT WORKDIR INPUT
 set -u
 MAIN=$1; H5FLAT=$2; W=$3; IN=$4
@@ -12,7 +14,9 @@ sed -e 's/^__checkpoint=.*/__checkpoint=  true/' -e 's/^__time_limit=.*/__time_l
 "$MAIN" full.inp full/out/ full/chk/ > full.log 2>&1 || { echo "uninterrupted run failed"; tail -5 full.log; exit 3; }
 "$MAIN" stop.inp rst/out/ rst/chk/ > stop.log 2>&1 || { echo "stop run failed"; tail -5 stop.log; exit 3; }
 ls rst/chk/GSigma0.h5 > /dev/null 2>&1 || { echo "no checkpoint written by the stop run"; exit 3; }
+grep -q "REACHED THE TIME LIMIT" stop.log || { echo "stop run did not stop at the time limit"; exit 3; }
 "$MAIN" restart.inp rst/out/ rst/chk/ > restart.log 2>&1
 rc=$?
 if [ $rc -ne 0 ]; then echo "restart run failed with exit code $rc"; tail -3 restart.log; exit 1; fi
-"$H5FLAT" cmp full/out/obs.h5 rst/out/obs.h5 1e-10 /jxtnorm /jytnorm /Ekint /Navgt
+if grep -q "Sanitizer" full.log stop.log restart.log; then echo "sanitizer report"; grep -h -A3 "ERROR: .*Sanitizer" *.log | head -20; exit 1; fi
+"$H5FLAT" cmp full/out/obs.h5 rst/out/obs.h5 0 /jxtnorm /jytnorm /Ekint /Navgt /jxt_iter

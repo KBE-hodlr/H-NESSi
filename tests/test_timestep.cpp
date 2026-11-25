@@ -152,7 +152,6 @@ ResA modeA(int nt, int nlvl, int k, double tol) {
     }
     for (int m = 0; m < r; m++) {
       res.maxTV = std::max(res.maxTV, (ZMatrixMap(G.tvptr(T, m), nao, nao) - gt[m]).norm());
-      res.maxTV = std::max(res.maxTV, (ZMatrixMap(G.tvptr_trans(T, m), nao, nao) - gt[m].transpose()).norm());
     }
   }
   return res;
@@ -306,7 +305,7 @@ namespace les {
 int nao = 2;
 const int nd = 2, nb = 3, nf = nd + nb;
 double hstep, beta = 4.0, mu = 0.3;
-int drive = 1, variant = 0;
+int drive = 1, variant = 0, xi = -1;  // xi = +1: bosonic dot+bath (B14 test), mu shifted below the spectrum
 std::vector<ZMatrix> U;
 ZMatrix K0, rho, Vc;
 DMatrix Kb;
@@ -338,20 +337,20 @@ ZMatrix expmH(const ZMatrix &Hm, cplx fac) {
   for (int i = 0; i < Hm.rows(); i++) D(i, i) = std::exp(fac * es.eigenvalues()(i));
   return es.eigenvectors() * D * es.eigenvectors().adjoint();
 }
-ZMatrix fermi(const ZMatrix &K) {
+ZMatrix fermi(const ZMatrix &K) {  // Fermi (xi = -1) or Bose (xi = +1) occupation
   Eigen::SelfAdjointEigenSolver<ZMatrix> es(K);
   ZMatrix D = ZMatrix::Zero(K.rows(), K.rows());
-  for (int i = 0; i < K.rows(); i++) D(i, i) = 1. / (std::exp(beta * es.eigenvalues()(i)) + 1.);
+  for (int i = 0; i < K.rows(); i++) D(i, i) = 1. / (std::exp(beta * es.eigenvalues()(i)) - double(xi));
   return es.eigenvectors() * D * es.eigenvectors().adjoint();
 }
 ZMatrix dot(const ZMatrix &A) { return A.block(0, 0, nao, nao); }
 ZMatrix exGR(int t, int tp) { return dot(-II * U[t] * U[tp].adjoint()); }
-ZMatrix exGL(int t, int tp) { return dot(II * U[t] * rho * U[tp].adjoint()); }
-ZMatrix exGTV(int t, double tau) { return dot(II * U[t] * rho * expmH(K0, tau)); }
-ZMatrix exGM(double tau) { return dot(-expmH(K0, -tau) * (ZMatrix::Identity(nf, nf) - rho)); }
+ZMatrix exGL(int t, int tp) { return dot(-II * double(xi) * U[t] * rho * U[tp].adjoint()); }
+ZMatrix exGTV(int t, double tau) { return dot(-II * double(xi) * U[t] * rho * expmH(K0, tau)); }
+ZMatrix exGM(double tau) { return dot(-expmH(K0, -tau) * (ZMatrix::Identity(nf, nf) + double(xi) * rho)); }
 ZMatrix fb() {
   ZMatrix f = ZMatrix::Zero(nb, nb);
-  for (int b = 0; b < nb; b++) f(b, b) = 1. / (std::exp(beta * Kb(b, b)) + 1.);
+  for (int b = 0; b < nb; b++) f(b, b) = 1. / (std::exp(beta * Kb(b, b)) - double(xi));
   return f;
 }
 ZMatrix eb(double s) {
@@ -370,32 +369,39 @@ ZMatrix SR(int t, int tp) {
 }
 ZMatrix SL(int t, int tp) {
   if (variant == 3) return ZMatrix::Zero(nao, nao);
-  return Vc * (II * eb(t * hstep) * fb() * eb(-tp * hstep)) * Vc.adjoint();
+  return Vc * (-II * double(xi) * eb(t * hstep) * fb() * eb(-tp * hstep)) * Vc.adjoint();
 }
 ZMatrix STV(int t, double tau) {
   if (variant == 3) return ZMatrix::Zero(nao, nao);
-  return Vc * (II * eb(t * hstep) * fb() * ebr(tau)) * Vc.adjoint();
+  return Vc * (-II * double(xi) * eb(t * hstep) * fb() * ebr(tau)) * Vc.adjoint();
 }
 ZMatrix SM(double tau) {
   if (variant == 3) return ZMatrix::Zero(nao, nao);
-  return Vc * (-ebr(-tau) * (ZMatrix::Identity(nb, nb) - fb())) * Vc.adjoint();
+  return Vc * (-ebr(-tau) * (ZMatrix::Identity(nb, nb) + double(xi) * fb())) * Vc.adjoint();
 }
 
 struct Res {
   double worst_int = 0, worst_part = 0, worst_raw = 0, worst_solve = 0;  // dense checks
   double eL = 0, eR = 0, en = 0, ah = 0, drift = 0;                     // accuracy vs exact
   int max_iter = 0;
+  std::vector<ZMatrix> GL;  // final G^<(t,t'), t <= t', row-major upper triangle
 };
 
 // dense: if true, every T > k is checked against the dense reimplementation (cost O(T^2) per step)
-Res run(int nt, int nlvl, int k, double h, double tol, int rhov, int var, bool dense, int drv = 1) {
+Res run(int nt, int nlvl, int k, double h, double tol, int rhov, int var, bool dense, int drv = 1, int sgn = -1) {
   nao = 2;
+  xi = sgn;
+  mu = 0.3;
   drive = drv;
   variant = var;
   hstep = h;
   if (variant == 3) nao = nf;
   Vc = ZMatrix(nd, nb);
   Vc << 0.3, 0.2, -0.25, 0.15, -0.3, 0.2;
+  if (xi == 1) {  // bosons: h(0) - mu > 0 (whole system, hence also the bath levels)
+    Eigen::SelfAdjointEigenSolver<ZMatrix> es0(Kfull(0) + mu * ZMatrix::Identity(nf, nf));
+    mu = es0.eigenvalues()(0) - 0.4;
+  }
   Kb = DMatrix::Zero(nb, nb);
   {
     ZMatrix K = Kfull(0);
@@ -427,9 +433,9 @@ Res run(int nt, int nlvl, int k, double h, double tol, int rhov, int var, bool d
     U[t] = u;
   }
   int r = 0;
-  dlr_info dlr(r, 40., 1e-13, beta, nao, -1);
+  dlr_info dlr(r, 40., 1e-13, beta, nao, xi);
   Integration::Integrator I(k);
-  herm_matrix_hodlr G(nt, r, nlvl, tol, nao, nao, -1, k), S(nt, r, nlvl, tol, nao, nao, -1, k);
+  herm_matrix_hodlr G(nt, r, nlvl, tol, nao, nao, xi, k), S(nt, r, nlvl, tol, nao, nao, xi, k);
   dyson D(nt, nao, k, dlr, rhov, false);
   function Hf(nt, nao, nao);
   for (int t = -1; t < nt; t++) {
@@ -676,17 +682,22 @@ Res run(int nt, int nlvl, int k, double h, double tol, int rhov, int var, bool d
       res.eR = std::max(res.eR, (M - exGR(t, tp)).norm());
     }
     G.get_les(t, t, M);
-    res.en = std::max(res.en, std::abs((-II * M).trace() - (-II * exGL(t, t)).trace()));
+    res.en = std::max(res.en, std::abs((II * double(xi) * M).trace() - (II * double(xi) * exGL(t, t)).trace()));
     res.ah = std::max(res.ah, (M + M.adjoint()).norm());
   }
   {
     G.get_les(0, 0, M);
-    cplx n0 = (-II * M).trace();
+    cplx n0 = (II * double(xi) * M).trace();
     for (int t = 0; t <= T; t++) {
       G.get_les(t, t, M);
-      res.drift = std::max(res.drift, std::abs((-II * M).trace() - n0));
+      res.drift = std::max(res.drift, std::abs((II * double(xi) * M).trace() - n0));
     }
   }
+  for (int t = 0; t <= T; t++)
+    for (int tp = t; tp <= T; tp++) {
+      G.get_les(t, tp, M);
+      res.GL.push_back(M);
+    }
   return res;
 }
 }  // namespace les
@@ -761,14 +772,29 @@ TEST(LesDense, Slow_LargeGeometryK5) {
   EXPECT_LT(r.eL, 1e-7);
 }
 
-// B14: dyson_timestep_nobc must reproduce the exact solution like dyson_timestep does (and its boundary value
-// G^<(0,T) must solve the conjugate KBE with -les_it_int, see the dense check).
-TEST(LesNobc, KnownBug_B14_AccuracyAndBoundary) {
-  hn_test::run_isolated([] {
-    les::Res r = les::run(60, 3, 3, 0.05, 1e-12, 1, 1, true);
-    EXPECT_LT(r.eL, 1e-4) << "max|G^< - exact|";
-    EXPECT_LT(r.worst_solve, 1e-13) << "lesser step vs dense system with the correct boundary sign";
-  });
+// B14 (fixed in WP7): dyson_timestep_nobc must reproduce the exact solution like dyson_timestep does (and its boundary
+// value G^<(0,T) must solve the conjugate KBE with -les_it_int, see the dense check).
+TEST(LesNobc, AccuracyAndBoundary_B14) {
+  les::Res r = les::run(60, 3, 3, 0.05, 1e-12, 1, 1, true);
+  EXPECT_LT(r.eL, 1e-4) << "max|G^< - exact|";
+  EXPECT_LT(r.worst_solve, 1e-13) << "lesser step vs dense system with the correct boundary sign";
+}
+
+// B14: a full _nobc run (Sigma^rceil != 0: dot+bath) agrees with the default dyson_timestep (boundary condition
+// G^<(0,T) = -[G^rceil(T,0)]^dagger) at the level of the discretisation error, both statistics and both rho modes.
+// Before WP7 the boundary error grew to 0.33 by T = 59 (fermions).
+TEST(LesNobc, MatchesDefaultTimestep_B14) {
+  for (int sgn : {-1, 1})
+    for (int rhov : {1, 0}) {
+      les::Res d = les::run(60, 3, 3, 0.05, 1e-12, rhov, 0, false, 1, sgn), n = les::run(60, 3, 3, 0.05, 1e-12, rhov, 1, false, 1, sgn);
+      ASSERT_EQ(d.GL.size(), n.GL.size());
+      double diff = 0;
+      for (size_t i = 0; i < d.GL.size(); i++) diff = std::max(diff, (d.GL[i] - n.GL[i]).norm());
+      EXPECT_LT(d.eL, 1e-4) << "xi=" << sgn << " rhov=" << rhov << " default";
+      EXPECT_LT(n.eL, 1e-4) << "xi=" << sgn << " rhov=" << rhov << " _nobc";
+      EXPECT_LT(diff, 2 * std::max(d.eL, n.eL)) << "xi=" << sgn << " rhov=" << rhov << " _nobc vs default";
+      std::printf("B14 xi=%+d rhov=%d: eL default %.2e, _nobc %.2e, max|_nobc - default| %.2e\n", sgn, rhov, d.eL, n.eL, diff);
+    }
 }
 
 // =============================================================================================== B28

@@ -90,7 +90,7 @@ class herm_matrix_hodlr{
    * which hold only std::vector and Eigen members, and scalars); there are no raw
    * pointers or references, so the memberwise copy is an independent deep copy:
    * geometry, compressed blocks and their ranks, all direct stores, the current-
-   * timestep window (tstpmk, circular buffers), mat, tv/tv_trans, GMConvTensMatrix,
+   * timestep window (tstpmk, circular buffers), mat, tv, GMConvTensMatrix,
    * timing and can_extrap. The copy can continue time stepping (update_blocks,
    * dyson_*) exactly like the original. Assignment replaces the target completely,
    * so the geometries of the two objects need not match beforehand.
@@ -248,10 +248,8 @@ class herm_matrix_hodlr{
   void get_tv(int t1,int t2,ZMatrix &M);
   void get_tv(int t1,int t2,cplx *M);
   ZMatrixMap map_tv(int t1,int t2);
-  /** Retrieve the transposed tv component for tstp t1 and dlr index t2 into `M`. */
-  void get_tv_trans(int t1,int t2,ZMatrix &M);
-  void get_tv_trans(int t1,int t2,cplx *M);
-  ZMatrixMap map_tv_trans(int t1,int t2);
+  // (get_tv_trans, map_tv_trans and tvptr_trans were removed in WP6c, ISSUES H27: there is no orbital-transposed
+  //  copy of tv any more. Writes through map_tv/tvptr are seen by every reader, e.g. get_vt, Bubble1, les_it_int.)
   /** Get mixed component evaluated at points \beta-dlr(i) for i=0...r.  
    * dest is assumed to be a column-major double buffer of size r_*size1_*size2_.
    */
@@ -315,9 +313,6 @@ class herm_matrix_hodlr{
     cplx* raw_dest_ptr = tvptr(t1, t2);
     Eigen::Map<ZMatrix> dest_map(raw_dest_ptr, size1_, size2_);
     dest_map = expr;
-    cplx* raw_dest_ptr2 = tvptr_trans(t1, t2);
-    Eigen::Map<ZMatrix> dest_map2(raw_dest_ptr2, size1_, size2_);
-    dest_map2 = dest_map.transpose();
   }
   /** Store retarded current-timestep buffer entry (t1,t2). */
   void set_ret_curr(int t1, int t2, const ZMatrix &M);
@@ -352,7 +347,7 @@ class herm_matrix_hodlr{
   /** Copy timestep `tstp` of *this into `G` (*this is not modified).
    * tstp == -1: copy the Matsubara component (mat); no window requirement.
    * tstp >= 0: copy row tstp of the retarded buffer, column tstp of the lesser
-   * buffer (entries 0..nt) and the tv/tv_trans row; tstp must lie in the current
+   * buffer (entries 0..nt) and the tv row; tstp must lie in the current
    * window [tstpmk, tstpmk+k] of both *this and G (tier 2, precondition_error). */
   void get_timestep_curr(int tstp,herm_matrix_hodlr &G);
   /** Copy the whole current window of *this into `G` (*this is not modified):
@@ -374,9 +369,6 @@ class herm_matrix_hodlr{
 
   /** Pointer to tv buffer for timestep `t` and DLR index `tau`. */
   cplx *tvptr(int t, int tau);
-
-  /** Pointer to transposed tv buffer for timestep `t` and DLR index `tau`. */
-  cplx *tvptr_trans(int t, int tau);
 
   /** Pointer to current les timestep buffer */
   cplx *curr_timestep_les_ptr(int t, int tp);
@@ -435,8 +427,10 @@ class herm_matrix_hodlr{
 
   // I/O and diagnostics
   /** Version written as `label/format_version` by write_checkpoint_hdf5.
-   * 2: GMConvTensMatrix carries the xi factor (bosonic sign fix). Missing = 1. */
-  static constexpr int checkpoint_format_version = 2;
+   * 2: GMConvTensMatrix carries the xi factor (bosonic sign fix). Missing = 1.
+   * 3: the orbital-transposed copy `tv_trans` is no longer written (WP6c, ISSUES H27).
+   * The reader accepts 1..3 and ignores a `tv_trans` dataset in older files. */
+  static constexpr int checkpoint_format_version = 3;
 
   /** Write a lightweight checkpoint containing the current runtime buffers. */
   void write_checkpoint_hdf5(h5e::File &out, std::string label);

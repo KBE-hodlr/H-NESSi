@@ -278,8 +278,12 @@ double dyson::dyson_timestep_les_nobc(int tstp, herm_matrix_hodlr &G, double mu,
 
   // Initial Condition. Do not use tv, remember integral is transposed
   // integral
+  // B14: this boundary equation is the Hermitian conjugate of Eq. 8 at t = 0 multiplied by -1 (LHS +i a_0/h, the
+  // other RHS terms carry the matching signs), so the mixed term -i int G^rceil(0,tau) Sigma^lceil(tau,T) enters
+  // with a minus sign: Y0 L = ... - [les_it_int(0,T,G,Sigma)]^T.
   memset(Q_.data(),0,sizeof(cplx)*es_);
   les_it_int(0, tstp, G, Sigma, Q_.data());
+  ZMatrixMap(Q_.data(), nao_, nao_) *= -1.;
 
   // derivative
   for(int l = 1; l <= k_; l++) {
@@ -1142,17 +1146,6 @@ double dyson::dyson_timestep_tv(int tstp, herm_matrix_hodlr &G, double mu, cplx 
 
   tvstart = std::chrono::system_clock::now();
 
-  // We allow users to call set_tstp_zero for [T-k...T]
-  // If we don't expect them to update tv_trans, we need to 
-  // make sure that it is up-to-date for [T-k-1...T]
-  // -1 coming from the fact this may be the first time 
-  // function is called at T
-  for(int t = tstp-k_-1; t <= tstp; t++) {
-    for(int i = 0; i < r_; i++) {
-      ZMatrixMap(Sigma.tvptr_trans(t,i), nao_, nao_) = ZMatrixMap(Sigma.tvptr(t,i), nao_,nao_).transpose();
-    }
-  }
-
   double err = 0;
 
   cplx cplxi = cplx(0.,1.);
@@ -1190,7 +1183,6 @@ double dyson::dyson_timestep_tv(int tstp, herm_matrix_hodlr &G, double mu, cplx 
     XMap = lu.solve(ZMatrixMap(G.tvptr(tstp, m), nao_, nao_));
     err += (ZMatrixMap(NTauTmp_.data()+m*es_, nao_, nao_) - XMap).norm();
     ZMatrixMap(G.tvptr(tstp,m), nao_, nao_).noalias() = XMap;
-    ZMatrixMap(G.tvptr_trans(tstp,m), nao_, nao_).noalias() = XMap.transpose();
   }
 
   tvend = std::chrono::system_clock::now();

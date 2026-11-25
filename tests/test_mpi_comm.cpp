@@ -124,8 +124,8 @@ struct Err {
 };
 std::mutex g_print;
 const char *NAMES[9] = {"distribution vectors", "down t (map_ret/map_les)", "down tau direct (map_tv/map_mat)", "down tau reversed",
-                        "up ret/les -> S curr buffers", "up tv/mat -> S", "S.tv_trans untouched (stays 0)",
-                        "G.tv_trans == scratch G(.,beta-tau) untransposed", "allk index formula"};
+                        "up ret/les -> S curr buffers", "up tv/mat -> S", "get leaves G.tv row T / G.mat unchanged",
+                        "get leaves the other G.tv rows unchanged (no scratch in G, WP6c)", "allk index formula"};
 
 // mode: 0 spawn/vector, 1 spawn/refwrap, 2 nospawn/vector, 3 nospawn/refwrap,
 //       4 nospawn/vector called OUTSIDE omp parallel (team of 1), 5 nospawn/vector in a num_threads(2) team
@@ -164,6 +164,11 @@ void run_rank(int Nk, int nao, int k, int mode, std::vector<Err> &errs_out) {
     auto b = get_my_tauindex(rank, P, r);
     E[0].chk(comm.my_first_tau, b[0], 0);
     E[0].chk(comm.my_Ntau, b[2], 0);
+    // WP6c: the get's own scratch (one r x nao x nao slice per local k) is allocated and counted in memory_usage()
+    E[0].chk((double)comm.rev_buff_.size(), (double)myNk * r * nao * nao, 0);
+    double cplx_bytes = 16.0 * (comm.t_alltp_buff.capacity() + comm.t_allk_buff.capacity() + comm.tau_alltp_buff.capacity() +
+                                comm.tau_allk_buff.capacity() + comm.rev_buff_.capacity());
+    E[0].chk(comm.memory_usage() * 1024.0 * 1024.0 >= cplx_bytes, 1, 0);
   }
   const int es = nao * nao;
   for (int T = -1; T <= k; T++) {
@@ -291,15 +296,18 @@ void run_rank(int Nk, int nao, int k, int mode, std::vector<Err> &errs_out) {
           for (int i = 0; i < nao; i++)
             for (int j = 0; j < nao; j++) {
               E[5].chk(S[kl].tvptr(T, n)[i * nao + j], gTV(kg, T, n, i, j), 1e-12);
-              E[6].chk(S[kl].tvptr_trans(T, n)[i * nao + j], 0.0, 0);
-              E[7].chk(G[kl].tvptr_trans(T, n)[i * nao + j], fTV(kg, T, BETA - taus[n], i, j), 1e-8);
+              // WP6c (H27): the get used G.tv_trans as scratch for G(T,beta-tau); now it has its own buffer and G is
+              // only read
+              E[6].chk(G[kl].tvptr(T, n)[i * nao + j], fTV(kg, T, taus[n], i, j), 0);
+              for (int t = 0; t < T; t++) E[7].chk(G[kl].tvptr(t, n)[i * nao + j], fTV(kg, t, taus[n], i, j), 0);
             }
       } else {
         for (int n = 0; n < r; n++)
           for (int i = 0; i < nao; i++)
             for (int j = 0; j < nao; j++) {
               E[5].chk(S[kl].matptr(n)[i * nao + j], gM(kg, n, i, j).real(), 1e-12);  // mat passes a DLR round trip
-              E[7].chk(G[kl].tvptr_trans(0, n)[i * nao + j], fM(kg, BETA - taus[n], i, j), 1e-8);
+              E[6].chk(G[kl].matptr(n)[i * nao + j], fM(kg, taus[n], i, j), 0);
+              E[7].chk(G[kl].tvptr(0, n)[i * nao + j], 0.0, 0);   // no G^M(beta-tau) scratch in G.tv row 0
             }
       }
     }

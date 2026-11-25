@@ -180,6 +180,8 @@ private:
                        bool fixHam);
   void ensure_mat_finite_(const char *where);
   void check_it_args_(const char *where, int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G);
+  // X = ipmat^T it2itr^T (i xi conj(G.tv row tstp)) into NTauTmp2_ (r x n x n): the G operand of both les_it_int overloads
+  void les_it_int_prelude_(int tstp, herm_matrix_hodlr &G);
   void check_gamma_args_(const char *where, herm_matrix_hodlr &G, herm_matrix_hodlr &Delta);
   void check_free_args_(const char *where, herm_matrix_hodlr &G, double mu, const ZMatrix &H, double h, int tmax);
 
@@ -277,6 +279,10 @@ public:
    * @param n Parameter n.
    * @param h Time step size.
    * @param I Integration object.
+   *
+   * @warning NOT IMPLEMENTED. The declaration is kept as a placeholder, reserved for a later reimplementation
+   *          (decision D-2, ISSUES Q7). There is no definition in the library (the old body in dyson.cpp is
+   *          commented out), so any call fails at link time with an undefined reference to dyson::dipole_step.
    */
   void dipole_step(int tstp, function &dfield, herm_matrix_hodlr &Gu, herm_matrix_hodlr &Gd, double *dipole, double l, double n, double h, Integration::Integrator &I);
   /**
@@ -470,37 +476,27 @@ public:
    */
   double dyson_timestep_tv(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
-   * @brief Performs imaginary time convolution appearing in Mixed KBE.
+   * @brief Performs imaginary time convolution appearing in Mixed KBE:
+   *        res[a][i][j] += sum_{b,k} C_{ajbk} Sigma^tv_{ik}(tstp,tau_b) with C = G.GMConvTens().
+   * Reads row tstp of Sigma.tv directly (one Eigen Tensor contraction; no transposed copy since WP6c).
    * @param tstp Time step index.
    * @param Sigma Self-energy object.
    * @param G Green's function object.
-   * @param res Output array.
+   * @param res Output array (r x n x n), incremented.
    */
   void tv_it_conv(int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G, cplx *res);
   /**
-   * @brief dispatch function for tv_it_conv.
-   * @param Sigma Self-energy array - must be transposed version.
-   * @param res Output array.
-   * @param GMConvTens Convolution tensor.
-   */
-  void tv_it_conv(cplx *Sigma, cplx *res,double *GMConvTens);
-  /**
-   * @brief Performs imaginary time convolution appearing in Mixed KBE - output only single tau point.
+   * @brief Performs imaginary time convolution appearing in Mixed KBE - output only single tau point m
+   *        (res[i][j] += sum_{b,k} C_{mjbk} Sigma^tv_{ik}(tstp,tau_b)).
+   * (The raw-pointer overloads tv_it_conv(cplx*, cplx*, double*) and tv_it_conv(int, cplx*, cplx*, double*), which
+   *  took Sigma in the removed orbital-transposed tv_trans layout, were removed in WP6c, ISSUES H27.)
    * @param m Time slice index.
    * @param tstp Time step index.
    * @param Sigma Self-energy object.
    * @param G Green's function object.
-   * @param res Output array.
+   * @param res Output array (n x n), incremented.
    */
   void tv_it_conv(int m, int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G, cplx *res);
-  /**
-   * @brief dispatch function for tv_it_conv.
-   * @param m Time slice index.
-   * @param Sigma Self-energy array - must be transposed version.
-   * @param res Output array.
-   * @param GMConvTens Convolution tensor.
-   */
-  void tv_it_conv(int m, cplx *Sigma, cplx *res,double *GMConvTens);
   /**
    * @brief Performs real-time integral appearing in Mixed KBE.
    * @param tstp Time step index.
@@ -548,15 +544,18 @@ public:
    */
   double dyson_timestep_les_2leg(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
-   * @brief Performs imaginary time integral appearing in lesser KBE.
+   * @brief Performs imaginary time integral appearing in lesser KBE, for t = 0..tstp:
+   *        I_{ji}(t) = -i int_0^beta dtau Sigma^rceil_{jk}(t,tau) G^lceil_{ki}(tau,tstp).
+   * The result is transposed in ij: res[t][i][j] += I_{ji}(t). Reads Sigma.tv rows 0..tstp and G.tv row tstp
+   * directly (one Eigen Tensor contraction over all t; no transposed copy since WP6c).
    * @param tstp Time step index.
    * @param Sigma Self-energy object.
    * @param G Green's function object.
-   * @param res Output array.
+   * @param res Output array ((tstp+1) x n x n), incremented.
    */
   void les_it_int(int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G, cplx* res);
   /**
-   * @brief Performs les_it_int for a single time slice (block version).
+   * @brief Performs les_it_int for a single time slice t: res[i][j] += I_{ji}(t) (n x n, transposed, incremented).
    * @param t Time slice index.
    * @param tstp Time step index.
    * @param Sigma Self-energy object.

@@ -353,10 +353,9 @@ void Hubb_2B::Sigma_nospawn(int tstp,
 
     #pragma omp barrier
 
-    // 3. Sync and write back S results
+    // 3. Sync and write back S results. mpi_comm_and_set_nospawn ends with its own barrier (library, since WP5/H24),
+    //    so every thread's Sigma rows are written when it returns; no extra barrier is needed here.
     comm.mpi_comm_and_set_nospawn(tstp, Srefs);
-
-    #pragma omp barrier
 }
 
 

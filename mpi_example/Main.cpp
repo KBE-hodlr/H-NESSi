@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <filesystem>
 
 #include "h_nessi/mpi_comm.hpp"
@@ -10,6 +11,15 @@
 
 
 using namespace h_nessi;
+
+// Restart: copy jxt_iter[iter][ti] for ti < t0 from the checkpointed observables (rows beyond either size stay as they are).
+static void restore_iter_rows(std::vector<std::vector<double>> &dst, const std::vector<std::vector<double>> &src, int t0) {
+  size_t nrows = std::min(dst.size(), src.size());
+  for(size_t iter = 0; iter < nrows; iter++) {
+    size_t ncols = std::min({dst[iter].size(), src[iter].size(), static_cast<size_t>(t0)});
+    for(size_t ti = 0; ti < ncols; ti++) dst[iter][ti] = src[iter][ti];
+  }
+}
 
 int main(int argc, char *argv[]) {
 
@@ -190,8 +200,11 @@ int main(int argc, char *argv[]) {
   // observables
   std::vector<double> density_k(Nk), jxt_local(Nt), jyt_local(Nt), Ekint_local(Nt), Navgt_local(Nt);
   std::vector<double> jxt_total(Nt), jyt_total(Nt), Ekint_total(Nt), Navgt_total(Nt);
-  std::vector<std::vector<double>> jxt_iter_total(BootMaxIter+1,std::vector<double>(Nt));
-  std::vector<std::vector<double>> jxt_iter_local(BootMaxIter+1,std::vector<double>(Nt));
+  // jxt_iter[iter][t]: current after bootstrap iteration iter (t <= SolverOrder) or corrector iteration iter (t > SolverOrder).
+  // B17: the bootstrap loop runs iter = 0..BootMaxIter and the corrector loop iter = 0..StepMaxIter, so both bounds are needed.
+  const int n_iter_rows = std::max(BootMaxIter, StepMaxIter) + 1;
+  std::vector<std::vector<double>> jxt_iter_total(n_iter_rows,std::vector<double>(Nt));
+  std::vector<std::vector<double>> jxt_iter_local(n_iter_rows,std::vector<double>(Nt));
 
   //convergance error
   std::vector<double> errk(Nk);
@@ -240,11 +253,12 @@ int main(int argc, char *argv[]) {
     }
   }
   else{
-    for(int k=0;k<Nk;k++){
-      if(comm.k_rank_map[k]==mpi_rank){
-        h5e::File checkpoint_file(checkpoint_dir+"GSigma" + std::to_string(k)+".h5", h5e::File::ReadOnly);
-        corrK_rank.push_back(std::make_unique<kpoint>(Nt,r,nlvl,svdtol,size,beta,dt,SolverOrder,lattice.kpoints_[k],lattice,mu,Ainitx,checkpoint_file));        
-      }
+    // B16: assign by local index (corrK_rank already has Nk_rank slots); slot i holds global k-point comm.kindex_rank[i],
+    // exactly as in the fresh start above and as the checkpoint writer names the files (GSigma<global k>.h5)
+    for(int i=0;i<Nk_rank;i++){
+      int global_k = comm.kindex_rank[i];
+      h5e::File checkpoint_file(checkpoint_dir+"GSigma" + std::to_string(global_k)+".h5", h5e::File::ReadOnly);
+      corrK_rank[i] = std::make_unique<kpoint>(Nt,r,nlvl,svdtol,size,beta,dt,SolverOrder,lattice.kpoints_[global_k],lattice,mu,Ainitx,checkpoint_file);
     }
   }
 
@@ -336,6 +350,9 @@ int main(int argc, char *argv[]) {
       // observables calculation
       for(int tstp = 0; tstp <= SolverOrder; tstp++){
         std::array<double, 4> obs = observables::get_obs_local(tstp, Nk_rank, lattice, comm.kindex_rank, corrK_rank);
+        // jxtnorm = <j_x>(t)/Amax. Since A(t) = +Amax theta(t) (lattice.cpp, opposite to paper Eq. 29), this is
+        // -sigma(t) of paper Eq. 30. Ekint is the two-spin kinetic energy with the bare eps_k (Eq. 27), Navgt the
+        // density per spin (observables.cpp).
         jxt_local[tstp]=obs[0]/Amax;
         jyt_local[tstp]=obs[1]/Amax;
         Ekint_local[tstp]=obs[2];
@@ -389,9 +406,11 @@ int main(int argc, char *argv[]) {
 
 #pragma omp parallel shared(comm, se_eval, time_stop_mess, tot_mem_stop_mess, mem_stop_mess, err_mess_tstp)
   {
+    // split the local k-points over the threads of THIS team (example-side B21: not the max-threads value)
     int thread_id = omp_get_thread_num();
+    int team_size = omp_get_num_threads();
 
-    std::array<int,3> th_Nks_mpi_indxs = get_my_index(thread_id,nthreads,Nk_rank,0);
+    std::array<int,3> th_Nks_mpi_indxs = get_my_index(thread_id,team_size,Nk_rank,0);
     int th_my_init_k = th_Nks_mpi_indxs[0];
     int th_my_end_k = th_Nks_mpi_indxs[1];
     int th_my_Nk = th_Nks_mpi_indxs[2];
@@ -563,7 +582,7 @@ int main(int argc, char *argv[]) {
           MPI_Reduce(Ekint_local.data(), Ekint_total.data(), Ekint_total.size(), MPI_DOUBLE, MPI_SUM, mpi_root, MPI_COMM_WORLD);
           MPI_Reduce(Navgt_local.data(), Navgt_total.data(), Navgt_total.size(), MPI_DOUBLE, MPI_SUM, mpi_root, MPI_COMM_WORLD);
 
-          for(int iter=0; iter<=BootMaxIter; iter++){
+          for(int iter=0; iter<n_iter_rows; iter++){
             MPI_Reduce(jxt_iter_local[iter].data(), jxt_iter_total[iter].data(), jxt_iter_total[iter].size(), MPI_DOUBLE, MPI_SUM, mpi_root, MPI_COMM_WORLD);
           }
 
@@ -578,6 +597,7 @@ int main(int argc, char *argv[]) {
                   std::vector<double> jytcheckpoint = jcheckpoint_file.getDataSet("jytnorm").read<std::vector<double>>();
                   std::vector<double> Ekintcheckpoint = jcheckpoint_file.getDataSet("Ekint").read<std::vector<double>>();
                   std::vector<double> Navgtcheckpoint = jcheckpoint_file.getDataSet("Navgt").read<std::vector<double>>();
+                  std::vector<std::vector<double>> jxt_iter_checkpoint = jcheckpoint_file.getDataSet("jxt_iter").read<std::vector<std::vector<double>>>();
 
                   for(int ti=0; ti<t0; ti++){
                     jxt_total[ti] = jxtcheckpoint[ti];
@@ -585,6 +605,7 @@ int main(int argc, char *argv[]) {
                     Ekint_total[ti] = Ekintcheckpoint[ti];
                     Navgt_total[ti] = Navgtcheckpoint[ti];
                   }
+                  restore_iter_rows(jxt_iter_total, jxt_iter_checkpoint, t0);
               }
             }
 
@@ -607,7 +628,7 @@ int main(int argc, char *argv[]) {
   MPI_Reduce(Ekint_local.data(), Ekint_total.data(), Ekint_total.size(), MPI_DOUBLE, MPI_SUM, mpi_root, MPI_COMM_WORLD);
   MPI_Reduce(Navgt_local.data(), Navgt_total.data(), Navgt_total.size(), MPI_DOUBLE, MPI_SUM, mpi_root, MPI_COMM_WORLD);
 
-  for(int iter=0; iter<=BootMaxIter; iter++){
+  for(int iter=0; iter<n_iter_rows; iter++){
     MPI_Reduce(jxt_iter_local[iter].data(), jxt_iter_total[iter].data(), jxt_iter_total[iter].size(), MPI_DOUBLE, MPI_SUM, mpi_root, MPI_COMM_WORLD);
   }
 
@@ -646,6 +667,7 @@ int main(int argc, char *argv[]) {
       std::vector<double> jytcheckpoint = jcheckpoint_file.getDataSet("jytnorm").read<std::vector<double>>();
       std::vector<double> Ekintcheckpoint = jcheckpoint_file.getDataSet("Ekint").read<std::vector<double>>();
       std::vector<double> Navgcheckpoint = jcheckpoint_file.getDataSet("Navgt").read<std::vector<double>>();
+      std::vector<std::vector<double>> jxt_iter_checkpoint = jcheckpoint_file.getDataSet("jxt_iter").read<std::vector<std::vector<double>>>();
 
       for(int ti=0; ti<t0; ti++){
         jxt_total[ti] = jxtcheckpoint[ti];
@@ -653,6 +675,7 @@ int main(int argc, char *argv[]) {
         Ekint_total[ti] = Ekintcheckpoint[ti];
         Navgt_total[ti] = Navgcheckpoint[ti];
       }
+      restore_iter_rows(jxt_iter_total, jxt_iter_checkpoint, t0);
     }
 
     //write new observables

@@ -217,16 +217,6 @@ void herm_matrix_hodlr::get_tv(int t1, int t2, ZMatrix &M){
     get_tv(t1, t2, M.data());
 }
 
-void herm_matrix_hodlr::get_tv_trans(int t1, int t2, cplx* M){
-    check_tv_("herm_matrix_hodlr::get_tv_trans", t1, t2);   // HM-R10, LX-5
-    memcpy(M,tvptr_trans(t1,t2),size1_*size2_*sizeof(cplx));
-}
-
-void herm_matrix_hodlr::get_tv_trans(int t1, int t2, ZMatrix &M){
-    M.resize(size1_,size2_);
-    get_tv_trans(t1, t2, M.data());
-}
-
 void herm_matrix_hodlr::get_mat(int t1, DMatrix &M) {
   // HM-R12: memcpy writes size1*size2 entries into M, which is not resized
   HNESSI_ASSERT(M.rows() == size1_ && M.cols() == size2_, "herm_matrix_hodlr::get_mat", HNESSI_KV(M.rows()),

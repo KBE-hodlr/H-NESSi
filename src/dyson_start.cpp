@@ -11,6 +11,25 @@ void ensure_lu(const Eigen::FullPivLU<ZMatrix> &lu, const char *where) {
   HNESSI_ENSURE(lu.isInvertible(), where, HNESSI_KV(lu.rank()), HNESSI_KV(lu.rows()),
                 detail::note{"the bootstrap linear system is singular (or not finite)"});
 }
+
+// B34 (RHO_DIAGONAL bootstrap consistency). The lesser row solve of dyson_start_les_ntti* for row m >= 1 is
+//   sum_{l=1..k} MIC(n,l) X_l = QIC(n),  n = 1..k,   X_l = [G^<(m,l)]^T,
+// the (transposed) right-acting KBE for G^<(m,t') collocated at the nodes t' = n, with G^<(m,0) known. With
+// RHO_DIAGONAL the diagonal G^<(m,m) is not an unknown of the row: it belongs to the diagonal (density-matrix)
+// equation, exactly as in the time stepper, where the row equation at the diagonal node is replaced by the
+// d/dt G^<(t,t) equation and the current diagonal value is known data. Hence: move column l = m (its derivative
+// and integral weights) to the right-hand side with XmT = [G^<(m,m)]^T, and replace equation n = m (the collocation
+// at the diagonal node) by X_m = XmT. What remains is the (k-1) x (k-1) block system for G^<(m,l), l != 0, m.
+void fix_known_diagonal(ZMatrix &MIC, ZMatrix &QIC, int m, const ZMatrix &XmT, int k, int nao) {
+  const int c = (m-1)*nao;
+  for(int n = 1; n <= k; n++) {
+    if(n != m) QIC.block((n-1)*nao, 0, nao, nao) -= MIC.block((n-1)*nao, c, nao, nao) * XmT;
+  }
+  MIC.block(0, c, k*nao, nao).setZero();
+  MIC.block(c, 0, nao, k*nao).setZero();
+  MIC.block(c, c, nao, nao).setIdentity();
+  QIC.block(c, 0, nao, nao) = XmT;
+}
 }  // namespace
 
 double dyson::dyson_start_tv(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h) {
@@ -26,12 +45,6 @@ double dyson::dyson_start_tv(herm_matrix_hodlr &G, double mu, cplx *H, herm_matr
   int es = G.size1() * G.size2();
   int r = G.r();
 
-  for(int t = 0; t <= k_; t++) {
-    for(int i = 0; i < r_; i++) {
-      ZMatrixMap(Sigma.tvptr_trans(t,i), nao_, nao_) = ZMatrixMap(Sigma.tvptr(t,i), nao_,nao_).transpose();
-    }
-  }
-
   cplx cplxi = cplx(0.,1.);
   ZMatrixMap QMap = ZMatrixMap(Q_.data(), nao_*k_, nao_);
   ZMatrixMap MMap = ZMatrixMap(M_.data(), nao_*k_, nao_*k_);
@@ -41,13 +54,11 @@ double dyson::dyson_start_tv(herm_matrix_hodlr &G, double mu, cplx *H, herm_matr
   ZMatrixMap(NTauTmp_.data(), r_, es_) = DMatrixConstMap(dlr_.it2itr(), r_, r_).transpose() * DMatrixMap(G.matptr(0), r_, es_);
   for(m=0; m<r_; m++) {
     auto tvmap = ZMatrixMap(G.tvptr(0,m), nao_, nao_);
-    auto tvmap_trans = ZMatrixMap(G.tvptr_trans(0,m), nao_, nao_);
 
     auto matmap = ZMatrixMap(NTauTmp_.data()+m*es_, nao_, nao_);
     err += (tvmap - (double)G.sig()*cplxi*matmap).norm();
 
     tvmap.noalias() = (double)G.sig()*cplxi*matmap;
-    tvmap_trans.noalias() = (double)G.sig()*cplxi*matmap.transpose();
   }
 
   // At each m, get n=1...k
@@ -103,7 +114,6 @@ double dyson::dyson_start_tv(herm_matrix_hodlr &G, double mu, cplx *H, herm_matr
     for(l=0; l<k_; l++){
       err += (ZColVectorMap(G.tvptr(l+1,m), es_) - ZColVectorMap(X_.data() + l*es_, es_)).norm();
       ZMatrixMap(G.tvptr(l+1,m), nao_, nao_).noalias() = ZMatrixMap(X_.data() + l*es_, nao_, nao_);
-      ZMatrixMap(G.tvptr_trans(l+1,m), nao_, nao_).noalias() = ZMatrixMap(G.tvptr(l+1,m), nao_, nao_).transpose();
     }
   }
 
@@ -308,12 +318,14 @@ double dyson::dyson_start_les_ntti(herm_matrix_hodlr &G, double mu, cplx *H, her
         else if(n<l) MBlock += (h * I.poly_integ(0,n,l) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(l,n), nao_, nao_)).transpose();
       }
     }
+    // B34: with RHO_DIAGONAL, G^<(m,m) is known data of the row solve (its current diagonal-method value: the
+    // initial guess on the first bootstrap iteration, then the previous iterate) and is not overwritten here.
+    if(rho_version_ == 1) fix_known_diagonal(MIC, QIC, m, ZMatrixMap(G.curr_timestep_les_ptr(m,m), nao_, nao_).transpose(), k_, nao_);
     Eigen::FullPivLU<ZMatrix> lu2(MIC);
     ensure_lu(lu2, where);   // DY-S10 (tier 2)
     XIC = lu2.solve(QIC);
-    for(int i = m; i <= k_; i++) {
-      if(rho_version_ == 1) err += i==m ? 0 : (ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose()).norm();
-      else                  err += (ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose()).norm();
+    for(int i = (rho_version_ == 1 ? m+1 : m); i <= k_; i++) {
+      err += (ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose()).norm();
       ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) = ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose();
     }
   }
@@ -333,6 +345,11 @@ double dyson::dyson_start_les_ntti(herm_matrix_hodlr &G, double mu, cplx *H, her
       }
     }
 
+    // B34: B is evaluated with the diagonal-method values G^<(i,i) (the row solves above treat them as known and do
+    // not overwrite them) and with the off-diagonal row values of this pass. The update is explicit in G^<(i,i), as in
+    // the RHO_DIAGONAL time stepper (G^<_old(T,T)), so the bootstrap iteration converges to the same kind of fixed
+    // point: the converged diagonal solves the discrete diagonal equation evaluated with its own values (exactly
+    // anti-Hermitian; trace-conserving for Sigma = 0).
     // Solving \partial_t G = -ih_oG -iG^\dagger h_o^\dagger -iI -iI^\dagger -2\xi i\ell^<
     //                      = -ih_oG +iG h_o^\dagger -iI -iI^\dagger -2\xi i\ell^<
     //                      = [iG h_o^\dagger-iI^\dagger] + [-ih_oG-iI] -2\xi i\ell^<
@@ -351,9 +368,11 @@ double dyson::dyson_start_les_ntti(herm_matrix_hodlr &G, double mu, cplx *H, her
       for(int l = i+1; l <= k_; l++) {
         QBlock += cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_ret_ptr(l,i), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_les_ptr(i,l), nao_, nao_).adjoint();
       }
-      for(int l = 0; l <= i; l++) {
+      for(int l = 0; l < i; l++) {
         QBlock -= cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_les_ptr(l,i), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_ret_ptr(i,l), nao_, nao_).adjoint();
       }
+      // l = i: the diagonal-method value G^<(i,i) itself (B34; not -G^<(i,i)^dagger)
+      QBlock += cplxi * I.poly_integ(0,i,i) * h * ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(i,i), nao_, nao_).adjoint();
       for(int l = i+1; l <= k_; l++) {
         QBlock -= cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_les_ptr(i,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(l,i), nao_, nao_);
       }
@@ -474,12 +493,14 @@ double dyson::dyson_start_les_ntti_nobc(herm_matrix_hodlr &G, double mu, cplx *H
         else if(n<l) MBlock += (h * I.poly_integ(0,n,l) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(l,n), nao_, nao_)).transpose();
       }
     }
+    // B34: with RHO_DIAGONAL, G^<(m,m) is known data of the row solve (its current diagonal-method value: the
+    // initial guess on the first bootstrap iteration, then the previous iterate) and is not overwritten here.
+    if(rho_version_ == 1) fix_known_diagonal(MIC, QIC, m, ZMatrixMap(G.curr_timestep_les_ptr(m,m), nao_, nao_).transpose(), k_, nao_);
     Eigen::FullPivLU<ZMatrix> lu2(MIC);
     ensure_lu(lu2, where);   // DY-S10 (tier 2)
     XIC = lu2.solve(QIC);
-    for(int i = m; i <= k_; i++) {
-      if(rho_version_ == 1) err += i==m ? 0 : (ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose()).norm();
-      else                  err += (ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose()).norm();
+    for(int i = (rho_version_ == 1 ? m+1 : m); i <= k_; i++) {
+      err += (ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose()).norm();
       ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) = ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose();
     }
   }
@@ -497,6 +518,11 @@ double dyson::dyson_start_les_ntti_nobc(herm_matrix_hodlr &G, double mu, cplx *H
       }
     }
 
+    // B34: B is evaluated with the diagonal-method values G^<(i,i) (the row solves above treat them as known and do
+    // not overwrite them) and with the off-diagonal row values of this pass. The update is explicit in G^<(i,i), as in
+    // the RHO_DIAGONAL time stepper (G^<_old(T,T)), so the bootstrap iteration converges to the same kind of fixed
+    // point: the converged diagonal solves the discrete diagonal equation evaluated with its own values (exactly
+    // anti-Hermitian; trace-conserving for Sigma = 0).
     // Solving \partial_t G = -ih_oG -iG^\dagger h_o^\dagger -iI -iI^\dagger -2\xi i\ell^<
     //                      = -ih_oG +iG h_o^\dagger -iI -iI^\dagger -2\xi i\ell^<
     //                      = [iG h_o^\dagger-iI^\dagger] + [-ih_oG-iI] -2\xi i\ell^<
@@ -515,9 +541,11 @@ double dyson::dyson_start_les_ntti_nobc(herm_matrix_hodlr &G, double mu, cplx *H
       for(int l = i+1; l <= k_; l++) {
         QBlock += cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_ret_ptr(l,i), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_les_ptr(i,l), nao_, nao_).adjoint();
       }
-      for(int l = 0; l <= i; l++) {
+      for(int l = 0; l < i; l++) {
         QBlock -= cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_les_ptr(l,i), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_ret_ptr(i,l), nao_, nao_).adjoint();
       }
+      // l = i: the diagonal-method value G^<(i,i) itself (B34; not -G^<(i,i)^dagger)
+      QBlock += cplxi * I.poly_integ(0,i,i) * h * ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(i,i), nao_, nao_).adjoint();
       for(int l = i+1; l <= k_; l++) {
         QBlock -= cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_les_ptr(i,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(l,i), nao_, nao_);
       }

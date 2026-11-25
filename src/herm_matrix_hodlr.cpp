@@ -449,7 +449,6 @@ void herm_matrix_hodlr::get_timestep_curr(int tstp,herm_matrix_hodlr &G){
         memcpy(G.curr_timestep_ret_ptr(tstp,0),this->curr_timestep_ret_ptr(tstp,0),(nt_ +1) * size1_ * size2_* sizeof(cplx));
         memcpy(G.curr_timestep_les_ptr(0,tstp),this->curr_timestep_les_ptr(0,tstp),(nt_ +1) * size1_ * size2_ * sizeof(cplx));
         memcpy(G.tvptr(tstp,0),this->tvptr(tstp,0),r_ * size1_ * size2_ * sizeof(cplx));
-        memcpy(G.tvptr_trans(tstp,0),this->tvptr_trans(tstp,0),r_ * size1_ * size2_ * sizeof(cplx));
     }
 }
 
@@ -476,7 +475,6 @@ void herm_matrix_hodlr::set_timestep_curr(int tstp,herm_matrix_hodlr &G){
         memcpy(this->curr_timestep_ret_ptr(tstp,0),G.curr_timestep_ret_ptr(tstp,0),(nt_ + 1) * size1_ * size2_ * sizeof(cplx));
         memcpy(this->curr_timestep_les_ptr(0,tstp),G.curr_timestep_les_ptr(0,tstp),(nt_ + 1) * size1_ * size2_ * sizeof(cplx));
         memcpy(this->tvptr(tstp,0),G.tvptr(tstp,0),r_ * size1_ * size2_ * sizeof(cplx));
-        memcpy(this->tvptr_trans(tstp,0),G.tvptr_trans(tstp,0),r_ * size1_ * size2_ * sizeof(cplx));
     }
 }
 
@@ -525,13 +523,6 @@ void herm_matrix_hodlr::incr_timestep_curr(int tstp,herm_matrix_hodlr &G,cplx al
         for(int i=0;i<len;i++){
             x1[i]+=alpha * x2[i];
         }
-        // Mixed component transpose
-        len= r_  * size1_ * size2_;
-        x1=this->tvptr_trans(tstp,0);
-        x2=G.tvptr_trans(tstp,0);
-        for(int i=0;i<len;i++){
-            x1[i]+=alpha * x2[i];
-        }
     }
 }
 
@@ -563,12 +554,6 @@ void herm_matrix_hodlr::smul_curr(int tstp,cplx alpha){
         // Mixed component
         len= r_  * size1_ * size2_;
         x=this->tvptr(tstp,0);
-        for(int i=0;i<len;i++){
-            x[i]*=alpha;
-        }
-        // Mixed component transpose
-        len= r_  * size1_ * size2_;
-        x=this->tvptr_trans(tstp,0);
         for(int i=0;i<len;i++){
             x[i]*=alpha;
         }
@@ -628,8 +613,7 @@ double herm_matrix_hodlr::get_memory_usage(bool print_memory_usage) {
     leftcorr += Z * ret_left_edge_.size();
     leftcorr += Z * les_left_edge_.size();
 
-    tvdata += Z * tv_.data_vector().size();
-    tvdata += Z * tv_.data_trans_vector().size();
+    tvdata += Z * tv_.data_vector().size();   // (no tv_trans copy since WP6c, ISSUES H27)
 
     for(int b = 0; b < built_blocks_; b++) {
       for(int i = 0; i < size1_; i++) {

@@ -1,0 +1,20 @@
+__SolverOrder=  5
+
+__MatsubaraMaxErr=  1e-10
+__BootstrapMaxErr=  1e-10
+__CorrectorMaxErr=  1e-12
+__MatsubaraMaxIter=  200000
+__BootstrapMaxIter=  10000
+__CorrectorSteps=  20
+
+__beta=  18
+__epsdlr=  1e-12
+__lambda=  500
+
+__nlevel=  5
+__svdtol=  1e-10
+__nt=  300
+__h=  0.03
+
+__U=  2
+__phi0=  1.0

@@ -245,6 +245,10 @@ public:
   std::vector<std::complex<double>> tau_alltp_buff, t_alltp_buff;
   /// Buffers containing all k points for tau and t data
   std::vector<std::complex<double>> tau_allk_buff, t_allk_buff;
+  /// Scratch for the high-level get: G^rceil(ti, beta-tau) (ti >= 0) or G^M(beta-tau) (ti = -1) of local k-point
+  /// krank, r_ x nao_ x nao_ per local k-point (my_Nk slices; each slice is used only by the thread handling krank).
+  /// Replaces the former use of G.tv_trans as scratch (WP6c, ISSUES H27).
+  std::vector<std::complex<double>> rev_buff_;
 
   /// Displacement and count vectors for tau communication
   std::vector<int> tau_send_displs, tau_send_counts;
@@ -288,6 +292,8 @@ public:
   int nao_ = 0;
 
 private:
+  /// Slice of rev_buff_ for local k-point krank (r_ x nao_ x nao_).
+  std::complex<double> *rev_slice_(int krank) { return rev_buff_.data() + (std::size_t)krank * r_ * nao_ * nao_; }
   // ---- checks (checks.hpp policy: h_nessi::precondition_error / state_error; inside a user OpenMP region (the
   // _nospawn routines) a failed check prints and aborts, identically on every thread) ------------------------------
   /// MP-4, MP-5 (B20): ncomp <= max_component_size_ (lambda API).

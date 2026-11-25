@@ -159,6 +159,7 @@ mpi_comm::mpi_comm
   tau_alltp_buff = std::vector<std::complex<double>>(Nk_per_rank[mpi_rank]*r_*max_component_size_);
   tau_allk_buff = std::vector<std::complex<double>>(Nk_*max_Ntau*max_component_size_);
   imag_rel_k_.assign(my_Nk, 0.);
+  rev_buff_.assign((std::size_t)my_Nk * r_ * nao_ * nao_, std::complex<double>(0.));
 
   double mib = memory_usage();
   double mib_total = 0.0;
@@ -180,6 +181,7 @@ double mpi_comm::memory_usage() const
   bytes += t_allk_buff.capacity() * sizeof(std::complex<double>);
   bytes += tau_alltp_buff.capacity() * sizeof(std::complex<double>);
   bytes += tau_allk_buff.capacity() * sizeof(std::complex<double>);
+  bytes += rev_buff_.capacity() * sizeof(std::complex<double>);   // high-level get scratch (WP6c)
 
   // int vectors
   bytes += tau_send_displs.capacity() * sizeof(int);

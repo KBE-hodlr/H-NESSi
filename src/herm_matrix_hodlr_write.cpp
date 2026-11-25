@@ -52,6 +52,11 @@ herm_matrix_hodlr::herm_matrix_hodlr(h5e::File &in, std::string label) :
   if(in.exist(label + std::string("/format_version"))) {
     format_version = in.getDataSet(label + std::string("/format_version")).read<int>();
   }
+  // HM-C11: versions 1..checkpoint_format_version are readable (3: no tv_trans dataset; older files carry one, which
+  // is ignored since WP6c, ISSUES H27)
+  HNESSI_REQUIRE(1 <= format_version && format_version <= checkpoint_format_version, where, HNESSI_KV(format_version),
+                 HNESSI_KV(checkpoint_format_version),
+                 detail::note{"unknown checkpoint format (written by a newer H-NESSi?)"});
   if(format_version < 2 && sig_ == 1) {
     std::cerr << "h_nessi warning: bosonic checkpoint '" << label << "' has format_version " << format_version
               << " < 2. Its GMConvTensMatrix was written before the bosonic-sign fix and is wrong;"
@@ -162,10 +167,9 @@ herm_matrix_hodlr::herm_matrix_hodlr(h5e::File &in, std::string label) :
   require_dataset_size(where, "les_left_edge", les_left_edge_.size(), len_edge);
 
   // TV data
+  // (format_version <= 2 files also hold the orbital-transposed copy "tv_trans"; it is not read: WP6c, ISSUES H27)
   tv_.data_vector() = in.getDataSet(label + std::string("/tv")).read<std::vector<cplx>>();
-  tv_.data_trans_vector() = in.getDataSet(label + std::string("/tv_trans")).read<std::vector<cplx>>();
   require_dataset_size(where, "tv", tv_.data_vector().size(), (long long)nt_ * r_ * es);
-  require_dataset_size(where, "tv_trans", tv_.data_trans_vector().size(), (long long)nt_ * r_ * es);
 
   // timing
   try {
@@ -179,7 +183,7 @@ herm_matrix_hodlr::herm_matrix_hodlr(h5e::File &in, std::string label) :
 }
 
 void herm_matrix_hodlr::write_checkpoint_hdf5(h5e::File &out, std::string label) {
-  // checkpoint format version (2: GMConvTensMatrix built with the xi factor, bosonic sign fix)
+  // checkpoint format version (2: GMConvTensMatrix built with the xi factor, bosonic sign fix; 3: no tv_trans)
   h5e::dump(out, label + std::string("/format_version"), checkpoint_format_version);
 
   // scalar parameters
@@ -254,7 +258,6 @@ void herm_matrix_hodlr::write_checkpoint_hdf5(h5e::File &out, std::string label)
 
   // TV data
   h5e::dump(out, label + std::string("/tv"), tv_.data_vector());
-  h5e::dump(out, label + std::string("/tv_trans"), tv_.data_trans_vector());
 
   // timing
   h5e::dump(out, label + std::string("/timing"), timing);

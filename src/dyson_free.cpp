@@ -225,10 +225,8 @@ void dyson::green_from_H(herm_matrix_hodlr &G, double mu, ZMatrix H, double h, i
       ZMatrixMap UtMap = ZMatrixMap(Q_.data() + n*es_, nao_, nao_);
       if(sign==-1){
         ZMatrixMap(G.tvptr(n,m), nao_, nao_) = std::complex<double>(0,1.0) *  UtMap * evec0 * fermi_exp(beta_,tau,eval0m).asDiagonal() * evec0.adjoint();
-        ZMatrixMap(G.tvptr_trans(n,m), nao_, nao_) = ZMatrixMap(G.tvptr(n,m), nao_, nao_).transpose();
       } else if(sign==1){
         ZMatrixMap(G.tvptr(n,m), nao_, nao_) = std::complex<double>(0,-1.0) * UtMap * evec0 * bose_exp(beta_,tau,eval0m).asDiagonal() * evec0.adjoint();
-        ZMatrixMap(G.tvptr_trans(n,m), nao_, nao_) = ZMatrixMap(G.tvptr(n,m), nao_, nao_).transpose();
       }
     }
   }
@@ -307,10 +305,8 @@ void dyson::green_from_H_dm(herm_matrix_hodlr &G, double mu, ZMatrix H, ZMatrix 
       ZMatrixMap UtMap = ZMatrixMap(Q_.data() + n*es_, nao_, nao_);
       if(sign==-1){
         ZMatrixMap(G.tvptr(n,m), nao_, nao_) = std::complex<double>(0,1.0) *  UtMap * evec0 * fermi_exp(beta_,tau,eval0m).asDiagonal() * evec0.adjoint();
-        ZMatrixMap(G.tvptr_trans(n,m), nao_, nao_) = ZMatrixMap(G.tvptr(n,m), nao_, nao_).transpose();
       } else if(sign==1){
         ZMatrixMap(G.tvptr(n,m), nao_, nao_) = std::complex<double>(0,-1.0) * UtMap * evec0 * bose_exp(beta_,tau,eval0m).asDiagonal() * evec0.adjoint();
-        ZMatrixMap(G.tvptr_trans(n,m), nao_, nao_) = ZMatrixMap(G.tvptr(n,m), nao_, nao_).transpose();
       }
     }
   }
@@ -410,13 +406,10 @@ void dyson::extrapolate(herm_matrix_hodlr &G, Integration::Integrator &I) {
                          HNESSI_KV(G.nt()), detail::note{"there is no row tstp = G.tstpmk()+k to extrapolate to"});
     //right mixing
     memset(G.tvptr(tstp,0), 0, es_*ntau_*sizeof(cplx));
-    memset(G.tvptr_trans(tstp,0), 0, es_*ntau_*sizeof(cplx));
     for(l=0; l<ntau_; l++) {
       ZMatrixMap resMap = ZMatrixMap(G.tvptr(tstp,l), nao_, nao_);
-      ZMatrixMap resMap_trans = ZMatrixMap(G.tvptr_trans(tstp,l), nao_, nao_);
       for(j=0; j<=k_; j++) {
         resMap.noalias() += I.ex_weights(j) * ZMatrixMap(G.tvptr(tstp-j-1,l), nao_, nao_);
-        resMap_trans.noalias() += I.ex_weights(j) * ZMatrixMap(G.tvptr(tstp-j-1,l), nao_, nao_).transpose();
       }
     }
   

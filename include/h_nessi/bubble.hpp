@@ -23,7 +23,8 @@ namespace h_nessi {
    * dlr to match B, checked by B's evaluators). Statistics (not checked, doc 61 N9): the products are Langreth
    * products of two-time functions, so C is expected to have the statistics of the product, xi_C = xi_A * xi_B
    * (e.g. a polarisation from two fermionic G is bosonic). Bubble1 takes the Matsubara sign from B (-xi_B).
-   * Both write C's tv row tstp but not its tv_trans row (ISSUES H27, WP6c).
+   * Both write C's tv row tstp; every later reader (get_vt, Bubble1, les_it_int, ...) sees it (no tv_trans cache
+   * since WP6c, ISSUES H27).
    */
 
   /**

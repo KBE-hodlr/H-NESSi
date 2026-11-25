@@ -155,13 +155,11 @@ void les_blocks::get_compress(int t1,int t2,int b,cplx *M){
 #
 ########################################################################################*/
 tv_blocks::tv_blocks() :
-    data_(0,cplx(0.,0.)),
-    data_trans_(0,cplx(0.,0.)) {
+    data_(0,cplx(0.,0.)) {
 }
 
 tv_blocks::tv_blocks(int size1,int size2,int nt,int ntau,double svdtol) : 
-      data_(nt*ntau*size1*size2,std::complex<double>(0.,0.)),
-      data_trans_(nt*ntau*size1*size2,std::complex<double>(0.,0.)) {
+      data_(nt*ntau*size1*size2,std::complex<double>(0.,0.)) {
     HNESSI_ASSERT(size1 >= 1 && size2 >= 1 && nt >= 1 && ntau >= 1, "tv_blocks::tv_blocks", HNESSI_KV(size1),
                   HNESSI_KV(size2), HNESSI_KV(nt), HNESSI_KV(ntau));   // BK-9
 }

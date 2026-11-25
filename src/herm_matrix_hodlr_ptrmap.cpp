@@ -29,10 +29,6 @@ ZMatrixMap herm_matrix_hodlr::map_tv(int t1, int t2){
     return ZMatrixMap(tvptr(t1,t2), size1_, size2_);
 }
 
-ZMatrixMap herm_matrix_hodlr::map_tv_trans(int t1, int t2){
-    return ZMatrixMap(tvptr_trans(t1,t2), size1_, size2_);
-}
-
 double* herm_matrix_hodlr::matptr(int i){
     HNESSI_ASSERT(0 <= i && i < r_, "herm_matrix_hodlr::matptr", HNESSI_KV(i), HNESSI_KV(r_));   // HM-A1
     return mat_.data() + i * size1_ * size2_;
@@ -41,11 +37,6 @@ double* herm_matrix_hodlr::matptr(int i){
 cplx* herm_matrix_hodlr::tvptr(int t, int tau) {
     check_tv_("herm_matrix_hodlr::tvptr", t, tau);   // HM-A3, LX-3: tv_ holds rows 0..nt-1
     return tv_.data() + t*r_*size1_*size2_ + tau*size1_*size2_;
-}
-
-cplx* herm_matrix_hodlr::tvptr_trans(int t, int tau) {
-    check_tv_("herm_matrix_hodlr::tvptr_trans", t, tau);   // HM-A3, LX-3
-    return tv_.data_trans() + t*r_*size1_*size2_ + tau*size1_*size2_;
 }
 
 cplx* herm_matrix_hodlr::retptr_col(int t1, int t2){

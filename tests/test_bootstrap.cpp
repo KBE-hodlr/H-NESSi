@@ -7,9 +7,16 @@
 //  (c) agent_scratch/51/t_start*.cpp: order of dyson_start_ret_ntti with the slot (n,l>n) left zero (B12) and
 //      with imp_tp0 (B13); (d) B25: dyson_start_2leg(function&) must forward imp_tp0; (e) B31: imp_tp0 error.
 //  B12, B13, B25 and B31 are fixed in WP1; their former KnownBug_* tests are ordinary tests now.
+//  (f) B34 (WP7): with RHO_DIAGONAL the lesser row solves of dyson_start_ntti / _ntti_nobc treat G^<(m,m) as known
+//      (the diagonal value before the call) and the diagonal redo evaluates B with the diagonal values, so the
+//      converged bootstrap diagonal solves its own discrete diagonal equation (as the time stepper's does).  The
+//      dense reference implements this independently (column m moved to the right-hand side, equation n = m dropped).
+//      _2leg keeps the old scheme (not part of B34's fix).  Closed-system tests (Sigma = 0, both xi): residual of the
+//      diagonal equation, anti-Hermiticity and particle number over the bootstrap window, order k+1.
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <functional>
 #include <cstdio>
 #include <unsupported/Eigen/MatrixFunctions>
 
@@ -148,7 +155,8 @@ struct Result {
 // Dense reference of the CORRECT discrete systems.  Black boxes (verified in doc 03 / test_dlr_matsubara):
 // tv_it_conv, les_it_int, get_tv_tau, get_mat_reversed.
 Result reference(int k, double h, double mu, function &H, herm_matrix_hodlr &Sig, herm_matrix_hodlr &Gref, dyson &Dref,
-                 dlr_info &dlr, Integration::Integrator &I, bool tti, LesMode lm, bool rhodiag, bool imp_tp0, const CM &GL00) {
+                 dlr_info &dlr, Integration::Integrator &I, bool tti, LesMode lm, bool rhodiag, bool imp_tp0, const CM &GL00,
+                 const std::vector<CM> &Ldiag0) {
   int r = dlr.r(), es = NO * NO;
   double beta = dlr.beta();
   int xi = -1;
@@ -251,25 +259,40 @@ Result reference(int k, double h, double mu, function &H, herm_matrix_hodlr &Sig
     Dref.les_it_int(t, tp, Gref, Sig, z.data());
     return CM(z).transpose();
   };
+  // B34: RHO_DIAGONAL (ntti, nobc): in rows m >= 1 the diagonal G^<(m,m) = Ldiag0[m] is known; its column goes to
+  // the right-hand side and the equation at the diagonal node n = m is dropped ((k-1) unknowns, (k-1) equations).
+  const bool consistent = rhodiag && lm != LES_2LEG;
   auto solve_row = [&](int m, const CM &Gm0) {
-    CM A = CM::Zero(k * es, k * es);
-    CV b = CV::Zero(k * es);
-    for (int n = 1; n <= k; n++) {
+    const int known = (consistent && m >= 1) ? m : -1;
+    std::vector<int> idx;  // unknown nodes = equation nodes
+    for (int n = 1; n <= k; n++)
+      if (n != known) idx.push_back(n);
+    const int K = idx.size();
+    CM A = CM::Zero(K * es, K * es);
+    CV b = CV::Zero(K * es);
+    for (int a = 0; a < K; a++) {
+      int n = idx[a];
       CM rhs = CM::Zero(NO, NO);
       for (int l = 0; l <= k; l++) rhs += h * Iw(0, m, l) * Gtl(m, l) * SLt(l, n);
       rhs += mix(m, n);
       rhs += II / h * D(n, 0) * Gm0 + h * Iw(0, n, 0) * Gm0 * SA(0, n);
-      b.segment((n - 1) * es, es) = vec(rhs);
-      for (int l = 1; l <= k; l++) {
+      if (known > 0) {  // move the known column l = m to the right-hand side
+        const CM &Gmm = Ldiag0[m];
+        rhs += II / h * D(n, m) * Gmm + h * Iw(0, n, m) * Gmm * SA(m, n);
+      }
+      b.segment(a * es, es) = vec(rhs);
+      for (int c = 0; c < K; c++) {
+        int l = idx[c];
         CM blk = -II / h * D(n, l) * CM::Identity(es, es) - h * Iw(0, n, l) * Rop(SA(l, n));
         if (l == n) blk -= Rop(eps(n));
-        A.block((n - 1) * es, (l - 1) * es, es, es) = blk;
+        A.block(a * es, c * es, es, es) = blk;
       }
     }
     CV x = A.partialPivLu().solve(b);
     std::vector<CM> Y(k + 1);
     Y[0] = Gm0;
-    for (int n = 1; n <= k; n++) Y[n] = unvec(x, (n - 1) * es);
+    for (int a = 0; a < K; a++) Y[idx[a]] = unvec(x, a * es);
+    if (known > 0) Y[m] = Ldiag0[m];
     return Y;
   };
   if (lm == LES_BC) {
@@ -288,14 +311,16 @@ Result reference(int k, double h, double mu, function &H, herm_matrix_hodlr &Sig
     for (int n = m; n <= k; n++) res.L[m][n] = Y[n];
   }
   if (rhodiag) {
-    // ISSUES Q8: the redo uses this call's horizontal diagonal value (l == i term uses -G^<(i,i)^dagger); kept as is.
+    // consistent (B34): res.L[i][i] is the diagonal value before the call (the rows did not overwrite it), and the
+    // l == i term of int G^< Sigma^A uses G^<(i,i) itself.  _2leg (old scheme): this call's horizontal value, and the
+    // l == i term uses -G^<(i,i)^dagger.
     CM A = CM::Zero(k * es, k * es);
     CV b = CV::Zero(k * es);
     for (int i = 1; i <= k; i++) {
       CM B = res.L[i][i] * (getmap(H.ptr(i)).adjoint() - mu * ID());
       for (int l = 0; l <= k; l++) B += h * Iw(0, i, l) * Gtl(i, l) * SLt(l, i);
       for (int l = 0; l <= k; l++) {
-        CM gl = (l <= i) ? CM(-res.L[l][i].adjoint()) : CM(res.L[i][l]);
+        CM gl = (l < i || (l == i && !consistent)) ? CM(-res.L[l][i].adjoint()) : CM(res.L[i][l]);
         B += h * Iw(0, i, l) * gl * SA(l, i);
       }
       B += mix(i, i);
@@ -312,7 +337,7 @@ Result reference(int k, double h, double mu, function &H, herm_matrix_hodlr &Sig
 
 // variant: 0 dyson_start, 1 dyson_start_ntti, 2 dyson_start_ntti_nobc, 3 dyson_start_2leg
 struct Case { int variant; bool tti; LesMode lm; bool rhodiag; bool imp; SlotMode sm; };
-struct Errs { double R = 0, L = 0, tv = 0, libref = 0; };
+struct Errs { double R = 0, L = 0, tv = 0, libref = 0, fixpt = 0; int iters = 1; };
 
 Errs run_case(const Case &cs, int k, double h) {
   Model M;
@@ -342,13 +367,39 @@ Errs run_case(const Case &cs, int k, double h) {
   CM GL00 = E.GL(0, 0);
   putmap(G.curr_timestep_les_ptr(0, 0), GL00);
   dyson D(nt, NO, k, dlr, cs.rhodiag, false), Dref(nt, NO, k, dlr, cs.rhodiag, false);
-  if (cs.variant == 0) D.dyson_start(G, Mc.mu, H, Sig, I, h);
-  if (cs.variant == 1) D.dyson_start_ntti(G, Mc.mu, H, Sig, I, h, cs.imp);
-  if (cs.variant == 2) D.dyson_start_ntti_nobc(G, Mc.mu, H, Sig, I, h, cs.imp);
-  if (cs.variant == 3) D.dyson_start_2leg(G, Mc.mu, H, Sig, I, h, cs.imp);
+  auto call = [&]() {
+    if (cs.variant == 0) return D.dyson_start(G, Mc.mu, H, Sig, I, h);
+    if (cs.variant == 1) return D.dyson_start_ntti(G, Mc.mu, H, Sig, I, h, cs.imp);
+    if (cs.variant == 2) return D.dyson_start_ntti_nobc(G, Mc.mu, H, Sig, I, h, cs.imp);
+    return D.dyson_start_2leg(G, Mc.mu, H, Sig, I, h, cs.imp);
+  };
+  auto diag = [&]() {
+    std::vector<CM> d(k + 1);
+    for (int i = 0; i <= k; i++) d[i] = getmap(G.curr_timestep_les_ptr(i, i));
+    return d;
+  };
   // the reference never reads the slot (n, l>n): it uses the continuation
-  Result R = reference(k, h, Mc.mu, H, Sig, Gref, Dref, dlr, I, cs.tti, cs.lm, cs.rhodiag, cs.imp, GL00);
+  auto ref = [&](const std::vector<CM> &d0) { return reference(k, h, Mc.mu, H, Sig, Gref, Dref, dlr, I, cs.tti, cs.lm, cs.rhodiag, cs.imp, GL00, d0); };
   Errs e;
+  std::vector<CM> d0 = diag();
+  double err = call();
+  Result R = ref(d0);
+  // B34: with RHO_DIAGONAL (ntti, nobc) one call is one fixed-point iteration of the diagonal (Sigma fixed here):
+  // the first call is checked against the reference (initial guess G^<(i,i) = 0 for i >= 1), then iterate to
+  // convergence and check the last call (its input diagonal) and the fixed point.
+  if (cs.rhodiag && cs.lm != LES_2LEG && !cs.tti) {
+    for (int n = 0; n <= k; n++)
+      for (int m = 0; m <= n; m++)
+        e.libref = std::max(e.libref, (getmap(G.curr_timestep_les_ptr(m, n)) - R.L[m][n]).norm());
+    while (err > 1e-13 && e.iters < 200) {
+      d0 = diag();
+      err = call();
+      e.iters++;
+    }
+    R = ref(d0);
+    Result Rfix = ref(diag());  // one more pass of the reference on the converged diagonal must reproduce it
+    for (int i = 1; i <= k; i++) e.fixpt = std::max(e.fixpt, (Rfix.L[i][i] - getmap(G.curr_timestep_les_ptr(i, i))).norm());
+  }
   for (int n = 0; n <= k; n++)
     for (int m = 0; m <= n; m++) {
       CM gr = getmap(G.curr_timestep_ret_ptr(n, m)), gl = getmap(G.curr_timestep_les_ptr(m, n));
@@ -373,6 +424,9 @@ void check_case(const Case &cs, int kmax = 5, double h0 = 0.1) {
     Errs a = run_case(cs, k, h0), b = run_case(cs, k, h0 / 2);
     EXPECT_LT(a.libref, 1e-13) << "k=" << k << " library vs dense reference";
     EXPECT_LT(b.libref, 1e-13) << "k=" << k << " library vs dense reference";
+    EXPECT_LT(a.fixpt, 1e-13) << "k=" << k << " converged diagonal is a fixed point of the diagonal equation (B34)";
+    EXPECT_LT(b.fixpt, 1e-13) << "k=" << k << " converged diagonal is a fixed point of the diagonal equation (B34)";
+    EXPECT_LT(a.iters, 200) << "k=" << k << " bootstrap iteration must converge";
     double want = k + 1 - 0.5;  // h = 0.1 -> 0.05 is slightly pre-asymptotic for k = 5
     EXPECT_GT(hn_test::rate(a.R, b.R), want) << "k=" << k << " R " << a.R << " -> " << b.R;
     EXPECT_GT(hn_test::rate(a.L, b.L), want) << "k=" << k << " < " << a.L << " -> " << b.L;
@@ -426,6 +480,117 @@ TEST(Bootstrap, Slow_NttiHorizSlotZeroSweep) { bs::check_case_sweep({1, false, L
 TEST(Bootstrap, Slow_NobcDiagSlotZeroSweep) { bs::check_case_sweep({2, false, LES_NOBC, true, false, SLOT_ZERO}); }
 TEST(Bootstrap, Slow_TwoLegHorizSlotZeroSweep) { bs::check_case_sweep({3, false, LES_2LEG, false, false, SLOT_ZERO}); }
 TEST(Bootstrap, Slow_NttiImpTp0SlotZeroSweep) { bs::check_case_sweep({1, false, LES_BC, false, true, SLOT_ZERO}); }
+
+// =============================================================================================== B34 (WP7)
+// Closed driven system (Sigma = 0), N_o = 3, both statistics, RHO_DIAGONAL, dyson_start_ntti and _ntti_nobc iterated
+// to convergence.  Over the bootstrap window t <= k: the diagonal solves its own discrete diagonal equation
+//   (1/h) sum_j D_ij G^<(j,j) = B_i - B_i^dagger,  B_i = i G^<(i,i) (h(i) - mu)
+// to roundoff (B34: before WP7 the right-hand side used the horizontal row values, residual ~1e-5 at k = 3, h = 0.05),
+// G^<(t,t) is anti-Hermitian and N(t) = tr(xi i G^<(t,t)) is conserved to roundoff, and the order is k+1.
+namespace cl {
+const C II(0, 1);
+const int NO = 3;
+CM getmap(cplx *p) { return ZMatrixMap(p, NO, NO); }
+void putmap(cplx *p, const CM &Y) { ZMatrixMap(p, NO, NO) = Y; }
+struct Out { double res = 0, ah = 0, dn = 0, eL = 0, eR = 0; int iters = 0; };
+Out run(int xi, int k, double h, bool nobc) {
+  Eigen::MatrixXd H0(NO, NO);
+  H0 << 0.4, 0.3, -0.2, 0.3, -0.5, 0.25, -0.2, 0.25, 0.9;
+  CM A(NO, NO);
+  A << C(0.3, 0), C(0.2, 0.35), C(-0.1, 0.2), C(0.2, -0.35), C(-0.2, 0), C(0.15, -0.1), C(-0.1, -0.2), C(0.15, 0.1), C(0.1, 0);
+  const double beta = 2., a = 0.8, w = 2.5;
+  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es0(H0);
+  const double mu = (xi == 1) ? es0.eigenvalues()(0) - 0.5 : 0.1;  // bosons: h - mu > 0
+  Eigen::MatrixXd K = H0 - mu * Eigen::MatrixXd::Identity(NO, NO);
+  Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(K);
+  auto fK = [&](std::function<double(double)> f) {
+    Eigen::VectorXd d(NO);
+    for (int i = 0; i < NO; i++) d(i) = f(es.eigenvalues()(i));
+    return CM((es.eigenvectors() * d.asDiagonal() * es.eigenvectors().transpose()).cast<C>());
+  };
+  CM rho = fK([&](double e) { return 1. / (std::exp(beta * e) - double(xi)); });
+  auto Ht = [&](double t) { return CM(H0.cast<C>() + a * std::sin(w * t) * A); };
+  std::vector<CM> U(k + 1);
+  U[0] = CM::Identity(NO, NO);
+  const int ns = 2000;
+  const double dt = h / ns;
+  for (int n = 1; n <= k; n++) {
+    CM u = U[n - 1];
+    for (int q = 0; q < ns; q++) {
+      double t = (n - 1) * h + q * dt;
+      auto f = [&](double tt, const CM &x) -> CM { return -II * (Ht(tt) - mu * CM::Identity(NO, NO)) * x; };
+      CM k1 = f(t, u), k2 = f(t + dt / 2, u + dt / 2 * k1), k3 = f(t + dt / 2, u + dt / 2 * k2), k4 = f(t + dt, u + dt * k3);
+      u += dt / 6 * (k1 + 2. * k2 + 2. * k3 + k4);
+    }
+    U[n] = u;
+  }
+  auto exGL = [&](int n, int m) { return CM(-II * double(xi) * U[n] * rho * U[m].adjoint()); };
+  auto exGR = [&](int n, int m) { return CM(-II * U[n] * U[m].adjoint()); };
+  int r = 0;
+  dlr_info dlr(r, 40., 1e-13, beta, NO, xi);
+  int nt = k + 4;
+  Integration::Integrator I(k);
+  herm_matrix_hodlr G(nt, r, 1, 1e-12, NO, NO, xi, k), Sig(nt, r, 1, 1e-12, NO, NO, xi, k);
+  function H(nt, NO, NO);
+  for (int t = -1; t < nt; t++) H.get_map(t) = ZMatrix(Ht(t < 0 ? 0. : t * h));
+  for (int j = 0; j < r; j++) {
+    double tau = dlr.it0B()[j];
+    CM gm = -fK([&](double e) { return std::exp(-tau * e); }) * (CM::Identity(NO, NO) + double(xi) * rho);
+    DMatrix d = gm.real();
+    G.set_mat(j, d);
+    DMatrix z = DMatrix::Zero(NO, NO);
+    Sig.set_mat(j, z);
+  }
+  G.initGMConvTensor(dlr);
+  for (int n = 0; n <= k; n++) {
+    for (int l = 0; l <= k; l++) putmap(Sig.curr_timestep_ret_ptr(n, l), CM::Zero(NO, NO));
+    for (int l = 0; l <= k; l++) putmap(Sig.curr_timestep_les_ptr(l, n), CM::Zero(NO, NO));
+    for (int j = 0; j < r; j++) Sig.set_tv(n, j, ZMatrix(CM::Zero(NO, NO)));
+  }
+  if (nobc) putmap(G.curr_timestep_les_ptr(0, 0), exGL(0, 0));
+  dyson D(nt, NO, k, dlr, true, false);
+  Out o;
+  double err = 1;
+  for (o.iters = 0; o.iters < 200 && err > 1e-13; o.iters++)
+    err = nobc ? D.dyson_start_ntti_nobc(G, mu, H, Sig, I, h) : D.dyson_start_ntti(G, mu, H, Sig, I, h);
+  auto GL = [&](int i, int j) { return CM(getmap(G.curr_timestep_les_ptr(i, j))); };
+  auto N = [&](const CM &g) { return (II * double(xi) * g).trace(); };
+  for (int i = 0; i <= k; i++) {
+    CM g = GL(i, i);
+    o.ah = std::max(o.ah, (g + g.adjoint()).norm());
+    o.dn = std::max(o.dn, std::abs(N(g) - N(GL(0, 0))));
+    if (i > 0) {
+      CM B = II * g * (Ht(i * h) - mu * CM::Identity(NO, NO));
+      CM lhs = CM::Zero(NO, NO);
+      for (int j = 0; j <= k; j++) lhs += I.poly_diff(i, j) / h * GL(j, j);
+      o.res = std::max(o.res, (lhs - (B - B.adjoint())).norm());
+    }
+    for (int j = 0; j <= i; j++) {
+      o.eL = std::max(o.eL, (GL(j, i) - exGL(j, i)).norm());
+      o.eR = std::max(o.eR, (CM(getmap(G.curr_timestep_ret_ptr(i, j))) - exGR(i, j)).norm());
+    }
+  }
+  return o;
+}
+void check(int xi, bool nobc) {
+  for (int k = 2; k <= 5; k++) {
+    Out a = run(xi, k, 0.1, nobc), b = run(xi, k, 0.05, nobc);
+    for (const Out *o : {&a, &b}) {
+      EXPECT_LT(o->iters, 200) << "xi=" << xi << " k=" << k;
+      EXPECT_LT(o->res, 1e-12) << "xi=" << xi << " k=" << k << " diagonal-equation residual (B34)";
+      EXPECT_LT(o->ah, 1e-12) << "xi=" << xi << " k=" << k << " anti-Hermiticity of G^<(t,t)";
+      EXPECT_LT(o->dn, 1e-13) << "xi=" << xi << " k=" << k << " |N(t) - N(0)|";
+    }
+    EXPECT_GT(hn_test::rate(a.eL, b.eL), k + 1 - 0.5) << "xi=" << xi << " k=" << k << " < " << a.eL << " -> " << b.eL;
+    EXPECT_GT(hn_test::rate(a.eR, b.eR), k + 1 - 0.5) << "xi=" << xi << " k=" << k << " R " << a.eR << " -> " << b.eR;
+  }
+}
+}  // namespace cl
+
+TEST(BootstrapRhoDiagonal, ClosedSystemFermionNtti) { cl::check(-1, false); }
+TEST(BootstrapRhoDiagonal, ClosedSystemBosonNtti) { cl::check(1, false); }
+TEST(BootstrapRhoDiagonal, ClosedSystemFermionNobc) { cl::check(-1, true); }
+TEST(BootstrapRhoDiagonal, ClosedSystemBosonNobc) { cl::check(1, true); }
 
 // =============================================================================================== agent_scratch/51/t_start
 // Exact system (nao orbitals) + bath, full 4x4 complex Hermitian H; G^R and Sigma^R exact.

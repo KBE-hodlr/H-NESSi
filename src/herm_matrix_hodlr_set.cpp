@@ -67,7 +67,6 @@ void herm_matrix_hodlr::set_tv(int t1, int t2, const cplx* M){
     check_tv_("herm_matrix_hodlr::set_tv", t1, t2);   // HM-S6, LX-5
     if(t1 == tstpmk_+k_) can_extrap_ = false;   // ST-6
     memcpy(tvptr(t1,t2),M,size1_*size2_*sizeof(cplx));
-    ZMatrixMap(tvptr_trans(t1,t2), size2_, size1_) = ZMatrixMap(tvptr(t1,t2), size1_, size2_).transpose();
 }
 
 void herm_matrix_hodlr::set_tv(int t1, int t2, const ZMatrix &M){

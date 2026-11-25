@@ -1,9 +1,18 @@
 #include "h_nessi/dyson.hpp"
 #include <iomanip>
+#include <unsupported/Eigen/CXX11/Tensor>
 
 using namespace std::chrono;
 
 namespace h_nessi {
+
+namespace {
+// Row-major Eigen Tensor views of the library's row-major buffers (index order = storage order)
+template <int N> using ZTensorMap = Eigen::TensorMap<Eigen::Tensor<cplx, N, Eigen::RowMajor>>;
+template <int N> using ZTensorConstMap = Eigen::TensorMap<const Eigen::Tensor<cplx, N, Eigen::RowMajor>>;
+template <int N> using DTensorConstMap = Eigen::TensorMap<const Eigen::Tensor<double, N, Eigen::RowMajor>>;
+template <int N> using IndexPairs = Eigen::array<Eigen::IndexPair<int>, N>;
+}  // namespace
 
 // DY-G1, DY-G3 (tier 2): G and Delta share the geometry and match this dyson
 void dyson::check_gamma_args_(const char *where, herm_matrix_hodlr &G, herm_matrix_hodlr &Delta) {
@@ -75,18 +84,11 @@ void dyson::gamma_integral_mat(herm_matrix_hodlr &G, herm_matrix_hodlr &Delta, d
 
 
 
-// C_{ajbk} \Sigma_{bik} = I_{aij}
-// Sigma is assumed to be transposed, ie \Sigma^\lceil_{ik} is stored as \Sigma^\lceil_{ki}
-void dyson::tv_it_conv(cplx *Sigma, cplx *res, double *GMConvTens) {
-  // I_{aji} = C_{ajbk} Sigma_{bki}
-  ZMatrixMap(NTauTmp2_.data(), r_*nao_, nao_).noalias() = DMatrixMap(GMConvTens, r_*nao_, r_*nao_) * ZMatrixMap(Sigma, r_*nao_, nao_);
-
-  // I_{aji} -> I_{aij}
-  // For some stupid reason Eigen does not allow you to call transposeInPlace() on a Map
-  for(int i = 0; i<r_; i++) {
-    ZMatrixMap(res+i*es_, nao_, nao_) += ZMatrixMap(NTauTmp2_.data()+i*es_, nao_,nao_).transpose();
-  }
-}
+// The imaginary-time integrals below read Sigma^tv and G^tv in their storage layout tv[t][a][i][j] = X^tv_{ij}(t,tau_a)
+// (doc 11 §5.5). The orbital transposes they need are absorbed by Eigen Tensor contractions over (DLR index, orbital)
+// pairs; there is no transposed copy of tv (WP6c, ISSUES H27). One contraction per call, default (single-thread)
+// device: these functions run inside OpenMP regions (k-points), and Eigen's ThreadPoolDevice is 20-150x slower for these
+// shapes (doc 62).
 
 // DY-I2 + ST-2 + dlr pairing (tier 2) for the public tv_it_conv/les_it_int entry points
 void dyson::check_it_args_(const char *where, int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G) {
@@ -99,23 +101,22 @@ void dyson::check_it_args_(const char *where, int tstp, herm_matrix_hodlr &Sigma
                  HNESSI_KV(G.nt()));
 }
 
+// I_{aij} = sum_{b,k} C_{ajbk} Sigma^tv_{ik}(T,tau_b)   (C = G.GMConvTens(), r x n x r x n; doc 11 §5.6)
+// Result goes into res VIA INCREMENT, res[a][i][j] (r x n x n)
 void dyson::tv_it_conv(int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G, cplx *res) {
   call_scope cs(*this);
   if(cs.outer()) {
     check_it_args_("dyson::tv_it_conv", tstp, Sigma, G);
     G.require_gmconv_current("dyson::tv_it_conv");   // ST-2
   }
-  dyson::tv_it_conv(Sigma.tvptr_trans(tstp,0), res, G.GMConvTens());
+  DTensorConstMap<4> C(G.GMConvTens(), r_, nao_, r_, nao_);   // C(a,j,b,k)
+  ZTensorConstMap<3> S(Sigma.tvptr(tstp,0), r_, nao_, nao_);   // S(b,i,k)
+  ZTensorMap<3> R(res, r_, nao_, nao_);                        // R(a,i,j)
+  // C(a,j,b,k) S(b,i,k) -> (a,j,i) -> (a,i,j)
+  R += C.cast<cplx>().contract(S, IndexPairs<2>{{{2,0}, {3,2}}}).shuffle(Eigen::array<int,3>{{0,2,1}});
 }
 
-// C_{mjbk} \Sigma_{bik} = I_{ij}
-// Sigma is assumed to be transposed, ie \Sigma^\lceil_{ik} is stored as \Sigma^\lceil_{ki}
-void dyson::tv_it_conv(int m, cplx *Sigma, cplx *res,double *GMConvTens) {
-  HNESSI_ASSERT(0 <= m && m < r_, "dyson::tv_it_conv", HNESSI_KV(m), HNESSI_KV(r_));   // DY-I1 (tier 1)
-  // I_{ij} = C_{jbk} Sigma_{bki}
-  ZMatrixMap(res, nao_, nao_).noalias() += (DMatrixMap(GMConvTens + m*nao_*nao_*r_, nao_, r_*nao_) * ZMatrixMap(Sigma, r_*nao_, nao_)).transpose();
-}
-
+// Single DLR node m: I_{ij} = sum_{b,k} C_{mjbk} Sigma^tv_{ik}(T,tau_b); res (n x n) VIA INCREMENT
 void dyson::tv_it_conv(int m, int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G, cplx *res) {
   call_scope cs(*this);
   if(cs.outer()) {
@@ -124,14 +125,26 @@ void dyson::tv_it_conv(int m, int tstp, herm_matrix_hodlr &Sigma, herm_matrix_ho
     // ST-2: only the O(1) validity flag here; hashing G^M (O(r*es)) would cost as much as this single-node call
     G.require_gmconv_current("dyson::tv_it_conv", false);
   }
-  dyson::tv_it_conv(m, Sigma.tvptr_trans(tstp,0), res, G.GMConvTens());
+  HNESSI_ASSERT(0 <= m && m < r_, "dyson::tv_it_conv", HNESSI_KV(m), HNESSI_KV(r_));   // DY-I1 (tier 1)
+  DTensorConstMap<3> Cm(G.GMConvTens() + m*nao_*r_*nao_, nao_, r_, nao_);   // C(m,j,b,k)
+  ZTensorConstMap<3> S(Sigma.tvptr(tstp,0), r_, nao_, nao_);              // S(b,i,k)
+  ZTensorMap<2> R(res, nao_, nao_);                                       // R(i,j)
+  // S(b,i,k) C(m,j,b,k) -> (i,j)
+  R += S.contract(Cm.cast<cplx>(), IndexPairs<2>{{{0,1}, {2,2}}});
 }
 
-// I_{tij} = -i \int_0^beta d\tau \Sigma^\lceil_{ik}(t,\tau) G^\rceil_{kj}(\tau,T)
-//         \approx -i -xi \Sigma_{taik}M_{ab} G_{(Ntau-b)kj}^*
-// Sigma is assumed to be transposed, ie \Sigma^\lceil_{ik} is stored as \Sigma^\lceil_{ki}
-// Result goes into res VIA INCREMENT
-// Integral is transposed in ij indicies
+// X_{aik} = sum_b ipmat_{ba} (-i) G^lceil_{ki}(tau_b,T), with G^lceil_{ki}(tau,T) = -xi [G^rceil_{ik}(T,beta-tau)]^*
+// (the prelude of both les_it_int overloads; X is stored in NTauTmp2_ as r x n x n)
+void dyson::les_it_int_prelude_(int tstp, herm_matrix_hodlr &G) {
+  cplx mimxi = cplx(0, xi_);
+  // NTauTmp[b][i][k] = i xi conj(G^rceil_{ik}(T, beta-tau_b)) = -i G^lceil_{ki}(tau_b, T)
+  ZMatrixMap(NTauTmp_.data(), r_, es_).noalias() = mimxi * DMatrixConstMap(dlr_.it2itr(), r_, r_).transpose() * ZMatrixMap(G.tvptr(tstp,0), r_, es_).conjugate();
+  ZMatrixMap(NTauTmp2_.data(), r_, es_).noalias() = DMatrixConstMap(dlr_.ipmat(), r_, r_).transpose() * ZMatrixMap(NTauTmp_.data(), r_, es_);
+}
+
+// I_{ji}(t) = -i \int_0^beta d\tau \Sigma^\rceil_{jk}(t,\tau) G^\lceil_{ki}(\tau,T)  for t = 0..tstp
+//           = sum_{a,k} Sigma^tv_{jk}(t,tau_a) X_{aik}
+// Result goes into res VIA INCREMENT, res[t][i][j] = I_{ji}(t): the integral is transposed in ij (doc 03 §4.10)
 void dyson::les_it_int(int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G, cplx* res) {
   call_scope cs(*this);
   if(cs.outer()) check_it_args_("dyson::les_it_int", tstp, Sigma, G);   // DY-I3
@@ -140,25 +153,15 @@ void dyson::les_it_int(int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G,
                 G.size1() == nao_ && G.sig() == xi_ && G.sig() == Sigma.sig() && G.r() == Sigma.r() && G.r() == r_,
                 "dyson::les_it_int", HNESSI_KV(tstp), HNESSI_KV(G.nt()), HNESSI_KV(Sigma.nt()), HNESSI_KV(nt_));
 
-  cplx mimxi = cplx(0, xi_);
-
-  // G^\lceil_{kj}(\tau, T) = -xi G^\rceil_{jk}(\beta-\tau, T)*
-  ZMatrixMap(NTauTmp_.data(), r_, es_).noalias() = mimxi * DMatrixConstMap(dlr_.it2itr(), r_, r_).transpose() * ZMatrixMap(G.tvptr_trans(tstp,0), r_, es_).conjugate();
-
-  // X_{akj} = M_{ab} G^\lceil_{kj}(a, T)
-  ZMatrixMap(NTauTmp2_.data(), r_, es_).noalias() = DMatrixConstMap(dlr_.ipmat(), r_, r_).transpose() * ZMatrixMap(NTauTmp_.data(), r_, es_);
-
-  for( int t = 0; t <= tstp; t++) {
-    // res_{ij} = ST_{aki} X_{akj}
-    ZMatrixMap(res + t*es_, nao_, nao_).noalias() += ZMatrixMap(NTauTmp2_.data(), r_*nao_, nao_).transpose() * ZMatrixMap(Sigma.tvptr_trans(t,0), r_*nao_, nao_);
-  }
+  les_it_int_prelude_(tstp, G);
+  ZTensorConstMap<4> S(Sigma.tvptr(0,0), tstp+1, r_, nao_, nao_);   // S(t,a,j,k), rows 0..tstp
+  ZTensorConstMap<3> X(NTauTmp2_.data(), r_, nao_, nao_);            // X(a,i,k)
+  ZTensorMap<3> R(res, tstp+1, nao_, nao_);                          // R(t,i,j)
+  // one contraction over all t: S(t,a,j,k) X(a,i,k) -> (t,j,i) -> (t,i,j)
+  R += S.contract(X, IndexPairs<2>{{{1,0}, {3,2}}}).shuffle(Eigen::array<int,3>{{0,2,1}});
 }
 
-// I_{tij} = -i \int_0^beta d\tau \Sigma^\lceil_{ik}(t,\tau) G^\rceil_{kj}(\tau,T)
-//         \approx -i -xi \Sigma_{taik}M_{ab} G_{(Ntau-b)kj}^*
-// Sigma is assumed to be transposed, ie \Sigma^\lceil_{ik} is stored as \Sigma^\lceil_{ki}
-// Result goes into res VIA INCREMENT
-// Integral is transposed in ij indicies
+// Single row t of the above: res[i][j] += I_{ji}(t) (n x n, transposed in ij)
 void dyson::les_it_int(int t, int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G, cplx* res) {
   call_scope cs(*this);
   if(cs.outer()) {   // DY-I4
@@ -170,16 +173,12 @@ void dyson::les_it_int(int t, int tstp, herm_matrix_hodlr &Sigma, herm_matrix_ho
                 G.size1() == nao_ && G.sig() == xi_ && G.sig() == Sigma.sig() && G.r() == Sigma.r() && G.r() == r_,
                 "dyson::les_it_int", HNESSI_KV(tstp), HNESSI_KV(G.nt()), HNESSI_KV(Sigma.nt()), HNESSI_KV(nt_));
 
-  cplx mimxi = cplx(0, xi_);
-
-  // G^\lceil_{kj}(\tau, T) = -xi G^\rceil_{jk}(\beta-\tau, T)*
-  ZMatrixMap(NTauTmp_.data(), r_, es_) = mimxi * DMatrixConstMap(dlr_.it2itr(), r_, r_).transpose() * ZMatrixMap(G.tvptr_trans(tstp,0), r_, es_).conjugate();
-
-  // X_{akj} = M_{ab} G^\lceil_{kj}(a, T)
-  ZMatrixMap(NTauTmp2_.data(), r_, es_) = DMatrixConstMap(dlr_.ipmat(), r_, r_).transpose() * ZMatrixMap(NTauTmp_.data(), r_, es_);
-
-  // res_{ij} = S_{aki} X_{akj}
-  ZMatrixMap(res, nao_, nao_) += ZMatrixMap(NTauTmp2_.data(), r_*nao_, nao_).transpose() * ZMatrixMap(Sigma.tvptr_trans(t,0), r_*nao_, nao_);
+  les_it_int_prelude_(tstp, G);
+  ZTensorConstMap<3> X(NTauTmp2_.data(), r_, nao_, nao_);   // X(a,i,k)
+  ZTensorConstMap<3> S(Sigma.tvptr(t,0), r_, nao_, nao_);   // S(a,j,k)
+  ZTensorMap<2> R(res, nao_, nao_);                         // R(i,j)
+  // X(a,i,k) S(a,j,k) -> (i,j)
+  R += X.contract(S, IndexPairs<2>{{{0,0}, {2,2}}});
 }
 
 void dyson::tv_ret_int(int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G, Integration::Integrator &I, double h) {

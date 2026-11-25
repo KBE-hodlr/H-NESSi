@@ -298,7 +298,7 @@ TEST(HodlrChecksDeathTest, Tier1Accessors) {
   EXPECT_DEATH(G.map_ret_curr(7, 8), "herm_matrix_hodlr::map_ret_curr");     // LX-10: t2 > max(t1,k)
   EXPECT_DEATH(G.map_les_curr(8, 7), "herm_matrix_hodlr::map_les_curr");     // LX-10: t1 > max(t2,k)
   EXPECT_DEATH(G.tvptr(nt, 0), "herm_matrix_hodlr::tvptr");                  // LX-3
-  EXPECT_DEATH(G.tvptr_trans(0, r), "herm_matrix_hodlr::tvptr_trans");
+  EXPECT_DEATH(G.tvptr(0, r), "herm_matrix_hodlr::tvptr");                   // HM-A3: tau index (was tvptr_trans)
   EXPECT_DEATH(G.tv_offset(-1, 0), "herm_matrix_hodlr::tv_offset");          // LX-4
   EXPECT_DEATH(G.curr_timestep_ret_ptr(5, 0), "curr_timestep_ret_ptr");      // LX-9: row below the window
   EXPECT_DEATH(G.curr_timestep_les_ptr(nt + 1, 8), "curr_timestep_les_ptr");

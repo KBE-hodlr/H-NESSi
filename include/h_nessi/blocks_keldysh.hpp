@@ -222,17 +222,13 @@ class tv_blocks{
 
     /** @brief Returns pointer to the data array. */
     cplx* data(void) { return data_.data(); };
-    /** @brief Returns pointer to the transposed data array. */
-    cplx* data_trans(void) { return data_trans_.data(); };
 
     /** @brief Returns reference to the data vector. */
     std::vector<cplx> &data_vector(void) { return data_; }
-    /** @brief Returns reference to the transposed data vector. */
-    std::vector<cplx> &data_trans_vector(void) { return data_trans_; }
 
   private:
-    std::vector<cplx> data_;       /**< Data array for mixed contour objects. - stored in (t \tau i j) order*/
-    std::vector<cplx> data_trans_; /**< Transposed data array - same data as data_ but stored in (t \tau j i) order*/
+    std::vector<cplx> data_; /**< Data array for mixed contour objects - stored in (t \tau i j) order (the orbital-
+                                  transposed copy tv_trans was removed in WP6c, ISSUES H27; readers contract on data_) */
 };
 
 

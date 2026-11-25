@@ -132,14 +132,14 @@ void mpi_comm::mpi_get_and_comm_spawn
       #pragma omp parallel for schedule(static)
       for (int krank = 0; krank<my_Nk; krank++){
         omp_errs.run([&] {
-      hmh_vec[krank].get_tv_reversed(ti, dlr, hmh_vec[krank].tvptr_trans(ti,0));
+      hmh_vec[krank].get_tv_reversed(ti, dlr, rev_slice_(krank));
       for(int taui=0; taui<r_; taui++){
         // only do tv, so compi = 0
         int index = alltp_buff_index(my_Nk,taui,krank,0);
         std::copy_n(hmh_vec[krank].tvptr(ti,taui), nao_*nao_, tau_alltp_buff.begin() + index);
         // now do tv_rev, so compi = nao^2
         index = alltp_buff_index(my_Nk,taui,krank,nao_*nao_);
-        std::copy_n(hmh_vec[krank].tvptr_trans(ti,taui), nao_*nao_, tau_alltp_buff.begin() + index);
+        std::copy_n(rev_slice_(krank) + taui*nao_*nao_, nao_*nao_, tau_alltp_buff.begin() + index);
       }
         });
       }
@@ -152,14 +152,14 @@ void mpi_comm::mpi_get_and_comm_spawn
       #pragma omp parallel for schedule(static)
       for (int krank = 0; krank<my_Nk; krank++){
         omp_errs.run([&] {
-      hmh_vec[krank].get_mat_reversed(dlr, hmh_vec[krank].tvptr_trans(0,0));
+      hmh_vec[krank].get_mat_reversed(dlr, rev_slice_(krank));
       for(int taui=0; taui<r_; taui++){
         // only do mat, so compi = 0
         int index = alltp_buff_index(my_Nk,taui,krank,0);
         std::copy_n(hmh_vec[krank].matptr(taui), nao_*nao_, tau_alltp_buff.begin() + index);
         // now do mat_rev, so compi = nao^2
         index = alltp_buff_index(my_Nk,taui,krank,nao_*nao_);
-        std::copy_n(hmh_vec[krank].tvptr_trans(0,taui), nao_*nao_, tau_alltp_buff.begin() + index);
+        std::copy_n(rev_slice_(krank) + taui*nao_*nao_, nao_*nao_, tau_alltp_buff.begin() + index);
       }
         });
       }
@@ -256,14 +256,14 @@ void mpi_comm::mpi_get_and_comm_spawn
       #pragma omp parallel for schedule(static)
       for (int krank = 0; krank<my_Nk; krank++){
         omp_errs.run([&] {
-      hmh_vec[krank].get().get_tv_reversed(ti, dlr, hmh_vec[krank].get().tvptr_trans(ti,0));
+      hmh_vec[krank].get().get_tv_reversed(ti, dlr, rev_slice_(krank));
       for(int taui=0; taui<r_; taui++){
         // only do tv, so compi = 0
         int index = alltp_buff_index(my_Nk,taui,krank,0);
         std::copy_n(hmh_vec[krank].get().tvptr(ti,taui), nao_*nao_, tau_alltp_buff.begin() + index);
         // now do tv_rev, so compi = nao^2
         index = alltp_buff_index(my_Nk,taui,krank,nao_*nao_);
-        std::copy_n(hmh_vec[krank].get().tvptr_trans(ti,taui), nao_*nao_, tau_alltp_buff.begin() + index);
+        std::copy_n(rev_slice_(krank) + taui*nao_*nao_, nao_*nao_, tau_alltp_buff.begin() + index);
       }
         });
       }
@@ -276,14 +276,14 @@ void mpi_comm::mpi_get_and_comm_spawn
       #pragma omp parallel for schedule(static)
       for (int krank = 0; krank<my_Nk; krank++){
         omp_errs.run([&] {
-      hmh_vec[krank].get().get_mat_reversed(dlr, hmh_vec[krank].get().tvptr_trans(0,0));
+      hmh_vec[krank].get().get_mat_reversed(dlr, rev_slice_(krank));
       for(int taui=0; taui<r_; taui++){
         // only do mat, so compi = 0
         int index = alltp_buff_index(my_Nk,taui,krank,0);
         std::copy_n(hmh_vec[krank].get().matptr(taui), nao_*nao_, tau_alltp_buff.begin() + index);
         // now do mat_rev, so compi = nao^2
         index = alltp_buff_index(my_Nk,taui,krank,nao_*nao_);
-        std::copy_n(hmh_vec[krank].get().tvptr_trans(0,taui), nao_*nao_, tau_alltp_buff.begin() + index);
+        std::copy_n(rev_slice_(krank) + taui*nao_*nao_, nao_*nao_, tau_alltp_buff.begin() + index);
       }
         });
       }
@@ -396,27 +396,27 @@ void mpi_comm::mpi_get_and_comm_nospawn
   if(th_my_Nk != 0){
     if(ti >= 0) { // tau array is filled using tv
       for(int krank = th_my_init_k; krank<=th_my_end_k; krank++){
-        hmh_vec[krank].get_tv_reversed(ti, dlr, hmh_vec[krank].tvptr_trans(ti,0));
+        hmh_vec[krank].get_tv_reversed(ti, dlr, rev_slice_(krank));
         for(int taui=0; taui<r_; taui++){
           // only do tv, so compi = 0
           int index = alltp_buff_index(my_Nk,taui,krank,0);
           std::copy_n(hmh_vec[krank].tvptr(ti,taui), nao_*nao_, tau_alltp_buff.begin() + index);
           // now do tv_rev, so compi = nao^2
           index = alltp_buff_index(my_Nk,taui,krank,nao_*nao_);
-          std::copy_n(hmh_vec[krank].tvptr_trans(ti,taui), nao_*nao_, tau_alltp_buff.begin() + index);
+          std::copy_n(rev_slice_(krank) + taui*nao_*nao_, nao_*nao_, tau_alltp_buff.begin() + index);
         }
       }
     }
     else { // tau array is filled using mat
       for(int krank = th_my_init_k; krank<=th_my_end_k; krank++){
-        hmh_vec[krank].get_mat_reversed(dlr, hmh_vec[krank].tvptr_trans(0,0));
+        hmh_vec[krank].get_mat_reversed(dlr, rev_slice_(krank));
         for(int taui=0; taui<r_; taui++){
           // only do mat, so compi = 0
           int index = alltp_buff_index(my_Nk,taui,krank,0);
           std::copy_n(hmh_vec[krank].matptr(taui), nao_*nao_, tau_alltp_buff.begin() + index);
           // now do mat_rev, so compi = nao^2
           index = alltp_buff_index(my_Nk,taui,krank,nao_*nao_);
-          std::copy_n(hmh_vec[krank].tvptr_trans(0,taui), nao_*nao_, tau_alltp_buff.begin() + index);
+          std::copy_n(rev_slice_(krank) + taui*nao_*nao_, nao_*nao_, tau_alltp_buff.begin() + index);
         }
       }
     }
@@ -533,27 +533,27 @@ void mpi_comm::mpi_get_and_comm_nospawn
   if(th_my_Nk != 0){
     if(ti >= 0) { // tau array is filled using tv
       for(int krank = th_my_init_k; krank<=th_my_end_k; krank++){
-        hmh_vec[krank].get().get_tv_reversed(ti, dlr, hmh_vec[krank].get().tvptr_trans(ti,0));
+        hmh_vec[krank].get().get_tv_reversed(ti, dlr, rev_slice_(krank));
         for(int taui=0; taui<r_; taui++){
           // only do tv, so compi = 0
           int index = alltp_buff_index(my_Nk,taui,krank,0);
           std::copy_n(hmh_vec[krank].get().tvptr(ti,taui), nao_*nao_, tau_alltp_buff.begin() + index);
           // now do tv_rev, so compi = nao^2
           index = alltp_buff_index(my_Nk,taui,krank,nao_*nao_);
-          std::copy_n(hmh_vec[krank].get().tvptr_trans(ti,taui), nao_*nao_, tau_alltp_buff.begin() + index);
+          std::copy_n(rev_slice_(krank) + taui*nao_*nao_, nao_*nao_, tau_alltp_buff.begin() + index);
         }
       }
     }
     else { // tau array is filled using mat
       for(int krank = th_my_init_k; krank<=th_my_end_k; krank++){
-        hmh_vec[krank].get().get_mat_reversed(dlr, hmh_vec[krank].get().tvptr_trans(0,0));
+        hmh_vec[krank].get().get_mat_reversed(dlr, rev_slice_(krank));
         for(int taui=0; taui<r_; taui++){
           // only do mat, so compi = 0
           int index = alltp_buff_index(my_Nk,taui,krank,0);
           std::copy_n(hmh_vec[krank].get().matptr(taui), nao_*nao_, tau_alltp_buff.begin() + index);
           // now do mat_rev, so compi = nao^2
           index = alltp_buff_index(my_Nk,taui,krank,nao_*nao_);
-          std::copy_n(hmh_vec[krank].get().tvptr_trans(0,taui), nao_*nao_, tau_alltp_buff.begin() + index);
+          std::copy_n(rev_slice_(krank) + taui*nao_*nao_, nao_*nao_, tau_alltp_buff.begin() + index);
         }
       }
     }

@@ -80,13 +80,14 @@ hn_add_test_exe(test_dlr_matsubara MODULE dlr SOURCES test_dlr_matsubara.cpp)
 hn_add_test_exe(test_bosonic MODULE bosonic SOURCES test_bosonic.cpp)
 hn_add_test_exe(test_free_extrap MODULE free_extrap SOURCES test_free_extrap.cpp)
 hn_add_test_exe(test_hodlr_storage MODULE storage SOURCES test_hodlr_storage.cpp BUGS 9 26)
-hn_add_test_exe(test_timestep MODULE timestep SOURCES test_timestep.cpp BUGS 14 28)
+hn_add_test_exe(test_timestep MODULE timestep SOURCES test_timestep.cpp BUGS 28)
 hn_add_test_exe(test_bootstrap MODULE bootstrap SOURCES test_bootstrap.cpp)
 
 hn_add_test_exe(test_mpi_comm MODULE mpi_comm SOURCES test_mpi_comm.cpp ENV "OMP_NUM_THREADS=4")
 hn_add_test_exe(test_read_inputfile MODULE read_inputfile SOURCES test_read_inputfile.cpp)
 hn_add_test_exe(test_checks MODULE checks SOURCES test_checks.cpp)
 hn_add_test_exe(test_checks_wp6b MODULE checks SOURCES test_checks_wp6b.cpp)
+hn_add_test_exe(test_tv_contractions MODULE tv SOURCES test_tv_contractions.cpp)
 
 # NESSi interoperability (WP-N, B8): only with -DINCLUDE_NESSI=ON; labels "unit;nessi" (ctest -L nessi).
 if(INCLUDE_NESSI)
@@ -120,12 +121,45 @@ foreach(pair "B19;test_read_inputfile_2tu;ReadInputfileTwoTULink_B19;FALSE;unit"
 endforeach()
 
 # ------------------------------------------------------------------ example tests
-# B16: mpi_example cannot restart from a checkpoint (tiny L=4, Nt=64 input; 1 MPI rank, singleton launch).
-add_test(NAME KnownBug_B16_MpiExampleRestart
-  COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/examples/mpi_restart.sh $<TARGET_FILE:Main.x> $<TARGET_FILE:h5flat>
-          ${CMAKE_CURRENT_BINARY_DIR}/work/mpi_restart ${CMAKE_CURRENT_SOURCE_DIR}/data/mpi_tiny.inp)
-set_tests_properties(KnownBug_B16_MpiExampleRestart PROPERTIES WILL_FAIL TRUE LABELS "known_bug;B16;example"
-                     ENVIRONMENT "OMP_NUM_THREADS=2" TIMEOUT 900)
+# Tiny inputs (mpi: L=4, Nt=64, 1 MPI rank, singleton launch; SC: nt=64, nlevel=3). Fixed in WP8: B16, B17, B24.
+# In a build with -fsanitize=address in CMAKE_CXX_FLAGS (build-asan) the same tests are AddressSanitizer runs and also
+# carry the label "asan"; every script fails on any "Sanitizer" line in the program output.
+string(FIND "${CMAKE_CXX_FLAGS}" "-fsanitize=address" _hn_asan_pos)
+if(_hn_asan_pos EQUAL -1)
+  set(_hn_ex_labels "example")
+else()
+  set(_hn_ex_labels "example;asan")
+endif()
+set(_hn_ex ${CMAKE_CURRENT_SOURCE_DIR}/examples)
+set(_hn_work ${CMAKE_CURRENT_BINARY_DIR}/work)
+
+# B16: restart from a checkpoint reproduces the uninterrupted run bitwise (obs.h5 incl. jxt_iter).
+add_test(NAME MpiExampleRestart_B16
+  COMMAND bash ${_hn_ex}/mpi_restart.sh $<TARGET_FILE:Main.x> $<TARGET_FILE:h5flat>
+          ${_hn_work}/mpi_restart ${CMAKE_CURRENT_SOURCE_DIR}/data/mpi_tiny.inp)
+# B17: StepMaxIter > BootMaxIter; jxt_iter gets max(BootMaxIter,StepMaxIter)+1 rows.
+add_test(NAME MpiExampleIterRows_B17
+  COMMAND bash ${_hn_ex}/mpi_iter_rows.sh $<TARGET_FILE:Main.x> $<TARGET_FILE:h5flat>
+          ${_hn_work}/mpi_iter_rows ${CMAKE_CURRENT_SOURCE_DIR}/data/mpi_tiny.inp)
+# B24: nt larger than the phi dataset is refused with a message.
+add_test(NAME ScExamplePhiLength_B24
+  COMMAND bash ${_hn_ex}/sc_phi_length.sh $<TARGET_FILE:SC.x> ${_hn_work}/sc_phi_length
+          ${CMAKE_CURRENT_SOURCE_DIR}/data/sc_tiny.inp ${PROJECT_SOURCE_DIR}/SC_example/phi_input.h5)
+# Plain runs of both examples (in build-asan: clean AddressSanitizer runs of the shipped code paths).
+add_test(NAME ScExampleRun
+  COMMAND bash ${_hn_ex}/sc_run.sh $<TARGET_FILE:SC.x> $<TARGET_FILE:h5flat> ${_hn_work}/sc_run
+          ${CMAKE_CURRENT_SOURCE_DIR}/data/sc_tiny.inp ${PROJECT_SOURCE_DIR}/SC_example/phi_input.h5)
+# Energy balance of SC_example for a contained pulse: E_total(t) - E_total(0) = E^j(t) (conventions of Q10/D-7, WP8).
+add_test(NAME ScExampleEnergyBalance
+  COMMAND bash ${_hn_ex}/sc_energy_balance.sh $<TARGET_FILE:SC.x> $<TARGET_FILE:h5flat> ${_hn_work}/sc_energy_balance
+          ${CMAKE_CURRENT_SOURCE_DIR}/data/sc_pulse.inp ${CMAKE_CURRENT_SOURCE_DIR}/data/sc_pulse.h5)
+set_tests_properties(ScExampleEnergyBalance PROPERTIES LABELS "${_hn_ex_labels};Q10")
+set_tests_properties(MpiExampleRestart_B16 PROPERTIES LABELS "${_hn_ex_labels};B16")
+set_tests_properties(MpiExampleIterRows_B17 PROPERTIES LABELS "${_hn_ex_labels};B17")
+set_tests_properties(ScExamplePhiLength_B24 PROPERTIES LABELS "${_hn_ex_labels};B24")
+set_tests_properties(ScExampleRun PROPERTIES LABELS "${_hn_ex_labels}")
+set_tests_properties(MpiExampleRestart_B16 MpiExampleIterRows_B17 ScExamplePhiLength_B24 ScExampleRun
+                     ScExampleEnergyBalance PROPERTIES ENVIRONMENT "OMP_NUM_THREADS=2" TIMEOUT 900)
 
 # ------------------------------------------------------------------ labels for discovered tests (must be last)
 get_property(_hn_label_script GLOBAL PROPERTY HN_LABEL_SCRIPT)

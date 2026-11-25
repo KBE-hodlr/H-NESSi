@@ -21,6 +21,9 @@ lattice_2d_ysymm::lattice_2d_ysymm(int L, int Nt, double dt, double J, double Am
 }
 
 //convert electric field E to vector potential A
+// Convention: A(t) = +Amax (x direction) for every t >= 0 (A = 0 at t = -1, the equilibrium state), i.e. a step at t = 0+.
+// The paper (Eq. 29) uses A(t) = -Amax theta(t), so that E(t) = -dA/dt = +Amax delta(t). Here E(t) = -Amax delta(t), and
+// the stored jxtnorm = <j_x>(t)/Amax (Main.cpp) is -sigma(t) of paper Eq. 30. Kept on purpose (decision D-7).
 void lattice_2d_ysymm::efield_to_afield(int Nt, double dt, double Amax)
 {
     Vector2D efield(Amax,0);

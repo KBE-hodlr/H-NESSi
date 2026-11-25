@@ -4,6 +4,7 @@
 
 #include "h_nessi/herm_matrix_hodlr.hpp"
 #include "h_nessi/checks.hpp"
+#include <unsupported/Eigen/CXX11/Tensor>
 
 namespace h_nessi {
 
@@ -188,32 +189,34 @@ void herm_matrix_hodlr::get_tv_reversed(int tstp, dlr_info &dlr, ZMatrix &M, int
 
 // return (r,size1,size2) array where data[n,i,j] = G^vt[tau[n],i,j]
 // tau[n] is the n^{th} dlr node on the imaginary time axis
+// G^vt_{ij}(tau_n, t) = -xi [G^tv_{ji}(t, beta-tau_n)]^*  (doc 03 §4.10), read from tv directly (no transposed copy
+// since WP6c, ISSUES H27): data(n,i,j) = -xi conj(sum_a it2itr_{an} tv(t,a,j,i)), one Eigen Tensor contraction.
 void herm_matrix_hodlr::get_vt(int tstp, dlr_info &dlr, cplx *M) {
   check_dlr_("herm_matrix_hodlr::get_vt", dlr);
-  check_row_("herm_matrix_hodlr::get_vt", tstp);   // HM-I6 (the tv_trans freshness, ST-5, is WP6c)
-  ZMatrixMap(M, r_, size1_*size2_) = -sig_ * (DMatrixConstMap(dlr.it2itr(), r_, r_).transpose() * ZMatrixMap(tvptr_trans(tstp, 0), r_, size1_*size2_)).conjugate();
+  check_row_("herm_matrix_hodlr::get_vt", tstp);   // HM-I6
+  using IndexPair1 = Eigen::array<Eigen::IndexPair<int>, 1>;
+  Eigen::TensorMap<const Eigen::Tensor<double, 2, Eigen::RowMajor>> itr(dlr.it2itr(), r_, r_);          // (a,n)
+  Eigen::TensorMap<const Eigen::Tensor<cplx, 3, Eigen::RowMajor>> tv(tvptr(tstp, 0), r_, size1_, size2_);  // (a,j,i)
+  Eigen::TensorMap<Eigen::Tensor<cplx, 3, Eigen::RowMajor>> vt(M, r_, size2_, size1_);                    // (n,i,j)
+  // itr(a,n) tv(a,j,i) -> (n,j,i) -> (n,i,j)
+  vt = itr.cast<cplx>().contract(tv, IndexPair1{{{0,0}}}).shuffle(Eigen::array<int,3>{{0,2,1}}).conjugate() *
+       cplx(-sig_);
 }
 void herm_matrix_hodlr::get_vt(int tstp, dlr_info &dlr, ZMatrix &M) {
   check_dlr_("herm_matrix_hodlr::get_vt", dlr);
   check_row_("herm_matrix_hodlr::get_vt", tstp);
   HNESSI_REQUIRE_OUT_SIZE_("herm_matrix_hodlr::get_vt", M, r_*size1_*size2_);
-  ZMatrixMap(M.data(), r_, size1_*size2_) = -sig_ * (DMatrixConstMap(dlr.it2itr(), r_, r_).transpose() * ZMatrixMap(tvptr_trans(tstp, 0), r_, size1_*size2_)).conjugate();
+  get_vt(tstp, dlr, M.data());
 }
+// single element (i,j): data(n) = -xi conj(sum_a it2itr_{an} tv(t,a,j,i)), a strided read of tv (no transpose needed)
 void herm_matrix_hodlr::get_vt(int tstp, dlr_info &dlr, ZMatrix &M, int i, int j) {
   check_dlr_("herm_matrix_hodlr::get_vt", dlr);
   check_row_("herm_matrix_hodlr::get_vt", tstp);
   HNESSI_REQUIRE_IJ_("herm_matrix_hodlr::get_vt", i, j);
   HNESSI_REQUIRE_OUT_SIZE_("herm_matrix_hodlr::get_vt", M, r_);
-    int ij_flat = i * size2_ + j;
-    
-    Eigen::Map<const ZMatrix, 0, Eigen::InnerStride<>> tv_trans_vec(
-        tvptr_trans(tstp, 0) + ij_flat,
-        r_,
-        1,
-        Eigen::InnerStride<>(size1_ * size2_)
-    );
-    
-    ZMatrixMap(M.data(), r_, 1) = -sig_ * (DMatrixConstMap(dlr.it2itr(), r_, r_).transpose() * tv_trans_vec).conjugate();
+  Eigen::Map<const ZMatrix, 0, Eigen::InnerStride<>> tv_ji(tvptr(tstp, 0) + j * size2_ + i, r_, 1,
+                                                           Eigen::InnerStride<>(size1_ * size2_));
+  ZMatrixMap(M.data(), r_, 1) = -sig_ * (DMatrixConstMap(dlr.it2itr(), r_, r_).transpose() * tv_ji).conjugate();
 }
 
 } // namespace

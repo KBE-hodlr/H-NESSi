@@ -684,10 +684,11 @@ TEST(HodlrCheckpoint, KnownBug_B9_TimingZeroWhenMissing) {
   });
 }
 
-// ------------------------------------------------------------------------------------------------ checkpoint format_version (WP3)
-// write_checkpoint_hdf5 writes label/format_version = 2 (GMConvTensMatrix carries the xi factor, BUGS B1 fix).
-// Loading a bosonic checkpoint without it (written before WP3) still works, but warns on std::cerr that the stored
-// GMConvTensMatrix is stale and must be rebuilt with initGMConvTensor(dlr). Fermionic checkpoints never warn.
+// ------------------------------------------------------------------------------------------------ checkpoint format_version (WP3, WP6c)
+// write_checkpoint_hdf5 writes label/format_version = 3 (2: GMConvTensMatrix carries the xi factor, BUGS B1 fix;
+// 3: no tv_trans dataset, ISSUES H27). Loading a bosonic checkpoint without it (written before WP3) still works, but
+// warns on std::cerr that the stored GMConvTensMatrix is stale and must be rebuilt with initGMConvTensor(dlr).
+// Fermionic checkpoints never warn. Files of version 1 and 2 carry a tv_trans dataset, which the reader ignores.
 namespace {
 struct CkptCase {
   int xi, nt = 12, nlvl = 2, k = 2, nao = 2, r = 0;
@@ -701,14 +702,26 @@ struct CkptCase {
       G.set_mat(m, M);
     }
     G.initGMConvTensor(dlr);
+    for (int t = 0; t < nt; t++)   // non-symmetric complex tv data (all rows), so that the tv round trip is checked
+      for (int m = 0; m < r; m++)
+        for (int i = 0; i < nao; i++)
+          for (int j = 0; j < nao; j++) G.tvptr(t, m)[i * nao + j] = cplx(0.1 * t + m + 0.3 * i, -0.2 * j + 0.01 * m * t);
   }
-  // write a checkpoint; optionally remove format_version to simulate a pre-WP3 file; load it, capturing stderr
-  std::string roundtrip(const std::string &fn, bool strip_version, int *version_on_disk, double *tens_diff) {
+  // write a checkpoint; optionally rewrite it as an older format: strip_version (a pre-WP3 file, version 1) or
+  // as_version = 2 (WP3..WP6b); both older formats get a tv_trans dataset (here filled with garbage, which the reader
+  // must ignore). Load it, capturing stderr. *tv_diff: max |tv - tv read back|.
+  std::string roundtrip(const std::string &fn, bool strip_version, int *version_on_disk, double *tens_diff,
+                        int as_version = 0, double *tv_diff = nullptr) {
     std::remove(fn.c_str());
     {
       h5e::File out(fn, h5e::File::Overwrite | h5e::File::ReadWrite | h5e::File::Create);
       G.write_checkpoint_hdf5(out, "G/");
+      if (strip_version || as_version != 0) {
+        std::vector<cplx> junk((size_t)nt * r * nao * nao, cplx(1e300, -1e300));
+        h5e::dump(out, "G/tv_trans", junk);
+      }
       if (strip_version) out.unlink("G/format_version");
+      else if (as_version != 0) h5e::dump(out, "G/format_version", as_version, h5e::DumpMode::Overwrite);
     }
     h5e::File in(fn, h5e::File::ReadOnly);
     *version_on_disk = in.exist("G/format_version") ? in.getDataSet("G/format_version").read<int>() : -1;
@@ -718,6 +731,12 @@ struct CkptCase {
     double d = 0;
     for (int i = 0; i < r * r * nao * nao; i++) d = std::max(d, std::abs(G.GMConvTens()[i] - G2.GMConvTens()[i]));
     *tens_diff = d;
+    if (tv_diff) {
+      double e = 0;
+      for (size_t q = 0; q < G.tv().data_vector().size(); q++)
+        e = std::max(e, std::abs(G.tv().data_vector()[q] - G2.tv().data_vector()[q]));
+      *tv_diff = e;
+    }
     return err;
   }
 };
@@ -727,19 +746,70 @@ TEST(HodlrCheckpoint, FormatVersionNewBosonicLoadsSilently) {
   CkptCase c(+1);
   int v = 0;
   double d = 1;
-  std::string err = c.roundtrip("hodlr_ckpt_v2_boson.h5", false, &v, &d);
+  double dtv = 1;
+  std::string err = c.roundtrip("hodlr_ckpt_v3_boson.h5", false, &v, &d, 0, &dtv);
   EXPECT_EQ(v, herm_matrix_hodlr::checkpoint_format_version);
-  EXPECT_EQ(v, 2);
+  EXPECT_EQ(v, 3);
   EXPECT_EQ(err, "") << "a current bosonic checkpoint must load without a warning";
   EXPECT_EQ(d, 0.0);
+  EXPECT_EQ(dtv, 0.0);
+}
+
+// WP6c (H27): version 3 writes no tv_trans; the tv data round-trips exactly (both statistics).
+TEST(HodlrCheckpoint, FormatV3HasNoTvTransAndRoundTrips) {
+  for (int xi : {-1, +1}) {
+    CkptCase c(xi);
+    std::string fn = "hodlr_ckpt_v3_notvtrans.h5";
+    int v = 0;
+    double d = 1, dtv = 1;
+    std::string err = c.roundtrip(fn, false, &v, &d, 0, &dtv);
+    h5e::File in(fn, h5e::File::ReadOnly);
+    EXPECT_TRUE(in.exist("G/tv"));
+    EXPECT_FALSE(in.exist("G/tv_trans")) << "xi=" << xi;
+    EXPECT_EQ(v, 3);
+    EXPECT_EQ(err, "");
+    EXPECT_EQ(dtv, 0.0) << "xi=" << xi;
+  }
+}
+
+// WP6c (H27): a version-2 checkpoint (with a tv_trans dataset) still loads; its tv_trans is ignored, tv and the
+// conv tensor are read unchanged, and no warning is printed (version 2 already has the bosonic-sign fix).
+TEST(HodlrCheckpoint, FormatV2WithTvTransStillLoads) {
+  for (int xi : {-1, +1}) {
+    CkptCase c(xi);
+    int v = 0;
+    double d = 1, dtv = 1;
+    std::string err = c.roundtrip("hodlr_ckpt_v2_tvtrans.h5", false, &v, &d, 2, &dtv);
+    EXPECT_EQ(v, 2);
+    EXPECT_EQ(err, "") << "xi=" << xi;
+    EXPECT_EQ(d, 0.0);
+    EXPECT_EQ(dtv, 0.0) << "the (garbage) tv_trans of an old file must not be read";
+    EXPECT_TRUE(c.G.gmconv_current());
+  }
+}
+
+// A checkpoint from a newer format than this library knows is refused (tier 2).
+TEST(HodlrCheckpoint, FormatVersionNewerThanLibraryThrows) {
+  CkptCase c(-1);
+  std::string fn = "hodlr_ckpt_v_future.h5";
+  std::remove(fn.c_str());
+  {
+    h5e::File out(fn, h5e::File::Overwrite | h5e::File::ReadWrite | h5e::File::Create);
+    c.G.write_checkpoint_hdf5(out, "G/");
+    h5e::dump(out, "G/format_version", herm_matrix_hodlr::checkpoint_format_version + 1, h5e::DumpMode::Overwrite);
+  }
+  h5e::File in(fn, h5e::File::ReadOnly);
+  EXPECT_THROW(herm_matrix_hodlr G2(in, "G/"), precondition_error);
 }
 
 TEST(HodlrCheckpoint, FormatVersionMissingBosonicWarns) {
   CkptCase c(+1);
   int v = 0;
   double d = 1;
-  std::string err = c.roundtrip("hodlr_ckpt_v1_boson.h5", true, &v, &d);
+  double dtv = 1;
+  std::string err = c.roundtrip("hodlr_ckpt_v1_boson.h5", true, &v, &d, 0, &dtv);
   EXPECT_EQ(v, -1) << "format_version must have been removed";
+  EXPECT_EQ(dtv, 0.0) << "the tv_trans of a version-1 file must not be read";
   EXPECT_NE(err.find("format_version 1 < 2"), std::string::npos) << "stderr was: " << err;
   EXPECT_NE(err.find("initGMConvTensor"), std::string::npos) << "stderr was: " << err;
   EXPECT_EQ(d, 0.0) << "an old checkpoint must still load unchanged";
