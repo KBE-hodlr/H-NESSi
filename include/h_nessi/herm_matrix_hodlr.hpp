@@ -139,8 +139,8 @@ class herm_matrix_hodlr{
     tstpmk_=tstpmk;
   };
   int k(void) const {return k_;};
-  /** true between update_blocks and the first write into row tstp() (extrapolate, solver calls and the setters of
-   * row tstp() clear it; ST-6). */
+  /** true between update_blocks and the first write into row tstp() (extrapolate, solver calls, setters of row tstp(),
+   * Bubble1/2 and mpi_comm sets clear it; ST-6). map_* or raw-pointer writes do not (clear it yourself) */
   bool &can_extrap(void) {return can_extrap_;};
 
 
@@ -216,7 +216,7 @@ class herm_matrix_hodlr{
    * real-valued matrix into `M`.
    */
   void get_mat_tau(double tau,                     dlr_info &dlr, DMatrix &M);
-  /** Variant writing into a raw double buffer (column-major) sized
+  /** Variant writing into a raw double buffer (row-major [i][j]) sized
    * size1_*size2_. */
   void get_mat_tau(double tau,                     dlr_info &dlr, double *M);
   /** Variant writing into a complex Eigen matrix. */
@@ -238,7 +238,7 @@ class herm_matrix_hodlr{
   void get_mat(int i,DMatrix &M);
   DMatrixMap map_mat(int i);
   /** Get matsubara component evaluated at points \beta-dlr(i) for i=0...r.  
-   * dest is assumed to be a column-major double buffer of size r_*size1_*size2_.
+   * dest is assumed to be a row-major double buffer [n][i][j] of size r_*size1_*size2_.
    */
   void get_mat_reversed(dlr_info &dlr, double *dest);
   void get_mat_reversed(dlr_info &dlr, std::complex<double> *dest);
@@ -251,13 +251,13 @@ class herm_matrix_hodlr{
   // (get_tv_trans, map_tv_trans and tvptr_trans were removed in WP6c, ISSUES H27: there is no orbital-transposed
   //  copy of tv any more. Writes through map_tv/tvptr are seen by every reader, e.g. get_vt, Bubble1, les_it_int.)
   /** Get mixed component evaluated at points \beta-dlr(i) for i=0...r.  
-   * dest is assumed to be a column-major double buffer of size r_*size1_*size2_.
+   * dest is assumed to be a row-major complex buffer [n][i][j] of size r_*size1_*size2_.
    */
   void get_tv_reversed(int tstp, dlr_info &dlr, cplx *dest);
   void get_tv_reversed(int tstp, dlr_info &dlr, ZMatrix &dest);
   void get_tv_reversed(int tstp, dlr_info &dlr, ZMatrix &dest, int i, int j);
   /** Retrieve vt (mixed component with switched contour arguments) for a given timestep. 
-   * dest is assumed to be a column-major complex buffer of size r_*size1_*size2_.
+   * dest is assumed to be a row-major complex buffer [n][i][j] of size r_*size1_*size2_.
   */
   void get_vt(int tstp, dlr_info &dlr, cplx *dest);
   void get_vt(int tstp, dlr_info &dlr, ZMatrix &dest);

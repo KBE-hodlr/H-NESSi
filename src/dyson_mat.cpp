@@ -40,8 +40,6 @@ double dyson::dyson_mat(herm_matrix_hodlr &G, double mu, function &H, herm_matri
         require_real_(H.ptr(-1), where);       // DY-M4 (D1)
       }
     }
-    double sig = double(xi_);
-
     // G0 and its convolution matrix live in dyson-owned buffers (DG0_, DG0ConvMat_), so that fixHam=true can reuse
     // them and neither Sigma nor G.GMConvTensMatrix_ is used as scratch
     if(!fixHam) {
@@ -72,8 +70,6 @@ double dyson::dyson_mat(herm_matrix_hodlr &G, double mu, DMatrix &H, herm_matrix
       check_mat_args_(where, G, Sigma, mu, alpha, fixHam);
       if(!fixHam) hermitize_real_(H, where);   // D-11 (DY-M3, DY-M5), in place
     }
-    double sig = double(xi_);
-
     // G0 and its convolution matrix live in dyson-owned buffers (DG0_, DG0ConvMat_), so that fixHam=true can reuse
     // them and neither Sigma nor G.GMConvTensMatrix_ is used as scratch
     if(!fixHam) {

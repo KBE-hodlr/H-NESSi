@@ -5,7 +5,7 @@
 */
 
 /*
- * Input-file reader (NESSi syntax, doc 30 §6).  Header-only: every non-template function is `inline`, so the header
+ * Input-file reader (NESSi syntax, doc 30 §5).  Header-only: every non-template function is `inline`, so the header
  * can be included in any number of translation units (B19).  All errors are reported by throwing
  * std::runtime_error with the flag / token / file that caused them (no `int` or `const char*` throws, B19/LX-25).
  * The functions live in the global namespace (as in NESSi); this header does not inject `using namespace h_nessi`.

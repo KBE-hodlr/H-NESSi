@@ -70,7 +70,7 @@ public:
    * @param beta Inverse temperature.
    * @param nao Number of atomic orbitals.
    * @param xi Particle statistics (+1 for bosons, -1 for fermions).
-   * @param ntaumax, typically dlr needs much less than 1000 basis functions.  Only change this parameter if more than 1000 basis functions are needed for a given lambda and eps
+   * @param ntaumax Upper bound on the accepted DLR rank r (r > ntaumax throws); libdlr itself returns at most 500 (checked).
    */
   dlr_info(int &r, double lambda, double eps, double beta, int nao, int xi, int ntaumax = 1000);
 

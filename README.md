@@ -75,11 +75,11 @@ cd build/tests
 ctest -j16                 # everything (Release: well under a minute with -j16)
 ctest -j16 -LE slow        # skip the long convergence sweeps and energy-balance runs (recommended for Debug)
 ctest -L bootstrap         # one module: integration dlr bosonic free_extrap storage timestep bootstrap mpi_comm
-                           #             read_inputfile checks tv link example
-ctest -L B12               # every test that exercises one (fixed) bug of agent_docs/BUGS.md
+                           #             read_inputfile checks tv nessi link example
+ctest -R _B14              # tests named after a (fixed) bug of agent_docs/BUGS.md; the full map is in tests/README.md
 ```
 
-* Tests check exact references, dense re-implementations of the discrete equations, and convergence orders. Every bug fixed on this branch has a regression test labelled with its ID (`tests/README.md` has the map).
+* Tests check exact references, dense re-implementations of the discrete equations, and convergence orders. Every bug fixed on this branch has a regression test (`tests/README.md` has the bug → test map; the link and example tests also carry the bug ID as a label, e.g. `ctest -L B16`). No expected-failure tests remain.
 * Label `slow`: the `*.Slow_*` convergence sweeps and the example energy-balance tests `ScExampleEnergyBalance` (about 200 s in Debug) and `MpiExampleEnergyBalance` (about 110 s in Debug).
 * Build the suite in Debug (`./build.sh Debug` with `BUILD_DIR=build-debug`) or RelWithAsserts to run the death tests of the asserts; they are skipped in Release.
 * `-DINCLUDE_NESSI=ON` adds the `nessi` tests (`ctest -L nessi`). `-DHN_EXAMPLE_MPI_LAUNCH="srun -n 6 -c 2"` (inside an allocation) registers the multi-rank restart test `MpiExampleRestartManyRanks_B35`.
@@ -112,7 +112,7 @@ With `-DINCLUDE_NESSI=ON`, H-NESSi compiles the five `distance_norm2_*` function
 ## Changes in this branch
 Relative to upstream `5c9706b`. Every fix has a regression test; the full lists are in `agent_docs/BUGS.md` and `agent_docs/ISSUES.md`.
 * **Results:** non-TTI bootstrap restored to order k+1 (was O(h²)); bosonic signs in `initGMConvTensor`, `gamma_integral` and `green_from_H_dm`; `dyson_mat(fixHam=true)`; `dyson_mat` no longer overwrites Σ^⌉(0) or the convolution tensor; consistent, idempotent RHO_DIAGONAL bootstrap; `_nobc` boundary sign; `get_timestep_curr` no longer corrupts its source.
-* **Robustness:** always-on argument and state checks with `h_nessi` exceptions and an OpenMP error policy; h(t) Hermitian symmetrisation; the `RelWithAsserts` build type; `dlr_info` parameter validation and thread-safe construction; checkpoint version and parameter checks.
+* **Robustness:** always-on argument and state checks with `h_nessi` exceptions and an OpenMP error policy; h(t) Hermitian symmetrisation; the `RelWithAsserts` build type; `dlr_info` parameter validation and thread-safe construction; checkpoint version and parameter checks; every library writer of row `tstp()` (setters, `Bubble1`/`Bubble2`, `mpi_comm` sets) disables a stale `extrapolate`.
 * **Memory/performance:** the orbital-transposed `tv_trans` cache is removed (Eigen Tensor contractions instead; −26 % G+Σ memory in `mpi_example`); exact memory reports.
 * **MPI:** `_nospawn` routines are correct in any team size and outside parallel regions, end with a barrier, and check component counts; `MPI_Init_thread(FUNNELED)`.
 * **API:** `herm_matrix_hodlr` copy/assignment work; vector DLR evaluation (`get_mat_tau_array`, `get_tv_tau_array`) fixed; NESSi interoperability compiles and is tested; `read_inputfile.hpp` is header-only; `dipole_step` is declared but not implemented.

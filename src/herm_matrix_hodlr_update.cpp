@@ -137,7 +137,7 @@ void herm_matrix_hodlr::update_blocks(Integration::Integrator &I) {
       for(int i = 0; i < size1_; i++) {
         for(int j = 0; j < size2_; j++) {
           y = Eigen::Map<Eigen::MatrixXcd, 0, Eigen::InnerStride<> >(curr_timestep_les_ptr(0,tstpmk_) + blkc1(bindex)*size1_*size2_ + i*size1_ + j, 1, blkc2(bindex)-blkc1(bindex)+1, Eigen::InnerStride<>(size1_*size2_));
-          updatetsvd(les_.data().blocks()[bindex][i][j],y,blklen_[bindex], bindex==8191 and i==0 and j==0 and false);
+          updatetsvd(les_.data().blocks()[bindex][i][j],y,blklen_[bindex]);
         }
       }
       end = std::chrono::system_clock::now();

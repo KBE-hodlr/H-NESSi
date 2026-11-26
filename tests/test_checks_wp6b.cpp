@@ -703,6 +703,34 @@ TEST(ExtrapolateState, WriteIntoRowTBeforeExtrapolate) {
   EXPECT_TRUE(s4.G.can_extrap());
 }
 
+// ST-6 for Bubble1/Bubble2 (WP12): they write C's row tstp through the maps; a write into row C.tstp() clears
+// C.can_extrap(), so a following extrapolate(C) is a no-op instead of predicting from the overwritten slot
+TEST(ExtrapolateState, BubbleWriteIntoRowTBeforeExtrapolate) {
+  for (int which = 1; which <= 2; which++) {
+    Sys s;
+    int T = s.k + 1;
+    s.advance();
+    ASSERT_TRUE(s.S.can_extrap());
+    if (which == 1) Bubble1(T, s.S, 0, 1, s.G, 0, 1, s.G, 1, 0, s.dlr);
+    else Bubble2(T, s.S, 0, 1, s.G, 0, 1, s.G, 1, 0);
+    EXPECT_FALSE(s.S.can_extrap()) << "Bubble" << which;
+    ZMatrix ret(2, 2), les(2, 2), ret_after(2, 2), les_after(2, 2);
+    s.S.get_ret_curr(T, 0, ret);
+    s.S.get_les_curr(0, T, les);
+    s.D.extrapolate(s.S, s.I);
+    s.S.get_ret_curr(T, 0, ret_after);
+    s.S.get_les_curr(0, T, les_after);
+    EXPECT_EQ((ret_after - ret).norm(), 0.0) << "Bubble" << which << ": extrapolate is a no-op after the write";
+    EXPECT_EQ((les_after - les).norm(), 0.0) << "Bubble" << which;
+    // a write into an earlier row of the window leaves the flag alone
+    Sys s2;
+    s2.advance();
+    if (which == 1) Bubble1(T - 1, s2.S, 0, 1, s2.G, 0, 1, s2.G, 1, 0, s2.dlr);
+    else Bubble2(T - 1, s2.S, 0, 1, s2.G, 0, 1, s2.G, 1, 0);
+    EXPECT_TRUE(s2.S.can_extrap()) << "Bubble" << which;
+  }
+}
+
 // IN-2: the weights of every supported order pass the post-condition
 TEST(IntegratorChecks, WeightsOfEveryOrder) {
   for (int k = 0; k <= KMAX; k++) EXPECT_NO_THROW(Integration::Integrator I(k)) << "k=" << k;

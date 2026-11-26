@@ -39,6 +39,7 @@ void check_bubble(const char *where, int tstp, herm_matrix_hodlr &C, int c1, int
       }
     }
     else {
+      if(tstp == C.tstp()) C.can_extrap() = false;   // ST-6: row tstp() of C is written (through the maps)
       cplx cplxi(0.,1.);
 
       // C^\rceil_{c1,c2}(t,tau) = iA^\rceil_{a1,a2}(t,tau) * B^\lceil_{b2,b1}(tau,t)
@@ -76,6 +77,7 @@ void check_bubble(const char *where, int tstp, herm_matrix_hodlr &C, int c1, int
       }
     }
     else {
+      if(tstp == C.tstp()) C.can_extrap() = false;   // ST-6: row tstp() of C is written (through the maps)
       cplx cplxi(0.,1.);
 
       // C^\rceil_{c1,c2}(t,tau) = i A^\rceil_{a1,a2}(t,tau) * B^\rceil_{b1,b2}(t,tau)

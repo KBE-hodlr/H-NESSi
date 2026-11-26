@@ -397,8 +397,8 @@ void herm_matrix_hodlr::write_rank_to_hdf5(h5e::File &out, std::string label) {
   for(int b = 0, i = 0; b < nlvl_; i+=std::pow(2,b), b++) {
     for(int j = 0; j < size1_; j++) {
       for(int k = 0; k < size2_; k++) {
-        ranksR(b*size1_*size2_ + j*size1_ + k) = ret_.data().blocks()[i][j][k].epsrank();
-        ranksL(b*size1_*size2_ + j*size1_ + k) = les_.data().blocks()[i][j][k].epsrank();
+        ranksR(b*size1_*size2_ + j*size2_ + k) = ret_.data().blocks()[i][j][k].epsrank();
+        ranksL(b*size1_*size2_ + j*size2_ + k) = les_.data().blocks()[i][j][k].epsrank();
       }
     }
   }

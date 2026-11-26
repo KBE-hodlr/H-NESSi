@@ -5,7 +5,6 @@ lattice_2d_ysymm::lattice_2d_ysymm(void){};
 lattice_2d_ysymm::lattice_2d_ysymm(int L, int Nt, double dt, double J, double Amax, double mu, int size)
 {
     assert(-1<=Nt);
-    assert(-1<=Nt);
     Nt_=Nt;
     size_=size;
     mu_=mu;
@@ -13,8 +12,7 @@ lattice_2d_ysymm::lattice_2d_ysymm(int L, int Nt, double dt, double J, double Am
     J_=J;
     Nk_ = L*(L/2+1);
     h_nessi::ZMatrix tmp(size,size);
-    A_.resize(Nt+2);
-    efield_to_afield(Nt, dt, Amax);
+    efield_to_afield(Nt, dt, Amax);   // sizes A_ to Nt+1
 
     init_kk(L);
    

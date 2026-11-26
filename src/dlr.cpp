@@ -65,7 +65,7 @@ dlr_info::dlr_info(int &r, double lambda, double eps, double beta, int nao, int 
   phi_.resize(r*r*r); // Convolution tensor
   ipmat_.resize(r*r);    // Inner product weights 
 
-  // these functions call fortran code which is not threadsafe
+  // these libdlr routines are reentrant (doc 04 §4.3-4.11); the critical section is kept as a safeguard
   #pragma omp critical(h_nessi_libdlr)
   { 
     c_dlr_it2cf_init(&r, dlrrf_.data(), dlrit_.data(), it2cf_.data(), it2cfp_.data()); // Get it to cf

@@ -146,7 +146,7 @@ dlr_(dlr)
   es_ = in.getDataSet(h5_join({label, "es"})).read<int>();
   k_ = in.getDataSet(h5_join({label, "k"})).read<int>();
   nt_ = in.getDataSet(h5_join({label, "nt"})).read<int>();
-  // DY-C3 (tier 2, without the Q5 xi/r/beta comparison)
+  // DY-C3 (tier 2); the Q5 xi/r/beta/eps/lambda comparison follows below (ST-11)
   check_dyson_ctor_("dyson::dyson(h5e::File&,label,dlr)", nt_, nao_, k_, dlr);
   HNESSI_REQUIRE(es_ == nao_*nao_, "dyson::dyson(h5e::File&,label,dlr)", HNESSI_KV(es_), HNESSI_KV(nao_));
 

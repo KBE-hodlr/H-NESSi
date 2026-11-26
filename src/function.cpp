@@ -137,5 +137,5 @@ void function::set_zero(void) {
 cplx &function::operator()(int t, int i, int j) {
   HNESSI_ASSERT(0 <= i && i < size1_ && 0 <= j && j < size2_, "function::operator()", HNESSI_KV(i), HNESSI_KV(j),
                 HNESSI_KV(size1_));   // FN-3 (tier 1)
-  return ptr(t)[i*size1_ + j];
+  return ptr(t)[i*size2_ + j];
 }

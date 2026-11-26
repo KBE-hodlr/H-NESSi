@@ -2,7 +2,7 @@ To run:
 export OMP_NUM_THREADS=<nthreads>
 export OMP_PLACES=threads
 export OMP_PROC_BIND=spread
-srun -n <n_mpi> -c <nthreads> --cpu-bind=cores ./your_executable ./your_executable <input_file> <output_dir> <checkpoint_dir>
+srun -n <n_mpi> -c <nthreads> --cpu-bind=cores ./Main.x <input_file> <output_dir> <checkpoint_dir>
 
 input_file (argv[1]): Path to your configuration file containing the simulation parameters.
 output_dir (argv[2]): The directory where the simulation will write its output files (e.g., ground state data, tops). Must exist prior to execution.
@@ -12,7 +12,7 @@ Observables (output_dir/obs.h5, Nt doubles each; jxt_iter has max(BootMaxIter,St
   jxtnorm, jytnorm  <j_x>(t)/Amax, <j_y>(t)/Amax (spin summed, Eq. 26). The vector potential is A(t) = +Amax (x) for
                     t >= 0 (lattice.cpp), whereas paper Eq. 29 uses A(t) = -Amax theta(t); hence jxtnorm = -sigma(t) of
                     paper Eq. 30.
-  Ekint             kinetic energy with the bare eps_k, spin summed (Eq. 27).
+  Ekint             kinetic energy with the bare eps_k, spin summed (Eq. 27). Deprecated: use energy_band.
   Navgt             density per spin (Eq. 28).
   jxt_iter          jxtnorm after each bootstrap (t <= 5) or corrector (t > 5) iteration.
 Energy bookkeeping (WP8b; Galitskii-Migdal conventions of D-7, as in SC_example; per site, spin summed; each dataset
@@ -30,9 +30,11 @@ has a "description" attribute):
 
 Vector potential (optional input keys; without them the default step is used):
   __pulse=  step     A_x(t) = +Amax for t >= 0 (default).
-  __pulse=  smooth   A_x(t) = Amax sin^2(pi (t - t0)/T) sin(omega (t - t0)) for t0 < t < t0 + T, 0 otherwise, with
-  __pulse_tstart= t0, __pulse_T= T, __pulse_omega= omega (omega = 0: A_x = Amax sin^2). Choose omega*T a multiple of
-                     pi so that A is smooth (C^2) at the pulse end; jxtnorm is still <j_x>/Amax.
+  __pulse=  smooth   A_x(t) = Amax sin^n(pi (t - t0)/T) sin(omega (t - t0)) for t0 < t < t0 + T, 0 otherwise, with
+  __pulse_tstart= t0, __pulse_T= T, __pulse_omega= omega (omega = 0: A_x = Amax sin^n) and the optional
+  __pulse_npow= n (integer >= 2, default 2). A is C^(n-1) at the pulse ends, C^n if omega*T is a multiple of pi;
+                     jxtnorm is still <j_x>/Amax.
+Lines of the input file are cut at '#' (comments), for the optional keys as for all others.
 
 Checkpoint/restart: when __time_limit= (seconds) or __memory_limit= is reached, the run writes
 checkpoint_dir/GSigma<k>.h5 and output_dir/obs_checkpoint.h5 and stops. Rerun with __checkpoint= true and the same

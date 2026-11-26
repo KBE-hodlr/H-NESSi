@@ -157,9 +157,9 @@ double distance_norm2_mat(herm_matrix_hodlr &g1, cntr::herm_matrix<double> &g2, 
 double distance_norm2_tv(int tstp, herm_matrix_hodlr &g1, cntr::herm_matrix<double> &g2, dlr_info &dlr) {
   nessi_check_common(g1, g2, "distance_norm2_tv");
   nessi_check_tau(g1, g2, dlr, "distance_norm2_tv");
-  HNESSI_REQUIRE(0 <= tstp && tstp < g1.nt() && tstp <= g2.nt(), "distance_norm2_tv", HNESSI_KV(tstp),
-                 HNESSI_KV(g1.nt()), HNESSI_KV(g2.nt()),
-                 detail::note{"0 <= tstp < herm_matrix_hodlr::nt() and tstp <= cntr::herm_matrix::nt()"});
+  HNESSI_REQUIRE(0 <= tstp && tstp <= std::min(g1.tstp(), g1.nt() - 1) && tstp <= g2.nt(), "distance_norm2_tv",
+                 HNESSI_KV(tstp), HNESSI_KV(g1.tstp()), HNESSI_KV(g1.nt()), HNESSI_KV(g2.nt()),
+                 detail::note{"0 <= tstp <= min(tstp(), nt()-1) (a computed row), tstp <= cntr::herm_matrix::nt()"});
   int ntau = g2.ntau(), es = g1.size1() * g1.size2();
   DColVector taus = nessi_tau_grid(ntau, dlr.beta());
   ZMatrix vals(ntau + 1, es);  // row m = g1^tv(tstp, tau_m), (i,j) row-major

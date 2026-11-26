@@ -285,7 +285,7 @@ public:
   /**
    * @brief Memory used by the dyson buffers in bytes (actual sizes of all heap buffers), as reported by print_memory_usage
    * @return {DLR buffers (NTauTmp*_, DNTauTmp*_), G0 (DG0_), G0 conv. matrix (DG0ConvMat_), Mat Mul buffers (epsnao_tmp*_),
-   *          Solver buffers (Q_, X_, M_, iden_, bound_), Timing buffer (timing), Total}
+   *          Solver buffers (Q_, X_, M_, iden_, bound_), Timing/diagnostics (timing, herm_diag_, herm_copy_, state), Total}
    */
   std::vector<double> memory_usage_bytes();
 

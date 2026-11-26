@@ -302,9 +302,6 @@ int herm_matrix_hodlr::getbkl_indices(){
     for(int i=0;i<nbox;i++){
         l=blklevel_[i];
         blkr2_[i]=is[i+(int)round(pow(2,l-1))+1]-1;
-        if(blkr2_[i]==is[(int)round(pow(2,nlvl_))]-1){
-            blkr2_[i]=blkr2_[i];
-        }
     }
     //  Last column indices of all blocks
     for(int i=0; i<blkc2_.size(); ++i) blkc2_[i]=blkr1_[i]-1;

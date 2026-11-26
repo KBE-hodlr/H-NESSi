@@ -42,6 +42,11 @@ namespace h_nessi {
  *     `MPI_Query_thread` reports a lower level, and every `_nospawn` call requires it (MP-3, error). Every
  *     `_nospawn` routine ends with a barrier, so on return all threads see all data written by the routine
  *     (buffers and herm_matrix_hodlr objects).
+ *   - The user get/set lambdas of the lambda API run concurrently on several threads (different k-points). A
+ *     dlr_info is single-thread for `eval_point` (ST-10): a lambda that calls it on a shared dlr_info (directly or
+ *     through get_mat_tau*, get_tv_tau*, density_matrix(-1), ...) throws h_nessi::state_error (in a `_nospawn`
+ *     region: aborts) when two threads overlap. Give each thread its own dlr_info. The high-level gets only read
+ *     the dlr_info's matrices (get_*_reversed), which is safe to share.
  *
  * Errors (WP6b, h_nessi/checks.hpp policy): every get/set checks at entry, before any parallel work or barrier,
  *   - -1 <= ti < Nt (MP-6), the component counts (MP-4/5/7, see below),

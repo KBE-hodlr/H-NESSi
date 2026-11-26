@@ -20,13 +20,8 @@ double dyson::dyson_start_tv(herm_matrix_hodlr &G, double mu, cplx *H, herm_matr
   const char *where = "dyson::dyson_start_tv";
   if(cs.outer()) enter_start_(where, G, Sigma, I, h, mu, H, true, true);
 
-  // We also enforce TTI for 0 <= t <= k
-  // This is guaranteed using checks in the dyson_start() routine as well
-  int m, l, n, i;
+  int m, l, n;
   double err = 0;
-
-  int es = G.size1() * G.size2();
-  int r = G.r();
 
   cplx cplxi = cplx(0.,1.);
   ZMatrixMap QMap = ZMatrixMap(Q_.data(), nao_*k_, nao_);
@@ -547,10 +542,7 @@ double dyson::dyson_start_les_2leg(herm_matrix_hodlr &G, double mu, cplx *H, her
     int l = 0;
     QBlock += (h * I.poly_integ(0,n,l) * ZMatrixMap(G.curr_timestep_les_ptr(m,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(n,l), nao_, nao_).adjoint()).transpose();
     QBlock += (cplxi/h * I.poly_diff(n,l) * ZMatrixMap(G.curr_timestep_les_ptr(m,l), nao_, nao_)).transpose();
-
-    ZMatrixMap(M_.data(), nao_, nao_) = ZMatrix::Zero(nao_, nao_);
-//    les_it_int(m, n, G, Sigma, M_.data());
-    QBlock += ZMatrixMap(M_.data(), nao_, nao_);
+    // (no mixed les_it_int term: _2leg has no imaginary-time branch)
   }
 
   for(int n = 1; n <= k_; n++) {

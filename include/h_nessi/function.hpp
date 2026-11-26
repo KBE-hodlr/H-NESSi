@@ -132,7 +132,7 @@ public:
   inline cplx value(int t, int i, int j) {
     HNESSI_ASSERT(0 <= i && i < size1_ && 0 <= j && j < size2_, "function::value", HNESSI_KV(i), HNESSI_KV(j),
                   HNESSI_KV(size1_));
-    return ptr(t)[i*size1_ +j];
+    return ptr(t)[i*size2_ +j];
   }
 
   /**
@@ -140,7 +140,7 @@ public:
    *
    * Returns a reference to the complex matrix element at time slice `t` and
    * matrix indices `(i,j)`. The storage location is equivalent to
-   * `ptr(t)[i*size1_ + j]`.
+   * `ptr(t)[i*size2_ + j]` (row-major).
    *
    * @param t Time slice index. A value of -1 corresponds to the initial value on the Matsubara axis.
    * @param i Matrix row index.

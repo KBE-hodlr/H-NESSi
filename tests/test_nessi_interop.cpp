@@ -17,6 +17,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <string>
 #include <vector>
 
 #include "h_nessi/dlr.hpp"
@@ -300,6 +301,15 @@ TEST(NessiPreconditions, ThrowOnMismatch) {
   EXPECT_THROW(distance_norm2_curr_les(-2, *P.G, *P.Gn), std::invalid_argument);
   EXPECT_THROW(distance_norm2_curr_ret(3, *P.G, short_nt), std::invalid_argument);     // NESSi nt too small
   EXPECT_THROW(distance_norm2_tv(P.nt, *P.G, *P.Gn, *P.dlr), std::invalid_argument);
+  // WP12: a tv row above G.tstp() is not computed yet; refused by distance_norm2_tv itself (header contract)
+  ASSERT_LT(P.G->tstp() + 1, P.nt);
+  try {
+    distance_norm2_tv(P.G->tstp() + 1, *P.G, *P.Gn, *P.dlr);
+    ADD_FAILURE() << "distance_norm2_tv(tstp() + 1) did not throw";
+  } catch (const std::invalid_argument &e) {
+    EXPECT_NE(std::string(e.what()).find("distance_norm2_tv"), std::string::npos) << e.what();
+  }
+  EXPECT_NO_THROW(distance_norm2_tv(P.G->tstp(), *P.G, *P.Gn, *P.dlr));
   int r2 = 0;
   dlr_info other(r2, 60., 1e-13, P.beta, 2, +1);
   EXPECT_THROW(distance_norm2_tv(0, *P.G, *P.Gn, other), std::invalid_argument);

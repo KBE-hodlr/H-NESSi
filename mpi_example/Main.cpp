@@ -26,12 +26,16 @@ static void restore_iter_rows(std::vector<std::vector<double>> &dst, const std::
 }
 
 // Optional input parameter: x keeps its default when no line contains the flag (find_param throws in that case).
+// As in read_inputfile.hpp, everything from '#' on is a comment, so a flag that appears only in a comment is absent.
+static std::string uncommented(const std::string &line) {
+  return line.substr(0, line.find('#'));
+}
 template <typename T>
 static bool find_param_optional(char *file, const char *flag, T &x) {
   std::ifstream in(file);
   std::string line;
   while(std::getline(in, line)) {
-    if(line.find(flag) != std::string::npos) { find_param(file, flag, x); return true; }
+    if(uncommented(line).find(flag) != std::string::npos) { find_param(file, flag, x); return true; }
   }
   return false;
 }
@@ -40,6 +44,7 @@ static bool find_param_optional(char *file, const char *flag, std::string &x) {
   std::ifstream in(file);
   std::string line;
   while(std::getline(in, line)) {
+    line = uncommented(line);
     size_t pos = line.find(flag);
     if(pos != std::string::npos) {
       std::istringstream rest(line.substr(pos + std::strlen(flag)));
@@ -133,11 +138,10 @@ int main(int argc, char *argv[]) {
   //                           READ INPUT
   //============================================================================
 
-  if(argc<4) throw("COMMAND LINE ARGUMENT MISSING");
-
   if (argc<4) {
     // Tell the user how to run the program
-    std::cerr << " Please provide a prefix for the input and output files. Exiting ..." << "\n";
+    if(mpi_rank==mpi_root) std::cerr << "usage: " << argv[0] << " input.inp output_dir/ checkpoint_dir/" << "\n";
+    MPI_Finalize();
     return 1;
   }
 

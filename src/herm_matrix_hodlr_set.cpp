@@ -11,7 +11,7 @@ namespace h_nessi {
 // Setters: element-wise hot paths, tier 1 (doc 61 §2.3 HM-S*, LX-5, LX-26).
 // ST-6 (DY-X3): a write into row tstp() between update_blocks and extrapolate overwrites the slot that still holds row
 // tstp()-k-1, which extrapolate reads; every setter that writes row tstp() therefore clears can_extrap_ (extrapolate is
-// then a no-op, doc 32 inv. 6). Writes through the maps/raw pointers cannot be tracked.
+// then a no-op, doc 32 inv. 6). Map/raw-pointer writes are not tracked (Bubble1/2 and the mpi_comm sets clear it).
 
 void herm_matrix_hodlr::set_tstp_zero(int tstp) {
     HNESSI_ASSERT(tstp == -1 || (tstp >= tstpmk_ && tstp <= tstpmk_+k_), "herm_matrix_hodlr::set_tstp_zero",

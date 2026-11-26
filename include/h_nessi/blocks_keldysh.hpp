@@ -74,7 +74,7 @@ class blocks_list{
 
 
   private:
-    std::vector<std::vector<std::vector<block>>> blocks_;/**< Set of blocks stored in compressed form. Order: Nbox*size2_*size1_ */
+    std::vector<std::vector<std::vector<block>>> blocks_;/**< Set of blocks stored in compressed form. Order: [block b][i][j], i < size1_, j < size2_ */
     int nbox_;                /**< Number of block boxes. */
     int size1_;               /**< Column dimension in orbital space. */
     int size2_;               /**< Row dimension in orbital space. */
@@ -82,7 +82,7 @@ class blocks_list{
 
 /**
  * @class ret_blocks
- * @brief Stores two-time retarded contour objects compressed with HODLR structure and hermitian symmetry.
+ * @brief Stores two-time retarded contour objects compressed with HODLR structure (one triangle stored).
  *
  * The ret_blocks class manages compressed storage and direct access for retarded Green's functions and related objects on the Keldysh contour. Stores both compressed blocks and directly stored triangular regions at the diagonal.
  */
@@ -201,9 +201,9 @@ class les_blocks{
 
 /**
  * @class tv_blocks
- * @brief Stores two-time mixed contour objects compressed with HODLR structure and hermitian symmetry.
+ * @brief Stores the mixed contour component G^tv(t, tau_n) (dense, nt x r x size1 x size2; not compressed).
  *
- * The tv_blocks class manages compressed storage and access for mixed contour Green's functions and related objects on the Keldysh contour.
+ * The tv_blocks class holds the mixed component for every time slice t = 0..nt-1 (zero-initialised), not only the window.
  */
 class tv_blocks{
   public:

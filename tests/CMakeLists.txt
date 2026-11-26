@@ -1,14 +1,15 @@
-# H-NESSi regression suite (WP0).  See tests/README.md for labels, known-bug mapping and how to run.
+# H-NESSi regression suite (WP0).  See tests/README.md for labels, the bug -> test map and how to run.
 #
 # Naming convention inside the gtest sources (it drives the ctest registration below):
-#   *.KnownBug_B<id>_*       test of the CORRECT behaviour that currently fails because of BUGS.md entry B<id>.
-#                            Registered with WILL_FAIL and LABELS "known_bug;B<id>".  When the bug is fixed the
-#                            test shows up as a failure ("unexpected pass"): remove WILL_FAIL (hn_known_bugs list).
+#   *.Slow_*                 long convergence sweeps; LABELS "slow;<module>".
+#   everything else          LABELS "unit;<module>".
+#   *.KnownBug_B<id>_*       (none at present: every BUGS.md entry is fixed) test of the CORRECT behaviour that fails
+#                            because of BUGS.md entry B<id>; registered via the BUGS list of hn_add_test_exe with
+#                            WILL_FAIL and LABELS "known_bug;B<id>;<module>". When the bug is fixed the test shows up as
+#                            a failure ("unexpected pass"): remove the id from BUGS and rename the test.
 #   *.KnownBugDebug_B<id>_*  as above, but the symptom is a failed assert(); WILL_FAIL only in builds with
-#                            asserts enabled (no -DNDEBUG), a plain test otherwise.
-#   *.Slow_*                 long convergence sweeps; LABELS "slow".
-#   everything else          LABELS "unit".
-# Every known-bug test body runs in a forked child (hn_test::run_isolated), so crashes and failed asserts
+#                            asserts enabled (no -DNDEBUG), a plain test otherwise (DEBUG_BUGS list).
+# A known-bug test body should run in a forked child (hn_test::run_isolated), so that crashes and failed asserts
 # are reported as ordinary failures and WILL_FAIL works.
 
 include(GoogleTest)
