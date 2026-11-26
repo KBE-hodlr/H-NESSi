@@ -79,8 +79,8 @@ hn_add_test_exe(test_integration MODULE integration SOURCES test_integration.cpp
 hn_add_test_exe(test_dlr_matsubara MODULE dlr SOURCES test_dlr_matsubara.cpp)
 hn_add_test_exe(test_bosonic MODULE bosonic SOURCES test_bosonic.cpp)
 hn_add_test_exe(test_free_extrap MODULE free_extrap SOURCES test_free_extrap.cpp)
-hn_add_test_exe(test_hodlr_storage MODULE storage SOURCES test_hodlr_storage.cpp BUGS 9 26)
-hn_add_test_exe(test_timestep MODULE timestep SOURCES test_timestep.cpp BUGS 28)
+hn_add_test_exe(test_hodlr_storage MODULE storage SOURCES test_hodlr_storage.cpp)
+hn_add_test_exe(test_timestep MODULE timestep SOURCES test_timestep.cpp)
 hn_add_test_exe(test_bootstrap MODULE bootstrap SOURCES test_bootstrap.cpp)
 
 hn_add_test_exe(test_mpi_comm MODULE mpi_comm SOURCES test_mpi_comm.cpp ENV "OMP_NUM_THREADS=4")
@@ -137,6 +137,20 @@ set(_hn_work ${CMAKE_CURRENT_BINARY_DIR}/work)
 add_test(NAME MpiExampleRestart_B16
   COMMAND bash ${_hn_ex}/mpi_restart.sh $<TARGET_FILE:Main.x> $<TARGET_FILE:h5flat>
           ${_hn_work}/mpi_restart ${CMAKE_CURRENT_SOURCE_DIR}/data/mpi_tiny.inp)
+# WP9: the same with two chained mid-run stops (__stop_tstp= 20, then 40; Nt = 64); also checks timings_file.h5 rows.
+add_test(NAME MpiExampleRestartMidRun
+  COMMAND bash ${_hn_ex}/mpi_restart.sh $<TARGET_FILE:Main.x> $<TARGET_FILE:h5flat>
+          ${_hn_work}/mpi_restart_midrun ${CMAKE_CURRENT_SOURCE_DIR}/data/mpi_tiny.inp 20 40)
+# B35: restart on ranks without k-points (L = 2: 4 k-points, 6 ranks). Needs a multi-rank launcher, so it is only
+# registered when HN_EXAMPLE_MPI_LAUNCH is set (e.g. -DHN_EXAMPLE_MPI_LAUNCH="srun -n 6 -c 2" inside an allocation).
+set(HN_EXAMPLE_MPI_LAUNCH "" CACHE STRING "launcher prefix for multi-rank example tests (empty: not registered)")
+if(HN_EXAMPLE_MPI_LAUNCH)
+  add_test(NAME MpiExampleRestartManyRanks_B35
+    COMMAND bash ${_hn_ex}/mpi_restart.sh $<TARGET_FILE:Main.x> $<TARGET_FILE:h5flat>
+            ${_hn_work}/mpi_restart_b35 ${CMAKE_CURRENT_SOURCE_DIR}/data/mpi_L2.inp 10 20)
+  set_tests_properties(MpiExampleRestartManyRanks_B35 PROPERTIES LABELS "${_hn_ex_labels};B35;mpi"
+                       ENVIRONMENT "OMP_NUM_THREADS=2;MPI_LAUNCH=${HN_EXAMPLE_MPI_LAUNCH}" TIMEOUT 900)
+endif()
 # B17: StepMaxIter > BootMaxIter; jxt_iter gets max(BootMaxIter,StepMaxIter)+1 rows.
 add_test(NAME MpiExampleIterRows_B17
   COMMAND bash ${_hn_ex}/mpi_iter_rows.sh $<TARGET_FILE:Main.x> $<TARGET_FILE:h5flat>
@@ -153,17 +167,21 @@ add_test(NAME ScExampleRun
 add_test(NAME ScExampleEnergyBalance
   COMMAND bash ${_hn_ex}/sc_energy_balance.sh $<TARGET_FILE:SC.x> $<TARGET_FILE:h5flat> ${_hn_work}/sc_energy_balance
           ${CMAKE_CURRENT_SOURCE_DIR}/data/sc_pulse.inp ${CMAKE_CURRENT_SOURCE_DIR}/data/sc_pulse.h5)
-set_tests_properties(ScExampleEnergyBalance PROPERTIES LABELS "${_hn_ex_labels};Q10")
+# "slow": Debug ~180 s (Release ~5 s); excluded by the recommended Debug run `ctest -LE slow`.
+set_tests_properties(ScExampleEnergyBalance PROPERTIES LABELS "${_hn_ex_labels};Q10;slow")
 # Energy balance of mpi_example for a contained smooth pulse (__pulse= smooth): same conventions (WP8b).
 add_test(NAME MpiExampleEnergyBalance
   COMMAND bash ${_hn_ex}/mpi_energy_balance.sh $<TARGET_FILE:Main.x> $<TARGET_FILE:h5flat> ${_hn_work}/mpi_energy_balance
           ${CMAKE_CURRENT_SOURCE_DIR}/data/mpi_pulse.inp)
-set_tests_properties(MpiExampleEnergyBalance PROPERTIES LABELS "${_hn_ex_labels};Q10")
+# "slow": Debug ~105 s (Release ~2 s; StepMaxErr/BootMaxErr 1e-20 since WP9, was 1e-24: 537 instead of 733
+# corrector iterations, balance residual unchanged at 3.5e-7).
+set_tests_properties(MpiExampleEnergyBalance PROPERTIES LABELS "${_hn_ex_labels};Q10;slow")
 set_tests_properties(MpiExampleRestart_B16 PROPERTIES LABELS "${_hn_ex_labels};B16")
+set_tests_properties(MpiExampleRestartMidRun PROPERTIES LABELS "${_hn_ex_labels};B16")
 set_tests_properties(MpiExampleIterRows_B17 PROPERTIES LABELS "${_hn_ex_labels};B17")
 set_tests_properties(ScExamplePhiLength_B24 PROPERTIES LABELS "${_hn_ex_labels};B24")
 set_tests_properties(ScExampleRun PROPERTIES LABELS "${_hn_ex_labels}")
-set_tests_properties(MpiExampleRestart_B16 MpiExampleIterRows_B17 ScExamplePhiLength_B24 ScExampleRun
+set_tests_properties(MpiExampleRestart_B16 MpiExampleRestartMidRun MpiExampleIterRows_B17 ScExamplePhiLength_B24 ScExampleRun
                      ScExampleEnergyBalance MpiExampleEnergyBalance PROPERTIES ENVIRONMENT "OMP_NUM_THREADS=2" TIMEOUT 900)
 
 # ------------------------------------------------------------------ labels for discovered tests (must be last)

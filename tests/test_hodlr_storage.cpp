@@ -354,6 +354,54 @@ TEST(HodlrCopy, GetTimestepCurrWindow) {
   });
 }
 
+// WP4 side finding 4 (fixed in WP9a): the window copies carry can_extrap, so extrapolate behaves the same on the copy
+// (the window includes slot T = tstpmk+k, which holds the archived row T-k-1 that extrapolate reads).  The per-step
+// copy into slot T of the destination clears the destination's can_extrap (ST-6), like every other writer of row T.
+TEST(HodlrCopy, WindowCopyCarriesCanExtrap) {
+  hn_test::run_isolated([] {
+    int nt = 40, nlvl = 2, k = 2, nao = 2, r = 0;
+    dlr_info dlr(r, 20., 1e-10, 2.0, nao, -1);
+    Integration::Integrator I(k);
+    dyson D(nt, nao, k, dlr);
+    herm_matrix_hodlr A(nt, r, nlvl, 1e-10, nao, nao, -1, k), B(nt, r, nlvl, 1e-10, nao, nao, -1, k),
+        C(nt, r, nlvl, 1e-10, nao, nao, -1, k);
+    auto fill = [&](int T) {
+      for (int tp = 0; tp <= T; tp++) {
+        ZMatrix Y = ZMatrix::Constant(nao, nao, std::exp(-II * 0.3 * double(T - tp))), L = -Y.adjoint();
+        A.set_ret_curr(T, tp, Y);
+        A.set_les_curr(tp, T, L);
+      }
+    };
+    for (int T = 0; T <= k; T++) fill(T);
+    for (int T = k + 1; T <= 10; T++) {
+      A.update_blocks(I);
+      fill(T);
+    }
+    A.update_blocks(I);   // tstpmk = 9, row 11 not written yet: A can extrapolate
+    ASSERT_TRUE(A.can_extrap());
+    A.get_timestep_curr(B);
+    EXPECT_TRUE(B.can_extrap()) << "get_timestep_curr(G) must carry can_extrap";
+    C.set_timestep_curr(A);
+    EXPECT_TRUE(C.can_extrap()) << "set_timestep_curr(G) must carry can_extrap";
+    D.extrapolate(A, I);
+    D.extrapolate(B, I);
+    const int T = A.tstpmk() + k;
+    for (int tp = 0; tp <= T; tp++)
+      for (int e = 0; e < nao * nao; e++) {
+        ASSERT_EQ(A.curr_timestep_ret_ptr(T, tp)[e], B.curr_timestep_ret_ptr(T, tp)[e]) << "tp=" << tp;
+        ASSERT_EQ(A.curr_timestep_les_ptr(tp, T)[e], B.curr_timestep_les_ptr(tp, T)[e]) << "tp=" << tp;
+      }
+    EXPECT_FALSE(A.can_extrap());
+    EXPECT_FALSE(B.can_extrap());
+    // the window copy carries false as well; a copy of row T into the destination's slot T clears its can_extrap
+    A.get_timestep_curr(C);
+    EXPECT_FALSE(C.can_extrap());
+    B.can_extrap() = true;
+    A.get_timestep_curr(T, B);
+    EXPECT_FALSE(B.can_extrap()) << "per-step copy into slot T must clear the destination's can_extrap (ST-6)";
+  });
+}
+
 // tstp == -1 copies mat in both directions with no window requirement (formerly unreachable in Debug: the window
 // assert came before the tstp == -1 branch).  The two objects deliberately have different windows.
 TEST(HodlrCopy, GetTimestepCurrMatsubara) {
@@ -607,10 +655,13 @@ TEST(HodlrGeometry, NlvlZeroRejected_B23) {
 }
 
 // ------------------------------------------------------------------------------------------------ B26
-// get_memory_usage must count the les U/V with the les ranks and include the singular values of ret and les.
-// The expected value replaces the buggy ret/les contribution of the code's formula by the true storage of the
-// compressed blocks (U, V complex; S real); all other contributions are left as computed by the library.
-TEST(HodlrMemory, KnownBug_B26_MemoryReport) {
+// B26 (fixed in WP9a): get_memory_usage must count the les U/V with the les ranks and include the singular values
+// of ret and les.
+// The block contribution of the report is isolated as the difference to a fresh object of the same geometry (its
+// blocks hold rank-0 factors; every other term has the same size) and compared with the true storage of the compressed
+// blocks (U, V complex; S real).  The formula of the pre-WP9a code (les U/V counted with the ret ranks, S not counted)
+// must differ from it in this setup (different ret and les ranks).
+TEST(HodlrMemory, MemoryReport_B26) {
   hn_test::run_isolated([] {
     int nt = 64, nlvl = 2, k = 2, nao = 2, r = 3;
     double hs = 0.05;
@@ -649,16 +700,17 @@ TEST(HodlrMemory, KnownBug_B26_MemoryReport) {
           correct += Z * (R.U().size() + R.V().size() + L.U().size() + L.V().size()) + D * (R.S().size() + L.S().size());
         }
     ASSERT_TRUE(ranks_differ) << "test setup must produce different ret and les ranks";
-    double total = G.get_memory_usage(false);
-    double expected = total - buggy + correct;
-    EXPECT_NEAR(total, expected, 1e-6 * expected) << "memory report (GB)";
+    herm_matrix_hodlr F(nt, r, nlvl, 1e-10, nao, nao, -1, k);
+    double blocks = G.get_memory_usage(false) - F.get_memory_usage(false);
+    EXPECT_NEAR(blocks, correct, 1e-9 * correct) << "block contribution of the memory report (GB)";
+    EXPECT_GT(std::abs(buggy - correct), 1e-3 * correct) << "test setup must distinguish the pre-WP9a formula";
   });
 }
 
 // ------------------------------------------------------------------------------------------------ B9
-// Reading a checkpoint that has no /timing dataset must leave timing zero-initialised (the other constructors use
+// B9 (fixed in WP9a): reading a checkpoint that has no /timing dataset must leave timing zero-initialised (the other constructors use
 // DMatrix::Zero).  malloc perturbation makes uninitialised heap memory non-zero deterministically.
-TEST(HodlrCheckpoint, KnownBug_B9_TimingZeroWhenMissing) {
+TEST(HodlrCheckpoint, TimingZeroWhenMissing_B9) {
   hn_test::run_isolated([] {
     mallopt(M_PERTURB, 0x5a);
     int nt = 20, nlvl = 2, k = 2, nao = 1, r = 3;
@@ -681,6 +733,57 @@ TEST(HodlrCheckpoint, KnownBug_B9_TimingZeroWhenMissing) {
     DMatrix timing = chk.getDataSet("G/timing").read<DMatrix>();
     ASSERT_GT(timing.size(), 0);
     EXPECT_EQ(timing.cwiseAbs().maxCoeff(), 0.0) << "timing read from a checkpoint without /timing is uninitialised";
+  });
+}
+
+// ------------------------------------------------------------------------------------------------ h5_join (WP9a)
+// WP3 side finding 5: HDF5 paths are joined without doubled slashes; "G" and "G/" name the same objects.
+TEST(HodlrCheckpoint, H5JoinAndTrailingSlashLabels) {
+  EXPECT_EQ(h5_join({"G/", "ret"}), "G/ret");
+  EXPECT_EQ(h5_join({"G", "ret"}), "G/ret");
+  EXPECT_EQ(h5_join({"G//", "/ret/", "U"}), "G/ret/U");
+  EXPECT_EQ(h5_join({"", "x"}), "x");
+  EXPECT_EQ(h5_join({"geometry", "", "blkr1"}), "geometry/blkr1");
+  EXPECT_EQ(h5_join({"/abs/", "x"}), "/abs/x");
+  hn_test::run_isolated([] {
+    int nt = 12, nlvl = 2, k = 2, nao = 2, r = 3;
+    herm_matrix_hodlr G(nt, r, nlvl, 1e-10, nao, nao, -1, k);
+    std::string fn = "hodlr_h5join.h5";
+    std::remove(fn.c_str());
+    {
+      h5e::File out(fn, h5e::File::Overwrite | h5e::File::ReadWrite | h5e::File::Create);
+      G.write_checkpoint_hdf5(out, "A/");
+      G.write_checkpoint_hdf5(out, "B");
+    }
+    h5e::File in(fn, h5e::File::ReadOnly);
+    auto a = in.getGroup("A").listObjectNames(), b = in.getGroup("B").listObjectNames();
+    EXPECT_EQ(a, b);
+    herm_matrix_hodlr G2(in, "A"), G3(in, "B/");
+    EXPECT_EQ(G2.nt(), nt);
+    EXPECT_EQ(G3.nt(), nt);
+  });
+}
+
+// ------------------------------------------------------------------------------------------------ B33
+// B33 (fixed in WP9a): the constructor must zero-initialise GMConvTensMatrix_, so a checkpoint of a fresh object (no
+// initGMConvTensor yet) holds zeros, not heap garbage.  malloc perturbation makes uninitialised memory non-zero.
+TEST(HodlrCheckpoint, FreshGMConvTensorZero_B33) {
+  hn_test::run_isolated([] {
+    mallopt(M_PERTURB, 0x5a);
+    int nt = 20, nlvl = 2, k = 2, nao = 2, r = 5;
+    herm_matrix_hodlr G(nt, r, nlvl, 1e-10, nao, nao, -1, k);
+    std::string fn = "hodlr_checkpoint_fresh_gmconv.h5";
+    std::remove(fn.c_str());
+    {
+      h5e::File out(fn, h5e::File::Overwrite | h5e::File::ReadWrite | h5e::File::Create);
+      G.write_checkpoint_hdf5(out, "G");
+    }
+    h5e::File chk(fn, h5e::File::ReadOnly);
+    DMatrix M = chk.getDataSet("G/GMConvTensMatrix").read<DMatrix>();
+    ASSERT_EQ(M.size(), (Eigen::Index)r * r * nao * nao);
+    EXPECT_EQ(M.cwiseAbs().maxCoeff(), 0.0) << "GMConvTensMatrix of a fresh object is uninitialised";
+    DMatrix T = chk.getDataSet("G/timing").read<DMatrix>();
+    EXPECT_EQ(T.cwiseAbs().maxCoeff(), 0.0);
   });
 }
 

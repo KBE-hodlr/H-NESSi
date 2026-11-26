@@ -62,15 +62,15 @@ function::function(function &&g) noexcept
 
 
 function::function(h5e::File &in, std::string label) {
-  nt_ = in.getDataSet(label + std::string("/nt")).read<int>();
-  size1_ = in.getDataSet(label + std::string("/size1")).read<int>();
-  size2_ = in.getDataSet(label + std::string("/size2")).read<int>();
-  element_size_ = in.getDataSet(label + std::string("/element_size")).read<int>();
+  nt_ = in.getDataSet(h5_join({label, "nt"})).read<int>();
+  size1_ = in.getDataSet(h5_join({label, "size1"})).read<int>();
+  size2_ = in.getDataSet(h5_join({label, "size2"})).read<int>();
+  element_size_ = in.getDataSet(h5_join({label, "element_size"})).read<int>();
   // FN-6 (tier 2): stored sizes consistent (FN-1) and the data length matches
   const char *where = "function::function(h5e::File&,label)";
   HNESSI_REQUIRE(nt_ >= 0 && size1_ >= 1 && size1_ == size2_ && element_size_ == size1_*size2_, where, HNESSI_KV(nt_),
                  HNESSI_KV(size1_), HNESSI_KV(size2_), HNESSI_KV(element_size_));
-  ZMatrix d = in.getDataSet(label + std::string("/data")).read<ZMatrix>();
+  ZMatrix d = in.getDataSet(h5_join({label, "data"})).read<ZMatrix>();
   HNESSI_REQUIRE(d.size() == (Eigen::Index)(nt_+1)*element_size_, where, HNESSI_KV(d.size()), HNESSI_KV(nt_),
                  HNESSI_KV(element_size_), detail::note{"dataset data must hold (nt+1)*size1*size2 values"});
   data_.resize((nt_+1)*size1_*size2_);
@@ -79,11 +79,11 @@ function::function(h5e::File &in, std::string label) {
 
 
 void function::write_checkpoint_hdf5(h5e::File &out, std::string label) {
-  h5e::dump(out, label + std::string("/nt"), nt_);
-  h5e::dump(out, label + std::string("/size1"), size1_);
-  h5e::dump(out, label + std::string("/size2"), size2_);
-  h5e::dump(out, label + std::string("/element_size"), element_size_);
-  h5e::dump(out, label + std::string("/data"), ZMatrixMap(data_.data(), (nt_+1)*element_size_, 1));
+  h5e::dump(out, h5_join({label, "nt"}), nt_);
+  h5e::dump(out, h5_join({label, "size1"}), size1_);
+  h5e::dump(out, h5_join({label, "size2"}), size2_);
+  h5e::dump(out, h5_join({label, "element_size"}), element_size_);
+  h5e::dump(out, h5_join({label, "data"}), ZMatrixMap(data_.data(), (nt_+1)*element_size_, 1));
 }
 
 void function::write_to_hdf5(h5e::File &out, std::string label) {
@@ -92,7 +92,7 @@ void function::write_to_hdf5(h5e::File &out, std::string label) {
     static_cast<size_t>(size1_),
     static_cast<size_t>(size2_)
   };
-  auto dset = out.createDataSet<cplx>(label + std::string("/data"), HighFive::DataSpace(shape));
+  auto dset = out.createDataSet<cplx>(h5_join({label, "data"}), HighFive::DataSpace(shape));
   dset.write_raw(data_.data());
 }
 

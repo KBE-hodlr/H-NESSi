@@ -7,6 +7,8 @@
 #include <Eigen/Core>
 #include <highfive/H5Easy.hpp>
 #include <omp.h>
+#include <initializer_list>
+#include <string>
 
 namespace h5 = HighFive;
 namespace h5e= H5Easy;
@@ -79,6 +81,26 @@ namespace h_nessi {
   void svd(ZMatrix &M, ZMatrix &U, ZMatrix &V, DColVector &S);
   int  tsvd(ZMatrix &M, ZMatrix &U, ZMatrix &V, DColVector &S,double svdtol);
   void svd(ZMatrix &M, DColVector &S);
+
+  /** HDF5 path join (WP3 side finding 5): joins the non-empty parts with single '/' separators, so callers may pass
+   *  labels with or without a trailing '/' ("G" and "G/" both give "G/name", not "G//name"). A leading '/' of the
+   *  first part is kept; a trailing '/' is dropped. h5_join("", "x") == "x", which names the same object of a file
+   *  as the "/x" that "" + "/x" gave before: the file layout is unchanged. */
+  inline std::string h5_join(std::initializer_list<std::string> parts) {
+    std::string out;
+    bool first = true;
+    for(const std::string &p : parts) {
+      if(p.empty()) continue;
+      if(!first) out += '/';
+      out += p;
+      first = false;
+    }
+    std::string res;
+    res.reserve(out.size());
+    for(char c : out) if(!(c == '/' && !res.empty() && res.back() == '/')) res += c;
+    if(res.size() > 1 && res.back() == '/') res.pop_back();
+    return res;
+  }
 
 } // namespace
 

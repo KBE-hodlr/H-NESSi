@@ -2,6 +2,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <sstream>
 
 #include "h_nessi/mpi_comm.hpp"
@@ -50,7 +51,7 @@ static bool find_param_optional(char *file, const char *flag, std::string &x) {
 }
 
 // Restart: copy the energy-bookkeeping observables for ti < t0 from obs_checkpoint.h5 (absent in pre-WP8b checkpoints:
-// then they stay as computed, i.e. zero for ti < t0).
+// then they stay as computed, i.e. zero for ti < t0; main() warns about this once at the restart).
 static void restore_energy_rows(h5e::File &f, int t0, std::vector<double> &current_x, std::vector<double> &energy_band,
                                 std::vector<double> &energy_corr) {
   auto restore = [&](const char *name, std::vector<double> &dst) {
@@ -181,6 +182,11 @@ int main(int argc, char *argv[]) {
   if(mpi_rank==mpi_root) std::cout << "write_GS = " << write_GS << "\n";
   find_param(flin,"__write_tops=",write_tops);
   if(mpi_rank==mpi_root) std::cout << "write_tops = " << write_tops << "\n";
+  // Optional (WP9): write the checkpoint and stop after time step __stop_tstp= (deterministic, unlike __time_limit=;
+  // used by the restart ctest). Default -1: no such stop.
+  int stop_tstp = -1;
+  find_param_optional(flin,"__stop_tstp=",stop_tstp);
+  if(mpi_rank==mpi_root) std::cout << "stop_tstp = " << stop_tstp << "\n";
 
   // // system parameters
   find_param(flin,"__L=",L);
@@ -224,6 +230,12 @@ int main(int argc, char *argv[]) {
   // solver parameters
   find_param(flin,"__Nt=",Nt);
   if(mpi_rank==mpi_root) std::cout << "Nt = " << Nt << "\n";
+  // The bootstrap fills t = 0..SolverOrder, and the efield stencil and the Gregory weights of order k read k+1 grid
+  // points, so at least SolverOrder+1 time steps are needed.
+  if(Nt <= SolverOrder) {
+    if(mpi_rank==mpi_root) std::cerr << "Error: __Nt= " << Nt << " must be > SolverOrder = " << SolverOrder << "\n";
+    MPI_Abort(MPI_COMM_WORLD, 1);
+  }
   find_param(flin,"__dt=",dt);
   if(mpi_rank==mpi_root) std::cout << "dt = " << dt << "\n";
   find_param(flin,"__MatsMaxIter=",MatsMaxIter);
@@ -355,6 +367,8 @@ int main(int argc, char *argv[]) {
 
     start = MPI_Wtime();
 
+    bool mats_converged = false;
+    double mats_last_err = 0.0;
     for(int iter=0;iter<=MatsMaxIter;iter++){
       double err=0.0;
       double tot_err = 0.0;
@@ -373,8 +387,12 @@ int main(int argc, char *argv[]) {
       err = std::reduce(errk.begin(),errk.end());
       MPI_Allreduce(&err, &tot_err, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD); 
       if(mpi_rank==mpi_root) std::cout << "------ Matsubara Iteration: "  << iter << " tot err: " << tot_err << "\n";
-      if((tot_err <= MatsMaxErr) && (iter!=0)) break;
+      mats_last_err = tot_err;
+      if((tot_err <= MatsMaxErr) && (iter!=0)) { mats_converged = true; break; }
     }
+    if(!mats_converged && mpi_rank==mpi_root)
+      std::cerr << "WARNING: Matsubara loop reached MatsMaxIter = " << MatsMaxIter << " without converging: last tot err = "
+                << mats_last_err << " > MatsMaxErr = " << MatsMaxErr << "\n";
 
     end = MPI_Wtime();
 
@@ -399,6 +417,8 @@ int main(int argc, char *argv[]) {
 
     start = MPI_Wtime();
 
+    bool boot_converged = false;
+    double boot_last_err = 0.0;
     for(int iter=0;iter<=BootMaxIter;iter++){
       
       double err=0.0;
@@ -438,9 +458,13 @@ int main(int argc, char *argv[]) {
       MPI_Allreduce(&err, &tot_err, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);  
 
       if(mpi_rank==mpi_root) std::cout << "---- Bootstrap Iteration: "  << iter << " tot err: " << tot_err << "\n";
-      if((tot_err <= BootMaxErr) && (iter!=0)) break;
+      boot_last_err = tot_err;
+      if((tot_err <= BootMaxErr) && (iter!=0)) { boot_converged = true; break; }
 
     } // Bootstrap iteration loop
+    if(!boot_converged && mpi_rank==mpi_root)
+      std::cerr << "WARNING: bootstrap loop reached BootMaxIter = " << BootMaxIter << " without converging: last tot err = "
+                << boot_last_err << " > BootMaxErr = " << BootMaxErr << "\n";
 
     // Correlation energy for t = 0..k: (1/2) sum_spins (1/N_k) sum_k Re(-i[Sigma_k * G_k]^<(t,t)) (Galitskii-Migdal)
     for(int tstp = 0; tstp <= SolverOrder; tstp++){
@@ -478,9 +502,54 @@ int main(int argc, char *argv[]) {
 
   // initial time step
   if(checkpoint_exists){
-    t0=corrK_rank[0]->G_.tstpmk() + corrK_rank[0]->G_.k() + 1;
+    // B35: a rank may hold no k-points (more ranks than k-points), so t0 cannot be read from corrK_rank[0] on every
+    // rank. Each rank with k-points takes it from its checkpointed G's (all must agree); the value is then shared.
+    const int none = -1;
+    int t0_lo = std::numeric_limits<int>::max(), t0_hi = none;
+    for(int k = 0; k < Nk_rank; k++){
+      int tk = corrK_rank[k]->G_.tstpmk() + corrK_rank[k]->G_.k() + 1;
+      t0_lo = std::min(t0_lo, tk);
+      t0_hi = std::max(t0_hi, tk);
+    }
+    int t0_min = 0, t0_max = 0;
+    MPI_Allreduce(&t0_lo, &t0_min, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+    MPI_Allreduce(&t0_hi, &t0_max, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+    if(t0_max == none || t0_min != t0_max){
+      if(mpi_rank==mpi_root) std::cerr << "Error: the checkpoint files in " << checkpoint_dir << " are from different time "
+                                       << "steps (restart t0 from " << t0_min << " to " << t0_max << ")\n";
+      MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+    t0 = t0_max;
+    if(mpi_rank==mpi_root) std::cout << "restart from checkpoint: t0 = " << t0 << "\n";
   } else{
     t0=SolverOrder+1;
+  }
+
+  // Restart (root): restore the per-step timings for t < t0 from obs_checkpoint.h5 (written since WP9; older
+  // checkpoints leave them 0), and warn when the checkpoint predates the WP8b energy datasets.
+  if(checkpoint_exists && mpi_rank==mpi_root){
+    h5e::File f(output_dir + "obs_checkpoint.h5", h5e::File::ReadOnly);
+    auto restore_timing = [&](const char *name, std::vector<double> &dst) {
+      if(!f.exist(name)) return false;
+      std::vector<double> src = f.getDataSet(name).read<std::vector<double>>();
+      for(int ti = 0; ti < t0 && ti < (int)src.size() && ti < (int)dst.size(); ti++) dst[ti] = src[ti];
+      return true;
+    };
+    bool have_timings = restore_timing("timing_updateBlocks", timing_upBlocks);
+    have_timings = restore_timing("timing_Extrapolate", timing_Extrapolate) && have_timings;
+    have_timings = restore_timing("timing_SelfEnergy", timing_SE) && have_timings;
+    have_timings = restore_timing("timing_dyson", timing_dyson) && have_timings;
+    if(!have_timings)
+      std::cerr << "WARNING: obs_checkpoint.h5 has no timing_* datasets (checkpoint written before WP9): "
+                << "timings_file.h5 stays 0 for t < " << t0 << "\n";
+    std::vector<std::string> missing;
+    for(const char *name : {"current_x", "energy_band", "energy_corr"}) if(!f.exist(name)) missing.push_back(name);
+    if(!missing.empty()){
+      std::cerr << "WARNING: obs_checkpoint.h5 predates the WP8b energy bookkeeping (missing:";
+      for(auto &m : missing) std::cerr << " " << m;
+      std::cerr << "): these datasets, and energy_total and energy_deposited derived from them, are not restored "
+                << "(0 / wrong) for t < " << t0 << "\n";
+    }
   }
 
   // conditions to stop time stepping
@@ -488,6 +557,7 @@ int main(int argc, char *argv[]) {
   int time_stop_mess = 0; // local time limit reached 
   int tot_mem_stop_mess = 0; // global memory limit reached
   int err_mess_tstp = 0; // convergance reached at time step
+  double step_last_err = 0.0; // tot err of the last corrector iteration (thread 0)
   std::vector<double> ecorr_k(Nk_rank); // per local k: Re(-i[Sigma_k * G_k]^<(t,t)) at the current time step
 
 #pragma omp parallel shared(comm, se_eval, time_stop_mess, tot_mem_stop_mess, mem_stop_mess, err_mess_tstp)
@@ -594,6 +664,7 @@ int main(int argc, char *argv[]) {
           jxt_iter_local[iter][tstp]=obs[0]/Amax;
 
           if(mpi_rank==mpi_root) std::cout << "------ Time Stepping Iteration: "  << iter << ", tot err: " << tot_err << std::endl;
+          step_last_err = tot_err;
 
           if((tot_err <= StepMaxErr) && (iter!=0)){
             err_mess_tstp = 1;
@@ -601,9 +672,16 @@ int main(int argc, char *argv[]) {
         }
         #pragma omp barrier
       }
+      if(thread_id==0 && mpi_rank==mpi_root && err_mess_tstp == 0)
+        std::cerr << "WARNING: corrector loop at tstp = " << tstp << " reached StepMaxIter = " << StepMaxIter
+                  << " without converging: last tot err = " << step_last_err << " > StepMaxErr = " << StepMaxErr << "\n";
 
       // Correlation energy at tstp (converged G; Sigma of the last corrector iteration): each thread its own k-points,
       // with its own dyson object (gamma_integral uses dyson scratch); thread 0 sums in k order (thread-count independent).
+      // Unlike SC_example, Sigma is NOT re-evaluated from the converged G before this (that would cost one more
+      // self-energy evaluation with its MPI exchange per step and would change the stored Sigma, i.e. the propagation).
+      // Sigma is from the G of the previous corrector iteration; the difference is of the order of the last corrector
+      // change of G, i.e. bounded by ~StepMaxErr (WP9 decision: documented, not changed).
       if(th_my_Nk != 0){
         for(int k=th_my_init_k;k<=th_my_end_k;k++){
           cplx res;
@@ -626,6 +704,8 @@ int main(int argc, char *argv[]) {
         if(stop_time>time_limit){
           time_stop_mess = 1;
         }
+        bool step_stop = (stop_tstp >= 0 && tstp >= stop_tstp && tstp < Nt-1);
+        if(step_stop) time_stop_mess = 1;   // same value on every rank
         MPI_Bcast(&time_stop_mess,1,MPI_INT,mpi_root,MPI_COMM_WORLD);
 
         MemInfo mem = getMemoryInfo();
@@ -664,7 +744,8 @@ int main(int argc, char *argv[]) {
           file.close();
 
           if(mpi_rank==mpi_root){
-            if(time_stop_mess) std::cout << "REACHED THE TIME LIMIT\n";
+            if(step_stop) std::cout << "REACHED THE STOP TIME STEP __stop_tstp= " << stop_tstp << "\n";
+            else if(time_stop_mess) std::cout << "REACHED THE TIME LIMIT\n";
           }
 
           if(mem_stop_mess && (mem.available<mem_limit)) {
@@ -727,6 +808,11 @@ int main(int argc, char *argv[]) {
             h5e::dump<std::vector<double>>(out_file, "current_x", current_x_total);
             h5e::dump<std::vector<double>>(out_file, "energy_band", energy_band_total);
             h5e::dump<std::vector<double>>(out_file, "energy_corr", energy_corr_total);
+            // root's per-step timings (restored for t < t0 on the restart; written to timings_file.h5 at the end)
+            h5e::dump<std::vector<double>>(out_file, "timing_updateBlocks", timing_upBlocks);
+            h5e::dump<std::vector<double>>(out_file, "timing_Extrapolate", timing_Extrapolate);
+            h5e::dump<std::vector<double>>(out_file, "timing_SelfEnergy", timing_SE);
+            h5e::dump<std::vector<double>>(out_file, "timing_dyson", timing_dyson);
           }
         }// checkpoint
       }// thread_id==0
@@ -809,7 +895,8 @@ int main(int argc, char *argv[]) {
                           "so jxtnorm = -sigma(t) of paper Eq. 30 for the default step");
       describe("jytnorm", "<j_y>(t)/Amax (paper Eq. 26, spin summed)");
       describe("Ekint", "(2/N_k) sum_k (eps_k - mu~) rho_k(t) with the BARE eps_k (no A(t)) and the input mu~ (paper Eq. 27 "
-                        "as printed); not the band energy of the driven system: see energy_band");
+                        "as printed); not the band energy of the driven system: see energy_band. Deprecated (kept for "
+                        "compatibility): use energy_band");
       describe("Navgt", "<n_s>(t) = (1/N_k) sum_k rho_k(t), density per spin (paper Eq. 28)");
       describe("jxt_iter", "jxtnorm after each bootstrap (t <= k) or corrector (t > k) iteration; rows = iterations");
     }
@@ -865,7 +952,9 @@ int main(int argc, char *argv[]) {
       "shift U<n_s> is absorbed in the input mu~ = mu - U<n_s>, paper Eq. 25; Fock = 0 for on-site U)");
     dump_described("energy_corr", energy_corr_total,
       "(1/2) (2/N_k) sum_k Im[Sigma_2B,k * G_k]^<(t,t) = (1/2) sum_spins (1/N_k) sum_k Re(-i[Sigma*G]^<) "
-      "(Galitskii-Migdal correlation part, thesis Eq. 4.29; dyson::gamma_integral per k-point)");
+      "(Galitskii-Migdal correlation part, thesis Eq. 4.29; dyson::gamma_integral per k-point). For t > k, G is the "
+      "converged corrector iterate and Sigma that of the last corrector iteration (not re-evaluated from the final G as "
+      "in SC_example); the difference is bounded by ~StepMaxErr");
     dump_described("energy_total", energy_total_total,
       "energy_band + energy_hf + energy_corr = <H(t)> + mu N of paper Eq. 25 (mu N conserved, omitted); "
       "energy_total(t) - energy_total(0) = energy_deposited(t) up to the discretisation error");

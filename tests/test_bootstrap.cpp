@@ -793,6 +793,18 @@ TEST(Bootstrap2leg, FunctionOverloadForwardsImpTp0) {  // B25
   }
 }
 
+// WP7b side finding 4 (WP9a): dyson_start_ntti projects the boundary value G^<(0,0) = -[G^rceil(0,0)]^dagger onto its
+// anti-Hermitian part, so it is anti-Hermitian exactly (before: ~1e-13 from the off-node DLR evaluation at tau = 0).
+TEST(BootstrapRhoDiagonal, BoundaryValueExactlyAntiHermitian) {
+  for (int xi : {-1, 1})
+    for (int k : {2, 5}) {
+      cl::Out o = cl::run(xi, k, 0.1, cl::NTTI);
+      const CM &g00 = o.GLout[0];   // (i, j) = (0, 0)
+      EXPECT_EQ((g00 + g00.adjoint()).norm(), 0.0) << "xi=" << xi << " k=" << k;
+      EXPECT_GT(g00.norm(), 1e-3);
+    }
+}
+
 // WP7b: a non-contracting RHO_DIAGONAL bootstrap fixed point (large h) raises numerical_error instead of returning an
 // unconverged result
 TEST(BootstrapRhoDiagonal, NonContractingThrows) {  // closed 3-level model: contracting at h = 0.4, diverging at h = 0.6

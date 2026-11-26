@@ -9,30 +9,30 @@ namespace h_nessi {
 
 void dyson::write_timing(h5e::File &file, std::string label) {
   if(profile_) {
-    h5e::dump(file, label + "/timing", timing);
+    h5e::dump(file, h5_join({label, "timing"}), timing);
   }
   else {
     std::cout << "write_timing() was called, however profiling was not enabled" << std::endl;
     std::cout << "To enable profiling, provide profile=true to the dyson constructor" << std::endl;
   }
-  h5e::dump(file, label + "/rho_version", rho_version_);
+  h5e::dump(file, h5_join({label, "rho_version"}), rho_version_);
 }
 
 void dyson::write_checkpoint_hdf5(h5e::File &file, std::string label) {
   call_scope cs(*this);
   // ST-11 (D-9): the DLR parameters, verified by the checkpoint constructor
-  h5e::dump(file, label + "/xi", xi_);
-  h5e::dump(file, label + "/r", r_);
-  h5e::dump(file, label + "/beta", beta_);
-  h5e::dump(file, label + "/eps", dlr_eps_);
-  h5e::dump(file, label + "/lambda", dlr_lambda_);
-  h5e::dump(file, label + "/nao", nao_);
-  h5e::dump(file, label + "/es", es_);
-  h5e::dump(file, label + "/k", k_);
-  h5e::dump(file, label + "/nt", nt_);
-  h5e::dump(file, label + "/rho_version", rho_version_);
-  h5e::dump(file, label + "/profile", profile_);
-  if(profile_) h5e::dump(file, label + "/timing", timing);
+  h5e::dump(file, h5_join({label, "xi"}), xi_);
+  h5e::dump(file, h5_join({label, "r"}), r_);
+  h5e::dump(file, h5_join({label, "beta"}), beta_);
+  h5e::dump(file, h5_join({label, "eps"}), dlr_eps_);
+  h5e::dump(file, h5_join({label, "lambda"}), dlr_lambda_);
+  h5e::dump(file, h5_join({label, "nao"}), nao_);
+  h5e::dump(file, h5_join({label, "es"}), es_);
+  h5e::dump(file, h5_join({label, "k"}), k_);
+  h5e::dump(file, h5_join({label, "nt"}), nt_);
+  h5e::dump(file, h5_join({label, "rho_version"}), rho_version_);
+  h5e::dump(file, h5_join({label, "profile"}), profile_);
+  if(profile_) h5e::dump(file, h5_join({label, "timing"}), timing);
 }
 
 
@@ -142,10 +142,10 @@ void dyson::print_memory_usage(void) {
 dyson::dyson(h5e::File &in, std::string label, dlr_info &dlr) :
 dlr_(dlr)
  {
-  nao_ = in.getDataSet(label + std::string("/nao")).read<int>();
-  es_ = in.getDataSet(label + std::string("/es")).read<int>();
-  k_ = in.getDataSet(label + std::string("/k")).read<int>();
-  nt_ = in.getDataSet(label + std::string("/nt")).read<int>();
+  nao_ = in.getDataSet(h5_join({label, "nao"})).read<int>();
+  es_ = in.getDataSet(h5_join({label, "es"})).read<int>();
+  k_ = in.getDataSet(h5_join({label, "k"})).read<int>();
+  nt_ = in.getDataSet(h5_join({label, "nt"})).read<int>();
   // DY-C3 (tier 2, without the Q5 xi/r/beta comparison)
   check_dyson_ctor_("dyson::dyson(h5e::File&,label,dlr)", nt_, nao_, k_, dlr);
   HNESSI_REQUIRE(es_ == nao_*nao_, "dyson::dyson(h5e::File&,label,dlr)", HNESSI_KV(es_), HNESSI_KV(nao_));
@@ -155,7 +155,7 @@ dlr_(dlr)
   beta_ = dlr.beta();
   xi_ = dlr.xi();
 
-  rho_version_ = in.getDataSet(label + std::string("/rho_version")).read<bool>();
+  rho_version_ = in.getDataSet(h5_join({label, "rho_version"})).read<bool>();
 
   NTauTmp_.resize(r_ * es_);
   NTauTmp2_.resize(r_ * es_);
@@ -174,8 +174,8 @@ dlr_(dlr)
 
   ZMatrixMap(iden_.data(), nao_, nao_).noalias() = ZMatrix::Identity(nao_, nao_);
 
-  profile_ = in.getDataSet(label + std::string("/profile")).read<bool>();
-  timing = profile_ ? in.getDataSet(label + std::string("/timing")).read<DMatrix>() : DMatrix::Zero(0,25);
+  profile_ = in.getDataSet(h5_join({label, "profile"})).read<bool>();
+  timing = profile_ ? in.getDataSet(h5_join({label, "timing"})).read<DMatrix>() : DMatrix::Zero(0,25);
   HNESSI_REQUIRE(!profile_ || (timing.rows() == nt_ && timing.cols() == 25), "dyson::dyson(h5e::File&,label,dlr)",
                  HNESSI_KV(timing.rows()), HNESSI_KV(timing.cols()), HNESSI_KV(nt_));
   herm_diag_.assign(nt_+1, 0.0);
@@ -187,12 +187,12 @@ dlr_(dlr)
 
   // ST-11 (D-9, DY-C3): the dlr_info must have the statistics and DLR parameters of the run that wrote the checkpoint
   // (doubles: relative tolerance 1e-12). Checkpoints written before WP6b do not store them and are not verified.
-  if(in.exist(label + std::string("/xi"))) {
-    int cxi = in.getDataSet(label + std::string("/xi")).read<int>();
-    int cr = in.getDataSet(label + std::string("/r")).read<int>();
-    double cbeta = in.getDataSet(label + std::string("/beta")).read<double>();
-    double ceps = in.getDataSet(label + std::string("/eps")).read<double>();
-    double clambda = in.getDataSet(label + std::string("/lambda")).read<double>();
+  if(in.exist(h5_join({label, "xi"}))) {
+    int cxi = in.getDataSet(h5_join({label, "xi"})).read<int>();
+    int cr = in.getDataSet(h5_join({label, "r"})).read<int>();
+    double cbeta = in.getDataSet(h5_join({label, "beta"})).read<double>();
+    double ceps = in.getDataSet(h5_join({label, "eps"})).read<double>();
+    double clambda = in.getDataSet(h5_join({label, "lambda"})).read<double>();
     auto same = [](double a, double b) { return std::abs(a - b) <= 1e-12 * std::max(std::abs(a), std::abs(b)); };
     HNESSI_REQUIRE_STATE(cxi == xi_ && cr == r_ && same(cbeta, beta_) && same(ceps, dlr_eps_) &&
                          same(clambda, dlr_lambda_), "dyson::dyson(h5e::File&,label,dlr)", HNESSI_KV(cxi),

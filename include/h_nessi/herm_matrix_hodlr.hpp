@@ -355,13 +355,14 @@ class herm_matrix_hodlr{
    * (as above, without mat). Only the window is copied, not the archived
    * history (blocks, direct stores, left edges, mat, GMConvTens): G continues
    * time stepping consistently only if its archive already holds rows
-   * 0..tstpmk-1 of the same function. Use operator= for a full copy. */
+   * 0..tstpmk-1 of the same function. Use operator= for a full copy.
+   * G.can_extrap() is set to this->can_extrap() (the window includes slot T, which extrapolate reads). */
   void get_timestep_curr(herm_matrix_hodlr &G);
   /** Copy timestep `tstp` of `G` into *this (G is not modified); same pieces
    * and preconditions as get_timestep_curr(tstp,G). */
   void set_timestep_curr(int tstp,herm_matrix_hodlr &G);
   /** Copy the whole current window of `G` into *this (G is not modified):
-   * sets this->tstpmk = G.tstpmk and copies timesteps tstpmk..tstpmk+k. */
+   * sets this->tstpmk = G.tstpmk and copies timesteps tstpmk..tstpmk+k; this->can_extrap() = G.can_extrap(). */
   void set_timestep_curr(herm_matrix_hodlr &G);
 
   /** Raw pointer to matsubara matrix `i` storage (double buffer). */

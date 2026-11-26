@@ -203,7 +203,9 @@ double dyson::dyson_start_ret_ntti(herm_matrix_hodlr &G, double mu, cplx *H, her
     for(m = 1; m <= k_; m++) {
       ZMatrixMap MMap0 = ZMatrixMap(M_.data(), nao_, nao_);
       ZMatrixMap QMap0 = ZMatrixMap(Q_.data(), nao_, nao_);
-      MMap0 = -ncplxi/h * I.poly_diff(k_,k_) * IMap - ZMatrixMap(H, nao_, nao_).adjoint() + mu*IMap - h * I.poly_integ(k_-m,k_,k_) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(0,0), nao_, nao_);
+      // M multiplies X = G^R(m,0) from the right (right-acting equation at t' = 0): G^R(m,0) [mu - h(0)] (was h(0)^dagger,
+      // equal for the Hermitian h that D-11 guarantees; ISSUES Q3)
+      MMap0 = -ncplxi/h * I.poly_diff(k_,k_) * IMap - ZMatrixMap(H, nao_, nao_) + mu*IMap - h * I.poly_integ(k_-m,k_,k_) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(0,0), nao_, nao_);
       QMap0.setZero();
       for(int i = 0; i < k_-m; i++)  QMap0 -= ncplxi/h * I.poly_diff(k_,i) * ZMatrixMap(G.curr_timestep_ret_ptr(k_-i,m), nao_, nao_).adjoint();
       for(int i = k_-m; i < k_; i++) QMap0 += ncplxi/h * I.poly_diff(k_,i) * ZMatrixMap(G.curr_timestep_ret_ptr(m,k_-i), nao_, nao_);
@@ -237,9 +239,11 @@ double dyson::dyson_start_les(herm_matrix_hodlr &G, double mu, cplx *H, herm_mat
   double err = 0;
   for(int tp = 0; tp <= k_; tp++) {
     G.get_tv_tau(tp, 0, dlr_, M_.data());
+    ZMatrix X = -ZMatrixMap(M_.data(), nao_, nao_).adjoint();
+    if(tp == 0) X = boundary_antihermitian_(X);
     for( int l = 0; l <= k_-tp; l++) {
-      err += (ZMatrixMap(G.curr_timestep_les_ptr(l,l+tp), nao_, nao_) + ZMatrixMap(M_.data(), nao_, nao_).adjoint()).norm();
-      ZMatrixMap(G.curr_timestep_les_ptr(l,l+tp), nao_, nao_).noalias() = -ZMatrixMap(M_.data(), nao_, nao_).adjoint();
+      err += (ZMatrixMap(G.curr_timestep_les_ptr(l,l+tp), nao_, nao_) - X).norm();
+      ZMatrixMap(G.curr_timestep_les_ptr(l,l+tp), nao_, nao_).noalias() = X;
     }
   }
 
@@ -247,12 +251,19 @@ double dyson::dyson_start_les(herm_matrix_hodlr &G, double mu, cplx *H, herm_mat
 }
 
 
+// WP7b side finding 4 (WP9a): the boundary value G^<(0,0) = -[G^rceil(0,0)]^dagger is anti-Hermitian only to the
+// accuracy of the off-node DLR evaluation of G^rceil at tau = 0 (~1e-13); project it onto its anti-Hermitian part.
+// (X - X^dagger)/2 is exactly anti-Hermitian in floating point (a - b == -(b - a), real diagonal exactly 0).
+ZMatrix dyson::boundary_antihermitian_(const ZMatrix &X) {
+  return 0.5 * (X - X.adjoint());
+}
+
 // Rows m = 1..k of G^< (and, with RHO_DIAGONAL, the diagonal) for dyson_start_les_ntti, _ntti_nobc and _2leg, after
-// row m = 0 has been set by the caller. The three differ only in h(t) in the row matrix (ntti: H^*, others: H^T, equal
-// for Hermitian H), h(t) in the diagonal equation (ntti: H^dagger, others: H) and the mixed les_it_int terms (absent for
-// _2leg). err accumulates the change of G^<(m,n), 1 <= m <= n <= k.
+// row m = 0 has been set by the caller. The three differ only in the mixed les_it_int terms (absent for _2leg). (Until
+// WP9 the ntti variant used h^* in the row matrix and h^dagger in the diagonal equation where the equations have h^T and
+// h; equal for the Hermitian h that D-11 guarantees, ISSUES Q3.) err accumulates the change of G^<(m,n), 1 <= m <= n <= k.
 void dyson::start_les_rows_(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I,
-                            double h, bool ntti_ham, bool mixed, double &err, const char *where) {
+                            double h, bool mixed, double &err, const char *where) {
   const cplx cplxi = cplx(0,1);
   ZMatrixMap IMap = ZMatrixMap(iden_.data(), nao_, nao_);
   const int kn = k_*nao_;
@@ -280,10 +291,7 @@ void dyson::start_les_rows_(herm_matrix_hodlr &G, double mu, cplx *H, herm_matri
       for(int l = 1; l <= k_; l++) {
         auto MBlock = MIC.block((n-1)*nao_, (l-1)*nao_, nao_, nao_);
         MBlock += -cplxi/h * I.poly_diff(n,l) * IMap;
-        if(n==l) {
-          if(ntti_ham) MBlock -= ZMatrixMap(H+l*es_, nao_, nao_).conjugate() - mu*IMap;
-          else         MBlock -= ZMatrixMap(H+l*es_, nao_, nao_).transpose() - mu*IMap;
-        }
+        if(n==l) MBlock -= ZMatrixMap(H+l*es_, nao_, nao_).transpose() - mu*IMap;   // [G^<(m,l) (h(l)-mu)]^T
         if(n>=l) MBlock -= (h * I.poly_integ(0,n,l) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(n,l), nao_, nao_).adjoint()).transpose();
         else if(n<l) MBlock += (h * I.poly_integ(0,n,l) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(l,n), nao_, nao_)).transpose();
       }
@@ -368,14 +376,15 @@ void dyson::start_les_rows_(herm_matrix_hodlr &G, double mu, cplx *H, herm_matri
         ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) = ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose();
       }
     }
-    // diagonal. B_i = i[ G^<(i,i) eps(i)^dagger + int G^R Sigma^< + int G^< Sigma^A - i int G^| Sigma^| ] (doc 22 §4.6
+    // ISSUES Q8 (D-8, intended): the right-hand side is explicit: B uses the rows G^<(i,l) of this pass and the
+    // diagonal G^<(i,i) of the previous pass (the l = i terms); the loop below iterates the pair to its fixed point.
+    // diagonal. B_i = i[ G^<(i,i) eps(i) + int G^R Sigma^< + int G^< Sigma^A - i int G^| Sigma^| ] (doc 22 §4.6
     // step 4); the l = i term of int G^< Sigma^A uses G^<(i,i) itself.
     // I         =  S^R G^< + S^< G^A
     // I^\dagger = -G^< S^A - G^R S^<
     for(int i = 1; i <= k_; i++) {
       ZMatrix B = ZMatrix::Zero(nao_, nao_);
-      if(ntti_ham) B += cplxi * ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) * (ZMatrixMap(H+i*es_, nao_, nao_).adjoint() - mu*IMap);
-      else         B += cplxi * ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) * (ZMatrixMap(H+i*es_, nao_, nao_) - mu*IMap);
+      B += cplxi * ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) * (ZMatrixMap(H+i*es_, nao_, nao_) - mu*IMap);
       for(int l = 0; l <= i; l++) {
         B += cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_ret_ptr(i,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_les_ptr(l,i), nao_, nao_);
       }
@@ -411,7 +420,10 @@ void dyson::start_les_rows_(herm_matrix_hodlr &G, double mu, cplx *H, herm_matri
   HNESSI_ENSURE(converged, where, HNESSI_KV(pass), HNESSI_KV(diverged), HNESSI_KV(change), HNESSI_KV(change_min),
                 HNESSI_KV(scale), HNESSI_KV(k_), HNESSI_KV(h),
                 detail::note{"the RHO_DIAGONAL bootstrap fixed point (rows <-> diagonal, t = 0..k) did not converge "
-                             "(diverging or too slow); reduce h or use RHO_HORIZONTAL"});
+                             "(diverging or too slow). It stops contracting at about h*spread(h(t)) ~ 0.6-1 (smaller for "
+                             "larger k; spread = largest minus smallest eigenvalue of h(t)), at roughly half the h at "
+                             "which the RHO_DIAGONAL time step corrector stops converging (WP9a measurement); reduce h or "
+                             "use RHO_HORIZONTAL"});
 
   size_t q = 0;
   for(int m = 1; m <= k_; m++)
@@ -429,12 +441,14 @@ double dyson::dyson_start_les_ntti(herm_matrix_hodlr &G, double mu, cplx *H, her
   double err = 0;
   for(int tp = 0; tp <= k_; tp++) {
     G.get_tv_tau(tp, 0, dlr_, M_.data());
-    err += (ZMatrixMap(G.curr_timestep_les_ptr(0,tp), nao_, nao_) + ZMatrixMap(M_.data(), nao_, nao_).adjoint()).norm();
-    ZMatrixMap(G.curr_timestep_les_ptr(0,tp), nao_, nao_).noalias() = -ZMatrixMap(M_.data(), nao_, nao_).adjoint();
+    ZMatrix X = -ZMatrixMap(M_.data(), nao_, nao_).adjoint();
+    if(tp == 0) X = boundary_antihermitian_(X);
+    err += (ZMatrixMap(G.curr_timestep_les_ptr(0,tp), nao_, nao_) - X).norm();
+    ZMatrixMap(G.curr_timestep_les_ptr(0,tp), nao_, nao_).noalias() = X;
   }
 
   // rows m = 1..k and, with RHO_DIAGONAL, the diagonal (converged to the fixed point of the pair, B34)
-  start_les_rows_(G, mu, H, Sigma, I, h, true, true, err, where);
+  start_les_rows_(G, mu, H, Sigma, I, h, true, err, where);
 
   return cs.outer() ? ensure_finite_(err, where) : err;
 }
@@ -496,7 +510,7 @@ double dyson::dyson_start_les_ntti_nobc(herm_matrix_hodlr &G, double mu, cplx *H
   }
 
   // rows m = 1..k and, with RHO_DIAGONAL, the diagonal (converged to the fixed point of the pair, B34)
-  start_les_rows_(G, mu, H, Sigma, I, h, false, true, err, where);
+  start_les_rows_(G, mu, H, Sigma, I, h, true, err, where);
 
   return cs.outer() ? ensure_finite_(err, where) : err;
 }
@@ -557,7 +571,7 @@ double dyson::dyson_start_les_2leg(herm_matrix_hodlr &G, double mu, cplx *H, her
   }
 
   // rows m = 1..k and, with RHO_DIAGONAL, the diagonal (converged to the fixed point of the pair, B34)
-  start_les_rows_(G, mu, H, Sigma, I, h, false, false, err, where);
+  start_les_rows_(G, mu, H, Sigma, I, h, false, err, where);
 
   return cs.outer() ? ensure_finite_(err, where) : err;
 }

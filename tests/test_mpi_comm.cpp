@@ -622,6 +622,13 @@ TEST(MpiCommChecksDeathTest, NospawnCheckInsideRegionAborts) {
                "max_component_size_ >= 2\\*nao_\\*nao_ violated");
   EXPECT_DEATH(nospawn_bad_count_in_region(1), "exceeds max_component_size_");
 }
+// WP6b side finding 4 (fixed in WP9a): with MPI initialised, the abort of a failed check inside a user parallel region
+// is MPI_Abort(MPI_COMM_WORLD, 1) (the shim's MPI_Abort prints and exits with the code), so other ranks end too.
+TEST(MpiCommChecksDeathTest, CheckInsideRegionCallsMpiAbort) {
+  GTEST_FLAG_SET(death_test_style, "threadsafe");
+  EXPECT_EXIT(nospawn_bad_count_in_region(0), ::testing::ExitedWithCode(1),
+              "calling MPI_Abort\\(MPI_COMM_WORLD, 1\\)(.|\n)*shim MPI_Abort\\(1\\)");
+}
 
 // WP6a OpenMP error policy, item 3: an error raised inside a library-owned parallel region of a _spawn routine (a
 // library check, or an exception from a user lambda) is captured and rethrown on the calling thread, so it is

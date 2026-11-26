@@ -37,3 +37,9 @@ Vector potential (optional input keys; without them the default step is used):
 Checkpoint/restart: when __time_limit= (seconds) or __memory_limit= is reached, the run writes
 checkpoint_dir/GSigma<k>.h5 and output_dir/obs_checkpoint.h5 and stops. Rerun with __checkpoint= true and the same
 output_dir and checkpoint_dir to continue from the next time step.
+Optional __stop_tstp= N writes the checkpoint and stops after time step N (deterministic; used by the restart ctests).
+A restart works with any number of ranks per k-point distribution, including ranks without k-points. obs_checkpoint.h5
+also carries the per-step timings, so timings_file.h5 of a restarted run is complete.
+Warnings (stderr, "WARNING:"): a Matsubara, bootstrap or corrector loop that reaches its iteration cap without meeting
+its tolerance (the run continues with the last iterate), and a restart from an older obs_checkpoint.h5 without the
+timing or energy datasets. Ekint is deprecated in favour of energy_band (kept for compatibility).

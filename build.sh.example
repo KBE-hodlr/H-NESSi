@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Template build script for H-NESSi.  Copy it to build.sh (ignored by git), replace the <...> placeholders, and run it
+# from the source directory:   cp build.sh.example build.sh && ./build.sh [BuildType] [extra cmake arguments]
+#
+# BuildType: Release (default), Debug, RelWithAsserts (optimised, with the tier-1 checks on), RelWithDebInfo.
+# Requirements: a C++20 compiler, MPI, OpenMP, HDF5, FFTW3 (with fftw3_omp), Eigen >= 3.4, libdlr (built separately).
+# HighFive and googletest are fetched by CPM (set CPM_SOURCE_CACHE to share the download between build trees).
+# The link line is the same on every configure (no second `cmake .` needed).
+set -euo pipefail
+
+BUILD_TYPE=${1:-Release}
+shift || true
+
+SRC_DIR=$(cd "$(dirname "$0")" && pwd)
+BUILD_DIR=${BUILD_DIR:-${SRC_DIR}/build}          # e.g. build, build-debug, build-relasserts
+
+# --- edit these ------------------------------------------------------------------------------------------------
+CC_COMPILER="<cc>"                                  # C compiler or wrapper (Cray: cc; otherwise e.g. mpicc or gcc)
+CXX_COMPILER="<CC>"                                 # C++ compiler or wrapper (Cray: CC; otherwise e.g. mpicxx or g++)
+FFTW_DIR="<path/to/fftw>"                           # contains include/fftw3.h and lib/libfftw3{,_omp}.*
+LIBDLR_LIB="<path/to/libdlr/build/lib>"             # contains libdlr_c.so
+LIBDLR_HEADER="<path/to/libdlr/src>"                # contains dlr_c/dlr_c.h
+CPM_CACHE=${SRC_DIR}/.cpm-cache                   # CPM download cache
+# Optional:
+#   -DBUILD_TEST=ON                                 regression suite (ctest; tests/README.md): on below, drop to skip
+#   -DINCLUDE_NESSI=ON -DNESSI_ROOT=<prefix>        NESSi interoperability (libcntr built with omp, hdf5, mpi ON;
+#                                                   otherwise set -DNESSI_CNTR_USE_{HDF5,OMP,MPI}=OFF to match)
+#   -DHNESSI_BLAS_LIBRARIES=<serial BLAS/LAPACK>    BLAS/LAPACK linked ahead of libdlr's own (default: the serial
+#                                                   Cray libsci on Cray PE, else libdlr's). Must be serial.
+# ---------------------------------------------------------------------------------------------------------------
+
+for v in "${CC_COMPILER}" "${CXX_COMPILER}" "${FFTW_DIR}" "${LIBDLR_LIB}" "${LIBDLR_HEADER}"; do
+  case "$v" in "<"*">") echo "build.sh: replace the placeholder $v first" >&2; exit 1;; esac
+done
+
+mkdir -p "${BUILD_DIR}"
+cd "${BUILD_DIR}"
+cmake -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+      -DCMAKE_C_COMPILER="${CC_COMPILER}" -DCMAKE_CXX_COMPILER="${CXX_COMPILER}" \
+      -DFFTW_DIR="${FFTW_DIR}" -DLIBDLR_LIB="${LIBDLR_LIB}" -DLIBDLR_HEADER="${LIBDLR_HEADER}" \
+      -DCPM_SOURCE_CACHE="${CPM_CACHE}" \
+      -DBUILD_TEST=ON \
+      "$@" "${SRC_DIR}"
+make -j"${NPROC:-8}"

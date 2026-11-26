@@ -798,8 +798,8 @@ TEST(LesNobc, MatchesDefaultTimestep_B14) {
 }
 
 // =============================================================================================== B28
-// dyson timing column 5 (intdircorr) must be accumulated (non-zero) when profiling is on.
-TEST(DysonTiming, KnownBug_B28_Column5Accumulated) {
+// B28 (fixed in WP9a): dyson timing column 5 (intdircorr) must be accumulated (non-zero) when profiling is on.
+TEST(DysonTiming, Column5Accumulated_B28) {
   hn_test::run_isolated([] {
     int nt = 60, nlvl = 3, k = 3, nao = 2;
     double h = 0.05, beta = 5.0;

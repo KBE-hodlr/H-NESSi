@@ -136,7 +136,8 @@ double dyson::dyson_timestep_ret(int tstp, herm_matrix_hodlr &G, double mu, cplx
     }
 
     // M contains four parts: H, mu, unknown derivative term, and unknown integral term
-    MMapSmall.noalias() = -ZMatrixMap(H + (tstp-n)*es_, nao_, nao_).conjugate();
+    // (MMapSmall is M^T: the right-acting equation has G^R(t,t') [mu - h(t')], so its transpose holds -h^T; ISSUES Q3)
+    MMapSmall.noalias() = -ZMatrixMap(H + (tstp-n)*es_, nao_, nao_).transpose();
     MMapSmall.noalias() -= h * I.omega(0) * ZMatrixMap(Sigma.retptr_col(tstp-n,tstp-n), nao_, nao_).transpose();
     MMapSmall.noalias() += (mu - I.bd_weights(0) * ncplxi / h) * IMap;
 
@@ -186,6 +187,7 @@ double dyson::dyson_timestep_ret(int tstp, herm_matrix_hodlr &G, double mu, cplx
     if( n != tstp) {
 
       intstart = std::chrono::system_clock::now();
+      const auto dircorrstart = intstart;   // column 5: direct + correction regions together (BUGS B28)
       int lstart = std::max(tstp-Sigma.r2_dir(tstp-n-1), k_+1);
       for(int ll = tstp-n; ll < tstp-lstart+1; ll++) {
         double weight = ll > tstp-n+k_-1 ? 1. : I.gregory_weights(n+1, tstp-ll);
@@ -206,6 +208,7 @@ double dyson::dyson_timestep_ret(int tstp, herm_matrix_hodlr &G, double mu, cplx
       intend = std::chrono::system_clock::now();
       intcorrdur += intend-intstart;
       intdur += intend-intstart;
+      intdircorrdur += intend-dircorrstart;
     }
   }
 

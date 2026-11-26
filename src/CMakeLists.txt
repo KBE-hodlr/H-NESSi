@@ -45,12 +45,19 @@ target_link_libraries(h_nessi PUBLIC
     ${FFTW3_OMP_LIB} 
     Eigen3::Eigen
     OpenMP::OpenMP_CXX
+    ${COMMON_LIBS}      # MPI::MPI_CXX and the serial BLAS/LAPACK (top-level CMakeLists.txt, build reproducibility)
 )
 
 if(INCLUDE_NESSI)
   # BUGS B8: the option must define the INCLUDE_NESSI macro (PUBLIC, so that herm_matrix_hodlr.hpp declares the
-  # NESSi overloads for every consumer).  CNTR_USE_* must match the libcntr build (omp, hdf5, mpi = ON).
-  target_compile_definitions(h_nessi PUBLIC INCLUDE_NESSI CNTR_USE_HDF5 CNTR_USE_OMP CNTR_USE_MPI)
+  # NESSi overloads for every consumer).  CNTR_USE_* must match the libcntr build (NESSI_CNTR_USE_* options,
+  # top-level CMakeLists.txt; default ON = libcntr built with -Domp=ON -Dhdf5=ON -Dmpi=ON).
+  target_compile_definitions(h_nessi PUBLIC INCLUDE_NESSI)
+  foreach(_hn_feat HDF5 OMP MPI)
+    if(NESSI_CNTR_USE_${_hn_feat})
+      target_compile_definitions(h_nessi PUBLIC CNTR_USE_${_hn_feat})
+    endif()
+  endforeach()
   target_include_directories(h_nessi PUBLIC ${NESSI_CNTR_INCLUDE_DIR})
   target_link_libraries(h_nessi PUBLIC ${NESSI_CNTR_LIBRARY} ${NESSI_CNTR_HDF5_LIBRARY})
 endif()

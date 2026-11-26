@@ -40,7 +40,9 @@ bool in_user_parallel_region() {
 #endif
 }
 
-// Prints the full message with MPI rank, OpenMP thread and file:line, then aborts.
+// Prints the full message with MPI rank, OpenMP thread and file:line, then aborts: with MPI_Abort(MPI_COMM_WORLD, 1)
+// while MPI is initialised and not finalised, so the other ranks are ended as well and do not hang in a collective
+// (WP6b side finding 4; the std::terminate handler of mpi_comm does the same for uncaught exceptions), else std::abort.
 [[noreturn]] void print_and_abort(const char *what_kind, const std::string &message, const char *file, int line) {
   std::string where;
   int rank = mpi_rank_or_minus_one();
@@ -53,7 +55,9 @@ bool in_user_parallel_region() {
   std::fprintf(stderr, "h_nessi %s: %s\n  [%s]\n  aborting (an exception cannot leave an OpenMP parallel region; "
                        "see the OpenMP error policy in h_nessi/checks.hpp)\n",
                what_kind, message.c_str(), where.c_str());
+  if (rank >= 0) std::fprintf(stderr, "  calling MPI_Abort(MPI_COMM_WORLD, 1)\n");
   std::fflush(stderr);
+  if (rank >= 0) MPI_Abort(MPI_COMM_WORLD, 1);
   std::abort();
 }
 

@@ -47,6 +47,12 @@ int main(int argc, char *argv[]){
   find_param(flin,"__nt=",nt);
   find_param(flin,"__h=",h);
   find_param(flin,"__SolverOrder=",SolverOrder);
+  // The bootstrap fills t = 0..SolverOrder, and the efield stencil and the Gregory weights of order k read k+1 grid
+  // points, so at least SolverOrder+1 time steps are needed.
+  if(nt <= SolverOrder) {
+    std::cerr << "SC.x: __nt= " << nt << " must be > __SolverOrder= " << SolverOrder << std::endl;
+    return 1;
+  }
 
   // DLR parameters
   double epsdlr, lambda, MatsMaxErr, beta;
@@ -193,6 +199,7 @@ int main(int argc, char *argv[]){
 
 	// Self Consistency for bootstrapping
   bool bootstrap_converged = false;
+  double boot_last_err = 0;
   for(int iter = 0; iter < BootstrapMaxIter; iter++) {
 
     // Evaluate Self-Energy 
@@ -207,6 +214,7 @@ int main(int argc, char *argv[]){
     double err = dyson_sol.dyson_start(G, mu, Hmf, DeltaPlusSigma, I, h);
 
     std::cout << "Bootstrap iteration " << iter << " Error: " << err << std::endl;
+    boot_last_err = err;
 
     if(err < BootstrapMaxErr) {
       std::cout << "Bootstrap Converged" << std::endl;
@@ -216,6 +224,8 @@ int main(int argc, char *argv[]){
   }
 
   if(!bootstrap_converged) {
+    std::cout << "Bootstrap did not converge in BootstrapMaxIter = " << BootstrapMaxIter << " iterations!  Final error was "
+              << boot_last_err << " (BootstrapMaxErr = " << BootstrapMaxErr << ")" << std::endl;
     exit(1);
   }
 
@@ -256,6 +266,8 @@ int main(int argc, char *argv[]){
 
     dyson_sol.extrapolate(G, I);
 
+    bool corrector_converged = false;
+    double corrector_last_err = 0;
     for(int iter = 0;  iter < CorrectorSteps; iter++) {
       // HF
       SC_gf2_solver.solve_Sigma_Fock(tstp, U_func, G, Hmf);
@@ -268,9 +280,15 @@ int main(int argc, char *argv[]){
       // step
       double err = dyson_sol.dyson_timestep(tstp, G, mu, Hmf.ptr(0), DeltaPlusSigma, I, h);
       std::cout << "tstp " << tstp << "  iter " << iter << "  Err = " << err << std::endl;
+      corrector_last_err = err;
 
-      if(err < CorrectorMaxErr) break;
+      if(err < CorrectorMaxErr) { corrector_converged = true; break; }
     }
+    // E11 (WP9): the run continues with the last iterate, but say so
+    if(!corrector_converged)
+      std::cerr << "WARNING: corrector loop at tstp = " << tstp << " reached CorrectorSteps = " << CorrectorSteps
+                << " without converging: last Err = " << corrector_last_err << " >= CorrectorMaxErr = " << CorrectorMaxErr
+                << std::endl;
 
     // Current: J = -i[G*(Delta_L - Delta_R)]^<, j = Im Tr[sigma_z (-J)] (see the declaration of `current`)
     DeltaPlusSigma.set_tstp_zero(tstp);

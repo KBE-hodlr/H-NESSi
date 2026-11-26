@@ -196,12 +196,12 @@ void dlr_info::eval_point(DColVector &tau, cplx *Gtij, cplx *Mtij) {
 }
 
 void dlr_info::write_to_hdf5(h5e::File &out, std::string label) {
-  h5e::dump(out, label + std::string("/r"), r_);
-  h5e::dump(out, label + std::string("/beta"), beta_);
-  h5e::dump(out, label + std::string("/eps"), eps_);
-  h5e::dump(out, label + std::string("/lambda"), lambda_);
-  h5e::dump(out, label + std::string("/xi"), xi_);
-  h5e::dump(out, label + std::string("/it0B"), DMatrixMap(it0B_.data(), r_, 1));
+  h5e::dump(out, h5_join({label, "r"}), r_);
+  h5e::dump(out, h5_join({label, "beta"}), beta_);
+  h5e::dump(out, h5_join({label, "eps"}), eps_);
+  h5e::dump(out, h5_join({label, "lambda"}), lambda_);
+  h5e::dump(out, h5_join({label, "xi"}), xi_);
+  h5e::dump(out, h5_join({label, "it0B"}), DMatrixMap(it0B_.data(), r_, 1));
 }
 }
 #endif

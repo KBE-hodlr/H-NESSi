@@ -46,6 +46,15 @@ namespace h_nessi {
  * and throws h_nessi::precondition_error / state_error / numerical_error (inside a user OpenMP parallel region it prints
  * the message and aborts instead). **The h argument is modified:** every slice h(t) a call reads is replaced in place by
  * its Hermitian part (h+h^dagger)/2 (decision D-11; see set_hermiticity_tolerances, set_hermitian_symmetrization).
+ *
+ * **Returned error (ISSUES H31, decision D-10: kept unnormalised).** The double returned by the dyson_* solvers is
+ * the change of the solution made by the call, as an *unnormalised sum* over the time entries written of the
+ * Frobenius norm of the nao x nao change, ||G_new(t,t') - G_old(t,t')||_F (sum over t' of one row for a time step,
+ * over the k+1 bootstrap rows for dyson_start*; summed over the components ret/tv/les where one call solves several).
+ * It is a valid norm of the change, but it grows with the number of entries (~T for a time step) and with nao, so a
+ * fixed tolerance becomes stricter per entry as T grows; divide by (T+1)*nao yourself for a per-entry measure.
+ * dyson_mat returns the change of the unmixed Matsubara solution. The value is meant for self-consistency loops
+ * (iterate until it is below a tolerance), not as an error estimate of the discretisation.
  */
 class dyson {
 private:
@@ -85,7 +94,7 @@ private:
    * 2 - current timestep region of integral
    * 3 - block applications of integral
    * 4 - direct region of integral
-   * 5 - unused
+   * 5 - direct and correction regions of integral together (4 + 6 incl. loop overhead; was never filled: BUGS B28)
    * 6 - correction region below direct region of integral
    * 7 - Mixed component
    * 8 - real-time mixed integral
@@ -187,7 +196,9 @@ private:
   // bootstrap rows m = 1..k of G^< (and the RHO_DIAGONAL diagonal fixed point) shared by dyson_start_les_ntti, _nobc
   // and _2leg (dyson_start.cpp, B34/WP7b); err accumulates the change of G^<(m,n), 1 <= m <= n <= k
   void start_les_rows_(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I,
-                       double h, bool ntti_ham, bool mixed, double &err, const char *where);
+                       double h, bool mixed, double &err, const char *where);
+  // anti-Hermitian part (X - X^dagger)/2 of the boundary value G^<(0,0) (dyson_start_les, _les_ntti; WP7b SF4)
+  static ZMatrix boundary_antihermitian_(const ZMatrix &X);
 
 public:
   /**
@@ -199,6 +210,11 @@ public:
    * 5-level model). If the iteration diverges (non-finite change, or after 10 passes a change > 100x the smallest one
    * so far) or start_diag_max_pass passes do not converge, the call throws h_nessi::numerical_error. Static
    * constants: no per-object storage.
+   * Large-h limit (WP9a, closed driven 3- and 5-level models, Sigma = 0, k = 3 and 5): the bootstrap fixed point
+   * converges up to h*spread ~ 0.9 (k = 3) resp. 0.6 (k = 5) and fails from h*spread ~ 0.9-1.1, where spread is the
+   * eigenvalue range of h(t). The RHO_DIAGONAL time step (diagonal fixed point iterated by the user's corrector loop)
+   * tolerates about twice that: it converges up to h*spread ~ 1.7 (with ~100-150 corrector iterations near the limit)
+   * and diverges or stalls from h*spread ~ 2.2. The bootstrap is therefore the binding limit for RHO_DIAGONAL.
    */
   static constexpr double start_diag_rel_tol = 1e-14;
   static constexpr int start_diag_max_pass = 1000;
@@ -209,7 +225,10 @@ public:
    * @param nao Number of atomic orbitals.
    * @param k Maximum order for time-stepping.
    * @param dlr Reference to DLR information object.
-   * @param rho_version Density matrix calculation version (default: 1).
+   * @param rho_version Density matrix calculation version (default: 1).  1 = RHO_DIAGONAL: G^<(t,t) from the
+   *        density-matrix equation, a fixed point that the bootstrap iterates internally and the time step needs
+   *        the user's corrector loop for, even at fixed Sigma; it stops converging for large h (bootstrap from
+   *        h*spread(h(t)) ~ 0.6-1, time step from ~2; see start_diag_rel_tol). 0 = RHO_HORIZONTAL (no such limit).
    * @param profile whether or not to include profiling (default: 1).
    */
   dyson(int nt, int nao, int k, dlr_info &dlr, bool rho_version=1, bool profile = 1);
@@ -363,7 +382,7 @@ public:
    * @param Sigma Self-energy object.
    * @param I Integration object.
    * @param h Time step size.
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_timestep(int tstp, herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
@@ -375,7 +394,7 @@ public:
    * @param Sigma Self-energy object.
    * @param I Integration object.
    * @param h Time step size.
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_timestep(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
@@ -387,7 +406,7 @@ public:
    * @param Sigma Self-energy object.
    * @param I Integration object.
    * @param h Time step size.
-   * @return Vector of error estimates.
+   * @return Changes of the three components (each unnormalised as in the class note, H31).
    */
   std::vector<double> dyson_timestep_errinfo(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
@@ -399,7 +418,7 @@ public:
    * @param Sigma Self-energy object.
    * @param I Integration object.
    * @param h Time step size.
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_timestep_nobc(int tstp, herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
@@ -411,7 +430,7 @@ public:
    * @param Sigma Self-energy object.
    * @param I Integration object.
    * @param h Time step size.
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_timestep_nobc(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
@@ -423,7 +442,7 @@ public:
    * @param Sigma Self-energy object.
    * @param I Integration object.
    * @param h Time step size.
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_timestep_2leg(int tstp, herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
@@ -435,7 +454,7 @@ public:
    * @param Sigma Self-energy object.
    * @param I Integration object.
    * @param h Time step size.
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_timestep_2leg(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
 
@@ -449,7 +468,7 @@ public:
    *               are then reused from the last fixHam=false call on this dyson object, so such a call (with the same
    *               mu and H) must have been made first.
    * @param alpha Self-consistent iteration step-size - G^M = alpha*G^M_{new} + (1-alpha)*G^M_{old} (default: 0.1)
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_mat(herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, bool fixHam=false, double alpha=0.1);
   /**
@@ -462,7 +481,7 @@ public:
    *               are then reused from the last fixHam=false call on this dyson object, so such a call (with the same
    *               mu and H) must have been made first.
    * @param alpha Self-consistent iteration step-size - G^M = alpha*G^M_{new} + (1-alpha)*G^M_{old} (default: 0.1)
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_mat(herm_matrix_hodlr &G, double mu, DMatrix &hmf, herm_matrix_hodlr &Sigma, bool fixHam=false, double alpha=0.1);
 
@@ -475,7 +494,7 @@ public:
    * @param Sigma Self-energy object.
    * @param I Integration object.
    * @param h Time step size.
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_timestep_ret(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
 
@@ -488,7 +507,7 @@ public:
    * @param Sigma Self-energy object.
    * @param I Integration object.
    * @param h Time step size.
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_timestep_tv(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
@@ -532,7 +551,7 @@ public:
    * @param Sigma Self-energy object.
    * @param I Integration object.
    * @param h Time step size.
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_timestep_les(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
@@ -544,7 +563,7 @@ public:
    * @param Sigma Self-energy object.
    * @param I Integration object.
    * @param h Time step size.
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_timestep_les_nobc(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
@@ -556,7 +575,7 @@ public:
    * @param Sigma Self-energy object.
    * @param I Integration object.
    * @param h Time step size.
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_timestep_les_2leg(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
@@ -597,7 +616,7 @@ public:
    * @param Sigma Self-energy object.
    * @param I Integration object.
    * @param h Time step size.
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_start(herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
@@ -608,7 +627,7 @@ public:
    * @param Sigma Self-energy object.
    * @param I Integration object.
    * @param h Time step size.
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_start(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
@@ -620,7 +639,7 @@ public:
    * @param I Integration object.
    * @param h Time step size.
    * @param imp_tp0 Use improved boundary condition at t=0 (default: false).
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_start_ntti(herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h, bool imp_tp0 = false);
   /**
@@ -632,7 +651,7 @@ public:
    * @param I Integration object.
    * @param h Time step size.
    * @param imp_tp0 Use improved boundary condition at t=0 (default: false).
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_start_ntti(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h, bool imp_tp0 = false);
   /**
@@ -644,7 +663,7 @@ public:
    * @param I Integration object.
    * @param h Time step size.
    * @param imp_tp0 Use improved boundary condition at t=0 (default: false).
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_start_ntti_nobc(herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h, bool imp_tp0 = false);
   /**
@@ -656,7 +675,7 @@ public:
    * @param I Integration object.
    * @param h Time step size.
    * @param imp_tp0 Use improved boundary condition at t=0 (default: false).
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_start_ntti_nobc(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h, bool imp_tp0 = false);
   /**
@@ -668,7 +687,7 @@ public:
    * @param I Integration object.
    * @param h Time step size.
    * @param imp_tp0 Use improved boundary condition at t=0 (default: false).
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_start_2leg(herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h, bool imp_tp0 = false);
   /**
@@ -680,7 +699,7 @@ public:
    * @param I Integration object.
    * @param h Time step size.
    * @param imp_tp0 Use improved boundary condition at t=0 (default: false).
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_start_2leg(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h, bool imp_tp0 = false);
   /**
@@ -691,7 +710,7 @@ public:
    * @param Sigma Self-energy object.
    * @param I Integration object.
    * @param h Time step size.
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */   
   double dyson_start_ret(herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
@@ -702,7 +721,7 @@ public:
    * @param Sigma Self-energy object.
    * @param I Integration object.
    * @param h Time step size.
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_start_ret(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
@@ -714,7 +733,7 @@ public:
    * @param I Integration object.
    * @param h Time step size.
    * @param imp_tp0 Use improved boundary condition at t=0 (default: false).
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_start_ret_ntti(herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h, bool imp_tp0 = false);
   /**
@@ -726,7 +745,7 @@ public:
    * @param I Integration object.
    * @param h Time step size.
    * @param imp_tp0 Use improved boundary condition at t=0 (default: false).
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_start_ret_ntti(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h, bool imp_tp0 = false);
   /**
@@ -737,7 +756,7 @@ public:
    * @param Sigma Self-energy object.
    * @param I Integration object.
    * @param h Time step size.
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_start_tv(herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
@@ -748,7 +767,7 @@ public:
    * @param Sigma Self-energy object.
    * @param I Integration object.
    * @param h Time step size.
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_start_tv(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
@@ -759,7 +778,7 @@ public:
    * @param Sigma Self-energy object.
    * @param I Integration object.
    * @param h Time step size.
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_start_les(herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
@@ -770,7 +789,7 @@ public:
    * @param Sigma Self-energy object.
    * @param I Integration object.
    * @param h Time step size.
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_start_les(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
@@ -781,7 +800,7 @@ public:
    * @param Sigma Self-energy object.
    * @param I Integration object.
    * @param h Time step size.
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_start_les_ntti(herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
@@ -792,7 +811,7 @@ public:
    * @param Sigma Self-energy object.
    * @param I Integration object.
    * @param h Time step size.
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_start_les_ntti(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
@@ -803,7 +822,7 @@ public:
    * @param Sigma Self-energy object.
    * @param I Integration object.
    * @param h Time step size.
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_start_les_ntti_nobc(herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
@@ -814,7 +833,7 @@ public:
    * @param Sigma Self-energy object.
    * @param I Integration object.
    * @param h Time step size.
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_start_les_ntti_nobc(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
@@ -825,7 +844,7 @@ public:
    * @param Sigma Self-energy object.
    * @param I Integration object.
    * @param h Time step size.
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_start_les_2leg(herm_matrix_hodlr &G, double mu, function &H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
   /**
@@ -836,7 +855,7 @@ public:
    * @param Sigma Self-energy object.
    * @param I Integration object.
    * @param h Time step size.
-   * @return Error estimate.
+   * @return Change of the solution made by this call (unnormalised sum of Frobenius norms; see the class note, H31).
    */
   double dyson_start_les_2leg(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h);
 

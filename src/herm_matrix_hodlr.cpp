@@ -80,7 +80,7 @@ herm_matrix_hodlr::herm_matrix_hodlr(int nt,int r,int nlvl,double svdtol,int siz
     can_extrap_ = false;
  
     mat_.resize(r_ * size1_ * size2_);
-    GMConvTensMatrix_ = DMatrix(r_ , r_ * size1_ * size2_);
+    GMConvTensMatrix_ = DMatrix::Zero(r_ , r_ * size1_ * size2_);   // BUGS B33: was uninitialised
 
     curr_timestep_ret_ = std::vector<cplx>((k_+1) * (nt_ + 1)  * size1_ * size2_);
     curr_timestep_les_ = std::vector<cplx>((k_+1) * (nt_ + 1) * size1_ * size2_);
@@ -446,6 +446,7 @@ void herm_matrix_hodlr::get_timestep_curr(int tstp,herm_matrix_hodlr &G){
     if(tstp==-1){
         memcpy(G.mat(), mat_.data(), r_ * size1_ * size2_ * sizeof(double));
     }else{ // set last kt timesteps together
+        if(tstp == G.tstpmk()+k_) G.can_extrap() = false;   // ST-6 on the destination (G's slot T is overwritten)
         memcpy(G.curr_timestep_ret_ptr(tstp,0),this->curr_timestep_ret_ptr(tstp,0),(nt_ +1) * size1_ * size2_* sizeof(cplx));
         memcpy(G.curr_timestep_les_ptr(0,tstp),this->curr_timestep_les_ptr(0,tstp),(nt_ +1) * size1_ * size2_ * sizeof(cplx));
         memcpy(G.tvptr(tstp,0),this->tvptr(tstp,0),r_ * size1_ * size2_ * sizeof(cplx));
@@ -460,6 +461,9 @@ void herm_matrix_hodlr::get_timestep_curr(herm_matrix_hodlr &G){
     for(int i=tstpmk_;i<=tstpmk_+k_;i++){
         get_timestep_curr(i,G);
     }
+    // the whole window, including slot T (archived row T-k-1, read by extrapolate), now equals ours, so G can
+    // extrapolate exactly when *this can (WP4 side finding 4)
+    G.can_extrap() = can_extrap_;
 }
 
 // Copy timestep tstp FROM G INTO *this (G is not modified); same preconditions as get_timestep_curr.
@@ -485,6 +489,7 @@ void herm_matrix_hodlr::set_timestep_curr(herm_matrix_hodlr &G){
     for(int i=tstpmk_;i<=tstpmk_+k_;i++){
         set_timestep_curr(i,G);
     }
+    can_extrap_ = G.can_extrap();   // the window (incl. slot T) is G's: extrapolate behaves as on G (WP4 SF4)
 }
 
 void herm_matrix_hodlr::incr_timestep_curr(int tstp,herm_matrix_hodlr &G,cplx alpha){
@@ -615,13 +620,16 @@ double herm_matrix_hodlr::get_memory_usage(bool print_memory_usage) {
 
     tvdata += Z * tv_.data_vector().size();   // (no tv_trans copy since WP6c, ISSUES H27)
 
-    for(int b = 0; b < built_blocks_; b++) {
+    // Compressed blocks: the allocated U, V (complex) and S (real) of every block, ret and les each with its own
+    // ranks (BUGS B26: the les terms used the ret ranks and S was not counted).  Blocks that are not built yet hold
+    // rank-0 factors, so looping over all of them is exact.
+    for(size_t b = 0; b < ret_.data().blocks().size(); b++) {
       for(int i = 0; i < size1_; i++) {
-        for(int j = 0; j < size1_; j++) {
-          retdata += Z * ret_.data().blocks()[b][i][j].U().rows() * ret_.data().blocks()[b][i][j].U().cols();
-          retdata += Z * ret_.data().blocks()[b][i][j].V().rows() * ret_.data().blocks()[b][i][j].V().cols();
-          lesdata += Z * les_.data().blocks()[b][i][j].U().rows() * ret_.data().blocks()[b][i][j].U().cols();
-          lesdata += Z * les_.data().blocks()[b][i][j].V().rows() * ret_.data().blocks()[b][i][j].V().cols();
+        for(int j = 0; j < size2_; j++) {
+          block &R = ret_.data().blocks()[b][i][j];
+          block &L = les_.data().blocks()[b][i][j];
+          retdata += Z * (R.U().size() + R.V().size()) + D * R.S().size();
+          lesdata += Z * (L.U().size() + L.V().size()) + D * L.S().size();
         }
       }
     }

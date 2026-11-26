@@ -58,7 +58,9 @@ void herm_matrix_hodlr::update_blocks(Integration::Integrator &I) {
   dur = end-start;
   timing(tstpmk_, 2) = dur.count();
 
-  // Loop over blocks and update svds
+  // Loop over blocks and update svds.  Column 5 times the whole loop (BUGS B27: `start` is reused for the per-block
+  // columns 6-8 inside the loop, so column 5 used to measure only the last segment); columns 6-8 accumulate.
+  const auto loop_start = std::chrono::system_clock::now();
   for(int b = 0; b < blocks_list.size(); b++) {
     start = std::chrono::system_clock::now();
     int bindex = blocks_list[b];
@@ -146,7 +148,7 @@ void herm_matrix_hodlr::update_blocks(Integration::Integrator &I) {
     blklen_[bindex] = blklen_[bindex]+1;
   }
   end = std::chrono::system_clock::now();
-  dur = end-start;
+  dur = end-loop_start;
   timing(tstpmk_, 5) = dur.count();
   // HM-U4 (tier 1): segment index of row tstpmk used for les_dir_square_ below
   HNESSI_ASSERT(built_blocks_ == t_to_dirlvl_[tstpmk_], "herm_matrix_hodlr::update_blocks", HNESSI_KV(built_blocks_),
