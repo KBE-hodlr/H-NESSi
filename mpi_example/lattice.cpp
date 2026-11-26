@@ -34,6 +34,23 @@ void lattice_2d_ysymm::efield_to_afield(int Nt, double dt, double Amax)
 }
 
 
+// Smooth, fully contained pulse (input __pulse= smooth; see lattice.hpp). Same sign convention as the step: the code's
+// A(t) enters as eps_{k - A(t)}, and E(t) = -dA/dt (paper Eq. 29), so the deposited energy is int E j dt (Main.cpp).
+void lattice_2d_ysymm::smooth_pulse_afield(int Nt, double dt, double Amax, double t_start, double T_pulse, double omega,
+                                           int npow)
+{
+    A_.resize(Nt + 1);
+    for (int tstp = 0; tstp <= Nt; tstp++){
+        double x = tstp * dt - t_start;
+        double ax = 0.0;
+        if (x > 0.0 && x < T_pulse) {
+            double env = std::pow(std::sin(PI * x / T_pulse), npow);
+            ax = (omega == 0.0) ? Amax * env : Amax * env * std::sin(omega * x);
+        }
+        A_[tstp] = Vector2D(ax, 0.0);
+    }
+}
+
 //define bz
 void lattice_2d_ysymm::init_kk(int L)
 {
@@ -87,7 +104,9 @@ void lattice_2d_ysymm::vk(h_nessi::ZMatrix &vxkmatrix,h_nessi::ZMatrix &vykmatri
 {
   const Vector2D&  Atstp=A_[tstp];
   
-  double vkx=2.0*J_*sin(kk.x()-Atstp.x());
+  // v = d eps/dk at k - A(t) - Ainit (the argument of hk). Ainitx_ = 0 unless __Ainitx= is set (before WP8b the
+  // Ainit shift was missing here although hk has it).
+  double vkx=2.0*J_*sin(kk.x()-Atstp.x()-Ainitx_);
   double vky=2.0*J_*sin(kk.y()-Atstp.y());
   
   vxkmatrix.resize(size_,size_);
@@ -99,5 +118,10 @@ void lattice_2d_ysymm::vk(h_nessi::ZMatrix &vxkmatrix,h_nessi::ZMatrix &vykmatri
   vykmatrix(0,0)=vky;
 }
 
-
-
+// Band energy eps_{k-A(t)-Ainit} without the chemical potential (A = 0 at tstp = -1, as in hk)
+double lattice_2d_ysymm::epsk_band(int tstp, Vector2D& kk)
+{
+    Vector2D Atstp(0, 0);
+    if (tstp > -1) Atstp = A_[tstp];
+    return -2.0 * J_ * (cos(kk.x() - Atstp.x() - Ainitx_) + cos(kk.y() - Atstp.y()));
+}

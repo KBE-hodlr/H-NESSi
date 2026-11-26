@@ -184,8 +184,24 @@ private:
   void les_it_int_prelude_(int tstp, herm_matrix_hodlr &G);
   void check_gamma_args_(const char *where, herm_matrix_hodlr &G, herm_matrix_hodlr &Delta);
   void check_free_args_(const char *where, herm_matrix_hodlr &G, double mu, const ZMatrix &H, double h, int tmax);
+  // bootstrap rows m = 1..k of G^< (and the RHO_DIAGONAL diagonal fixed point) shared by dyson_start_les_ntti, _nobc
+  // and _2leg (dyson_start.cpp, B34/WP7b); err accumulates the change of G^<(m,n), 1 <= m <= n <= k
+  void start_les_rows_(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I,
+                       double h, bool ntti_ham, bool mixed, double &err, const char *where);
 
 public:
+  /**
+   * RHO_DIAGONAL bootstrap (dyson_start_ntti, _ntti_nobc, _2leg; B34/WP7b). Rows and diagonal of G^< in t = 0..k
+   * depend on each other; each call iterates them to their common fixed point for the given Sigma, until the largest
+   * change of a diagonal block, max_i ||Delta G^<(i,i)||_F, is <= start_diag_rel_tol * max(1, max_i ||G^<(i,i)||_F).
+   * The contraction factor per pass grows with h (about 0.1 at h = 0.05 and 0.75 at h = 0.4, k = 5, in the test models:
+   * 10-20 resp. ~110 passes from a zero diagonal; it can exceed 1 for large h*spread(eps), e.g. h = 0.4 in a closed
+   * 5-level model). If the iteration diverges (non-finite change, or after 10 passes a change > 100x the smallest one
+   * so far) or start_diag_max_pass passes do not converge, the call throws h_nessi::numerical_error. Static
+   * constants: no per-object storage.
+   */
+  static constexpr double start_diag_rel_tol = 1e-14;
+  static constexpr int start_diag_max_pass = 1000;
 
   /**
    * @brief Constructs a dyson object with specified parameters.

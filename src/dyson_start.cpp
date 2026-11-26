@@ -1,4 +1,5 @@
 #include "h_nessi/dyson.hpp"
+#include <cmath>
 #include <iomanip>
 
 using namespace std::chrono;
@@ -12,24 +13,6 @@ void ensure_lu(const Eigen::FullPivLU<ZMatrix> &lu, const char *where) {
                 detail::note{"the bootstrap linear system is singular (or not finite)"});
 }
 
-// B34 (RHO_DIAGONAL bootstrap consistency). The lesser row solve of dyson_start_les_ntti* for row m >= 1 is
-//   sum_{l=1..k} MIC(n,l) X_l = QIC(n),  n = 1..k,   X_l = [G^<(m,l)]^T,
-// the (transposed) right-acting KBE for G^<(m,t') collocated at the nodes t' = n, with G^<(m,0) known. With
-// RHO_DIAGONAL the diagonal G^<(m,m) is not an unknown of the row: it belongs to the diagonal (density-matrix)
-// equation, exactly as in the time stepper, where the row equation at the diagonal node is replaced by the
-// d/dt G^<(t,t) equation and the current diagonal value is known data. Hence: move column l = m (its derivative
-// and integral weights) to the right-hand side with XmT = [G^<(m,m)]^T, and replace equation n = m (the collocation
-// at the diagonal node) by X_m = XmT. What remains is the (k-1) x (k-1) block system for G^<(m,l), l != 0, m.
-void fix_known_diagonal(ZMatrix &MIC, ZMatrix &QIC, int m, const ZMatrix &XmT, int k, int nao) {
-  const int c = (m-1)*nao;
-  for(int n = 1; n <= k; n++) {
-    if(n != m) QIC.block((n-1)*nao, 0, nao, nao) -= MIC.block((n-1)*nao, c, nao, nao) * XmT;
-  }
-  MIC.block(0, c, k*nao, nao).setZero();
-  MIC.block(c, 0, nao, k*nao).setZero();
-  MIC.block(c, c, nao, nao).setIdentity();
-  QIC.block(c, 0, nao, nao) = XmT;
-}
 }  // namespace
 
 double dyson::dyson_start_tv(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h) {
@@ -264,6 +247,177 @@ double dyson::dyson_start_les(herm_matrix_hodlr &G, double mu, cplx *H, herm_mat
 }
 
 
+// Rows m = 1..k of G^< (and, with RHO_DIAGONAL, the diagonal) for dyson_start_les_ntti, _ntti_nobc and _2leg, after
+// row m = 0 has been set by the caller. The three differ only in h(t) in the row matrix (ntti: H^*, others: H^T, equal
+// for Hermitian H), h(t) in the diagonal equation (ntti: H^dagger, others: H) and the mixed les_it_int terms (absent for
+// _2leg). err accumulates the change of G^<(m,n), 1 <= m <= n <= k.
+void dyson::start_les_rows_(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I,
+                            double h, bool ntti_ham, bool mixed, double &err, const char *where) {
+  const cplx cplxi = cplx(0,1);
+  ZMatrixMap IMap = ZMatrixMap(iden_.data(), nao_, nao_);
+  const int kn = k_*nao_;
+
+  // the transposed right-acting row system for X_l = [G^<(m,l)]^T, l = 1..k (doc 22 §4.6 step 3)
+  auto build_row = [&](int m, ZMatrix &MIC, ZMatrix &QIC) {
+    MIC = ZMatrix::Zero(kn, kn);
+    QIC = ZMatrix::Zero(kn, nao_);
+    for(int n = 1; n <= k_; n++) {
+      auto QBlock = QIC.block((n-1)*nao_, 0, nao_, nao_);
+      for(int l = 0; l <= k_; l++) {
+        if(m>=l && n>=l) QBlock += (h * I.poly_integ(0,m,l) * ZMatrixMap(G.curr_timestep_ret_ptr(m,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_les_ptr(l,n), nao_, nao_)).transpose();
+        else if(m<l && n>=l) QBlock -= (h * I.poly_integ(0,m,l) * ZMatrixMap(G.curr_timestep_ret_ptr(l,m), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_les_ptr(l,n), nao_, nao_)).transpose();
+        else if(m>=l && n<l) QBlock -= (h * I.poly_integ(0,m,l) * ZMatrixMap(G.curr_timestep_ret_ptr(m,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_les_ptr(n,l), nao_, nao_).adjoint()).transpose();
+        else if(m<l && n<l) QBlock += (h * I.poly_integ(0,m,l) * ZMatrixMap(G.curr_timestep_ret_ptr(l,m), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_les_ptr(n,l), nao_, nao_).adjoint()).transpose();
+      }
+      QBlock -= (h * I.poly_integ(0,n,0) * ZMatrixMap(G.curr_timestep_les_ptr(0,m), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_ret_ptr(n,0), nao_, nao_).adjoint()).transpose();
+      QBlock -= (cplxi/h * I.poly_diff(n,0) * ZMatrixMap(G.curr_timestep_les_ptr(0,m), nao_, nao_).adjoint()).transpose();
+
+      ZMatrixMap(M_.data(), nao_, nao_) = ZMatrix::Zero(nao_, nao_);
+      if(mixed) les_it_int(m, n, G, Sigma, M_.data());
+      QBlock += ZMatrixMap(M_.data(), nao_, nao_);
+    }
+    for(int n = 1; n <= k_; n++) {
+      for(int l = 1; l <= k_; l++) {
+        auto MBlock = MIC.block((n-1)*nao_, (l-1)*nao_, nao_, nao_);
+        MBlock += -cplxi/h * I.poly_diff(n,l) * IMap;
+        if(n==l) {
+          if(ntti_ham) MBlock -= ZMatrixMap(H+l*es_, nao_, nao_).conjugate() - mu*IMap;
+          else         MBlock -= ZMatrixMap(H+l*es_, nao_, nao_).transpose() - mu*IMap;
+        }
+        if(n>=l) MBlock -= (h * I.poly_integ(0,n,l) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(n,l), nao_, nao_).adjoint()).transpose();
+        else if(n<l) MBlock += (h * I.poly_integ(0,n,l) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(l,n), nao_, nao_)).transpose();
+      }
+    }
+  };
+
+  if(rho_version_ == 0) {   // RHO_HORIZONTAL: the diagonal G^<(m,m) is the n = m entry of row m
+    ZMatrix MIC, QIC, XIC;
+    for(int m = 1; m <= k_; m++) {
+      build_row(m, MIC, QIC);
+      Eigen::FullPivLU<ZMatrix> lu2(MIC);
+      ensure_lu(lu2, where);   // DY-S10 (tier 2)
+      XIC = lu2.solve(QIC);
+      for(int i = m; i <= k_; i++) {
+        err += (ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose()).norm();
+        ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) = ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose();
+      }
+    }
+    return;
+  }
+
+  // RHO_DIAGONAL (B34, WP7/WP7b). The diagonal G^<(m,m) is not an unknown of row m: as in the time stepper it obeys the
+  // diagonal (density-matrix) equation d/dt G^<(t,t) = B - B^dagger. Row m is solved with G^<(m,m) as known data
+  // (column l = m moved to the right-hand side, the collocation equation at n = m dropped), and the diagonal is solved
+  // from B evaluated with the rows and the diagonal values themselves. The rows depend on the diagonal and the diagonal
+  // on the rows, so the two are iterated here to their common fixed point (to roundoff): for fixed Sigma one call is
+  // then idempotent, and a user loop over dyson_start_* is needed only for self-consistency in Sigma.
+
+  // input values, for the returned change of G
+  std::vector<ZMatrix> Gin;
+  for(int m = 1; m <= k_; m++)
+    for(int i = m; i <= k_; i++) Gin.push_back(ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_));
+
+  // rows: the matrices do not depend on the diagonal. Factorise once with column/equation m removed (identity block),
+  // keep the removed column C_m and the right-hand side Q_m.
+  std::vector<Eigen::FullPivLU<ZMatrix>> lu_row(k_+1);
+  std::vector<ZMatrix> Q_row(k_+1), C_row(k_+1);
+  for(int m = 1; m <= k_; m++) {
+    ZMatrix MIC;
+    build_row(m, MIC, Q_row[m]);
+    const int c = (m-1)*nao_;
+    C_row[m] = MIC.block(0, c, kn, nao_);
+    MIC.block(0, c, kn, nao_).setZero();
+    MIC.block(c, 0, nao_, kn).setZero();
+    MIC.block(c, c, nao_, nao_).setIdentity();
+    lu_row[m].compute(MIC);
+    ensure_lu(lu_row[m], where);   // DY-S10 (tier 2)
+  }
+
+  // diagonal: (1/h) sum_j D_ij G^<(j,j) = B_i - B_i^dagger - (1/h) D_i0 G^<(0,0), i = 1..k
+  ZMatrix MD = ZMatrix::Zero(kn, kn);
+  for(int i = 1; i <= k_; i++)
+    for(int j = 1; j <= k_; j++) MD.block((i-1)*nao_, (j-1)*nao_, nao_, nao_) = 1./h * I.poly_diff(i,j) * IMap;
+  Eigen::FullPivLU<ZMatrix> lu3(MD);
+  ensure_lu(lu3, where);   // DY-S10 (tier 2)
+  std::vector<ZMatrix> mix(k_+1, ZMatrix::Zero(nao_, nao_));   // -i int G^| Sigma^| (i,i): independent of G^<
+  if(mixed) {
+    for(int i = 1; i <= k_; i++) {
+      ZMatrixMap(M_.data(), nao_, nao_) = ZMatrix::Zero(nao_, nao_);
+      les_it_int(i, i, G, Sigma, M_.data());
+      mix[i] = ZMatrixMap(M_.data(), nao_, nao_).transpose();
+    }
+  }
+
+  ZMatrix QIC(kn, nao_), XIC(kn, nao_);
+  double change = 0, scale = 1, change_min = INFINITY;
+  int pass = 0;
+  bool converged = false, diverged = false;
+  while(!converged && !diverged && pass < start_diag_max_pass) {
+    pass++;
+    // rows m = 1..k with the current diagonal G^<(m,m) known; only G^<(m,i), i > m, are written
+    for(int m = 1; m <= k_; m++) {
+      const int c = (m-1)*nao_;
+      const ZMatrix XmT = ZMatrixMap(G.curr_timestep_les_ptr(m,m), nao_, nao_).transpose();
+      QIC = Q_row[m];
+      for(int n = 1; n <= k_; n++) {
+        if(n != m) QIC.block((n-1)*nao_, 0, nao_, nao_) -= C_row[m].block((n-1)*nao_, 0, nao_, nao_) * XmT;
+      }
+      QIC.block(c, 0, nao_, nao_) = XmT;
+      XIC = lu_row[m].solve(QIC);
+      for(int i = m+1; i <= k_; i++) {
+        ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) = ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose();
+      }
+    }
+    // diagonal. B_i = i[ G^<(i,i) eps(i)^dagger + int G^R Sigma^< + int G^< Sigma^A - i int G^| Sigma^| ] (doc 22 §4.6
+    // step 4); the l = i term of int G^< Sigma^A uses G^<(i,i) itself.
+    // I         =  S^R G^< + S^< G^A
+    // I^\dagger = -G^< S^A - G^R S^<
+    for(int i = 1; i <= k_; i++) {
+      ZMatrix B = ZMatrix::Zero(nao_, nao_);
+      if(ntti_ham) B += cplxi * ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) * (ZMatrixMap(H+i*es_, nao_, nao_).adjoint() - mu*IMap);
+      else         B += cplxi * ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) * (ZMatrixMap(H+i*es_, nao_, nao_) - mu*IMap);
+      for(int l = 0; l <= i; l++) {
+        B += cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_ret_ptr(i,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_les_ptr(l,i), nao_, nao_);
+      }
+      for(int l = i+1; l <= k_; l++) {
+        B += cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_ret_ptr(l,i), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_les_ptr(i,l), nao_, nao_).adjoint();
+      }
+      for(int l = 0; l < i; l++) {
+        B -= cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_les_ptr(l,i), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_ret_ptr(i,l), nao_, nao_).adjoint();
+      }
+      B += cplxi * I.poly_integ(0,i,i) * h * ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(i,i), nao_, nao_).adjoint();
+      for(int l = i+1; l <= k_; l++) {
+        B -= cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_les_ptr(i,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(l,i), nao_, nao_);
+      }
+      B += cplxi * mix[i];
+      QIC.block((i-1)*nao_, 0, nao_, nao_) = B - B.adjoint() - 1./h * I.poly_diff(i,0) * ZMatrixMap(G.curr_timestep_les_ptr(0,0), nao_, nao_);
+    }
+    XIC = lu3.solve(QIC);
+    change = 0;
+    scale = 1;
+    for(int i = 1; i <= k_; i++) {
+      auto Gii = ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_);
+      auto Xi = ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_);
+      change = std::max(change, (Xi - Gii).norm());
+      scale = std::max(scale, Xi.norm());
+      Gii = Xi;
+    }
+    converged = change <= start_diag_rel_tol * scale;
+    change_min = std::min(change_min, change);
+    diverged = !std::isfinite(change) || (pass > 10 && change > 100 * change_min);   // growing again: not contracting
+  }
+  // a non-contracting fixed point (the explicit diagonal update, like the RHO_DIAGONAL time step, can diverge for large
+  // h*spread(eps)): do not return a silently unconverged bootstrap
+  HNESSI_ENSURE(converged, where, HNESSI_KV(pass), HNESSI_KV(diverged), HNESSI_KV(change), HNESSI_KV(change_min),
+                HNESSI_KV(scale), HNESSI_KV(k_), HNESSI_KV(h),
+                detail::note{"the RHO_DIAGONAL bootstrap fixed point (rows <-> diagonal, t = 0..k) did not converge "
+                             "(diverging or too slow); reduce h or use RHO_HORIZONTAL"});
+
+  size_t q = 0;
+  for(int m = 1; m <= k_; m++)
+    for(int i = m; i <= k_; i++) err += (ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) - Gin[q++]).norm();
+}
+
 double dyson::dyson_start_les_ntti(herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma, Integration::Integrator &I, double h) {
   call_scope cs(*this);
   const char *where = "dyson::dyson_start_les_ntti";
@@ -279,122 +433,8 @@ double dyson::dyson_start_les_ntti(herm_matrix_hodlr &G, double mu, cplx *H, her
     ZMatrixMap(G.curr_timestep_les_ptr(0,tp), nao_, nao_).noalias() = -ZMatrixMap(M_.data(), nao_, nao_).adjoint();
   }
 
-  cplx cplxi = cplx(0,1);
-  ZMatrixMap IMap = ZMatrixMap(iden_.data(), nao_, nao_);
-
-  // store diagonal in case we do the diagonal correction.
-  // needed for evaluating iteration error
-  ZMatrix DIC = ZMatrix::Zero(k_*nao_, nao_);
-  for(int i = 1; i <= k_; i++) {
-    ZMatrixMap(DIC.data() + (i-1)*es_, nao_, nao_) = ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_);
-  }
-
-  for(int m = 1; m <= k_; m++) {
-    ZMatrix MIC = ZMatrix::Zero(k_*nao_, k_*nao_);
-    ZMatrix XIC = ZMatrix::Zero(k_*nao_, nao_);
-    ZMatrix QIC = ZMatrix::Zero(k_*nao_, nao_);
-
-    for(int n = 1; n <= k_; n++) {
-      auto QBlock = QIC.block((n-1)*nao_, 0, nao_, nao_);
-      for(int l = 0; l <= k_; l++) {
-        if(m>=l && n>=l) QBlock += (h * I.poly_integ(0,m,l) * ZMatrixMap(G.curr_timestep_ret_ptr(m,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_les_ptr(l,n), nao_, nao_)).transpose();
-        else if(m<l && n>=l) QBlock -= (h * I.poly_integ(0,m,l) * ZMatrixMap(G.curr_timestep_ret_ptr(l,m), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_les_ptr(l,n), nao_, nao_)).transpose();
-        else if(m>=l && n<l) QBlock -= (h * I.poly_integ(0,m,l) * ZMatrixMap(G.curr_timestep_ret_ptr(m,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_les_ptr(n,l), nao_, nao_).adjoint()).transpose();
-        else if(m<l && n<l) QBlock += (h * I.poly_integ(0,m,l) * ZMatrixMap(G.curr_timestep_ret_ptr(l,m), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_les_ptr(n,l), nao_, nao_).adjoint()).transpose();
-      }
-      QBlock -= (h * I.poly_integ(0,n,0) * ZMatrixMap(G.curr_timestep_les_ptr(0,m), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_ret_ptr(n,0), nao_, nao_).adjoint()).transpose();
-      QBlock -= (cplxi/h * I.poly_diff(n,0) * ZMatrixMap(G.curr_timestep_les_ptr(0,m), nao_, nao_).adjoint()).transpose();
-
-      ZMatrixMap(M_.data(), nao_, nao_) = ZMatrix::Zero(nao_, nao_);
-      les_it_int(m, n, G, Sigma, M_.data());
-      QBlock += ZMatrixMap(M_.data(), nao_, nao_);
-    }
-    for(int n = 1; n <= k_; n++) {
-      for(int l = 1; l <= k_; l++) {
-        auto MBlock = MIC.block((n-1)*nao_, (l-1)*nao_, nao_, nao_);
-        MBlock += -cplxi/h * I.poly_diff(n,l) * IMap;
-        if(n==l) MBlock -= ZMatrixMap(H+l*es_, nao_, nao_).conjugate() - mu*IMap;
-        if(n>=l) MBlock -= (h * I.poly_integ(0,n,l) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(n,l), nao_, nao_).adjoint()).transpose();
-        else if(n<l) MBlock += (h * I.poly_integ(0,n,l) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(l,n), nao_, nao_)).transpose();
-      }
-    }
-    // B34: with RHO_DIAGONAL, G^<(m,m) is known data of the row solve (its current diagonal-method value: the
-    // initial guess on the first bootstrap iteration, then the previous iterate) and is not overwritten here.
-    if(rho_version_ == 1) fix_known_diagonal(MIC, QIC, m, ZMatrixMap(G.curr_timestep_les_ptr(m,m), nao_, nao_).transpose(), k_, nao_);
-    Eigen::FullPivLU<ZMatrix> lu2(MIC);
-    ensure_lu(lu2, where);   // DY-S10 (tier 2)
-    XIC = lu2.solve(QIC);
-    for(int i = (rho_version_ == 1 ? m+1 : m); i <= k_; i++) {
-      err += (ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose()).norm();
-      ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) = ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose();
-    }
-  }
-
-  if(rho_version_== 1) {
-
-    // redo diagonal
-    ZMatrix MIC = ZMatrix::Zero(k_*nao_, k_*nao_);
-    ZMatrix XIC = ZMatrix::Zero(k_*nao_, nao_);
-    ZMatrix QIC = ZMatrix::Zero(k_*nao_, nao_);
-
-
-    for(int i = 1; i <= k_; i++) {
-      for(int j = 1; j <= k_; j++) {
-        auto MBlock = MIC.block((i-1)*nao_, (j-1)*nao_, nao_, nao_);
-        MBlock = 1./h * I.poly_diff(i,j) * IMap;
-      }
-    }
-
-    // B34: B is evaluated with the diagonal-method values G^<(i,i) (the row solves above treat them as known and do
-    // not overwrite them) and with the off-diagonal row values of this pass. The update is explicit in G^<(i,i), as in
-    // the RHO_DIAGONAL time stepper (G^<_old(T,T)), so the bootstrap iteration converges to the same kind of fixed
-    // point: the converged diagonal solves the discrete diagonal equation evaluated with its own values (exactly
-    // anti-Hermitian; trace-conserving for Sigma = 0).
-    // Solving \partial_t G = -ih_oG -iG^\dagger h_o^\dagger -iI -iI^\dagger -2\xi i\ell^<
-    //                      = -ih_oG +iG h_o^\dagger -iI -iI^\dagger -2\xi i\ell^<
-    //                      = [iG h_o^\dagger-iI^\dagger] + [-ih_oG-iI] -2\xi i\ell^<
-    //                      = [iG h_o^\dagger-iI^\dagger] + [iG^\dagger h_o^\dagger + iI^dagger]^\dagger -2\xi i\ell^<
-    //                      = [iG h_o^\dagger-iI^\dagger] + [-iG h_o^\dagger + iI^dagger]^\dagger -2\xi i\ell^<
-    //                      = [iG h_o^\dagger-iI^\dagger] - [iG h_o^\dagger - iI^dagger]^\dagger -2\xi i\ell^<
-    // I         =  S^R G^< + S^< G^A
-    // I^\dagger = -G^< S^A - G^R S^<
-    for(int i = 1; i <= k_; i++) {
-      auto QBlock = QIC.block((i-1)*nao_, 0, nao_, nao_);
-      QBlock += cplxi * ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) * (ZMatrixMap(H+i*es_, nao_, nao_).adjoint() - mu*IMap);
-
-      for(int l = 0; l <= i; l++) {
-        QBlock += cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_ret_ptr(i,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_les_ptr(l,i), nao_, nao_);
-      }
-      for(int l = i+1; l <= k_; l++) {
-        QBlock += cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_ret_ptr(l,i), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_les_ptr(i,l), nao_, nao_).adjoint();
-      }
-      for(int l = 0; l < i; l++) {
-        QBlock -= cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_les_ptr(l,i), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_ret_ptr(i,l), nao_, nao_).adjoint();
-      }
-      // l = i: the diagonal-method value G^<(i,i) itself (B34; not -G^<(i,i)^dagger)
-      QBlock += cplxi * I.poly_integ(0,i,i) * h * ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(i,i), nao_, nao_).adjoint();
-      for(int l = i+1; l <= k_; l++) {
-        QBlock -= cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_les_ptr(i,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(l,i), nao_, nao_);
-      }
-      ZMatrixMap(M_.data(), nao_, nao_) = ZMatrix::Zero(nao_, nao_);
-      les_it_int(i, i, G, Sigma, M_.data());
-      QBlock += cplxi*ZMatrixMap(M_.data(), nao_, nao_).transpose();
-
-      ZMatrixMap(XIC.data(), nao_, nao_) = QBlock-QBlock.adjoint();
-      QBlock = ZMatrixMap(XIC.data(), nao_, nao_);
-
-      QBlock -= 1./h * I.poly_diff(i,0) * ZMatrixMap(G.curr_timestep_les_ptr(0,0), nao_, nao_);
-    }
-
-    Eigen::FullPivLU<ZMatrix> lu3(MIC);
-
-    ensure_lu(lu3, where);   // DY-S10 (tier 2)
-    XIC = lu3.solve(QIC);
-    for(int i = 1; i <= k_; i++) {
-      err += (ZMatrixMap(XIC.data()+(i-1)*es_, nao_, nao_) - ZMatrixMap(DIC.data() + (i-1)*es_, nao_, nao_)).norm();
-      ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) = ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_);
-    }
-  }
+  // rows m = 1..k and, with RHO_DIAGONAL, the diagonal (converged to the fixed point of the pair, B34)
+  start_les_rows_(G, mu, H, Sigma, I, h, true, true, err, where);
 
   return cs.outer() ? ensure_finite_(err, where) : err;
 }
@@ -455,119 +495,8 @@ double dyson::dyson_start_les_ntti_nobc(herm_matrix_hodlr &G, double mu, cplx *H
     ZMatrixMap(G.curr_timestep_les_ptr(0,i), nao_, nao_) = ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose();
   }
 
-  // store diagonal in case we do the diagonal correction.
-  // needed for evaluating iteration error
-  ZMatrix DIC = ZMatrix::Zero(k_*nao_, nao_);
-  for(int i = 1; i <= k_; i++) {
-    ZMatrixMap(DIC.data() + (i-1)*es_, nao_, nao_) = ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_);
-  }
-
-  // REST OF THE COLUMNS 
-  for(m = 1; m <= k_; m++) {
-    MIC = ZMatrix::Zero(k_*nao_, k_*nao_);
-    XIC = ZMatrix::Zero(k_*nao_, nao_);
-    QIC = ZMatrix::Zero(k_*nao_, nao_);
-
-    for(int n = 1; n <= k_; n++) {
-      auto QBlock = QIC.block((n-1)*nao_, 0, nao_, nao_);
-      for(int l = 0; l <= k_; l++) {
-        if(m>=l && n>=l) QBlock += (h * I.poly_integ(0,m,l) * ZMatrixMap(G.curr_timestep_ret_ptr(m,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_les_ptr(l,n), nao_, nao_)).transpose();
-        else if(m<l && n>=l) QBlock -= (h * I.poly_integ(0,m,l) * ZMatrixMap(G.curr_timestep_ret_ptr(l,m), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_les_ptr(l,n), nao_, nao_)).transpose();
-        else if(m>=l && n<l) QBlock -= (h * I.poly_integ(0,m,l) * ZMatrixMap(G.curr_timestep_ret_ptr(m,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_les_ptr(n,l), nao_, nao_).adjoint()).transpose();
-        else if(m<l && n<l) QBlock += (h * I.poly_integ(0,m,l) * ZMatrixMap(G.curr_timestep_ret_ptr(l,m), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_les_ptr(n,l), nao_, nao_).adjoint()).transpose();
-      }
-      QBlock -= (h * I.poly_integ(0,n,0) * ZMatrixMap(G.curr_timestep_les_ptr(0,m), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_ret_ptr(n,0), nao_, nao_).adjoint()).transpose();
-      QBlock -= (cplxi/h * I.poly_diff(n,0) * ZMatrixMap(G.curr_timestep_les_ptr(0,m), nao_, nao_).adjoint()).transpose();
-      
-      ZMatrixMap(M_.data(), nao_, nao_) = ZMatrix::Zero(nao_, nao_);
-      les_it_int(m, n, G, Sigma, M_.data());
-      QBlock += ZMatrixMap(M_.data(), nao_, nao_);
-    }
-
-    for(int n = 1; n <= k_; n++) {
-      for(int l = 1; l <= k_; l++) {
-        auto MBlock = MIC.block((n-1)*nao_, (l-1)*nao_, nao_, nao_);
-        MBlock += -cplxi/h * I.poly_diff(n,l) * IMap;
-        if(n==l) MBlock -= ZMatrixMap(H+l*es_, nao_, nao_).transpose() - mu*IMap;
-        if(n>=l) MBlock -= (h * I.poly_integ(0,n,l) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(n,l), nao_, nao_).adjoint()).transpose();
-        else if(n<l) MBlock += (h * I.poly_integ(0,n,l) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(l,n), nao_, nao_)).transpose();
-      }
-    }
-    // B34: with RHO_DIAGONAL, G^<(m,m) is known data of the row solve (its current diagonal-method value: the
-    // initial guess on the first bootstrap iteration, then the previous iterate) and is not overwritten here.
-    if(rho_version_ == 1) fix_known_diagonal(MIC, QIC, m, ZMatrixMap(G.curr_timestep_les_ptr(m,m), nao_, nao_).transpose(), k_, nao_);
-    Eigen::FullPivLU<ZMatrix> lu2(MIC);
-    ensure_lu(lu2, where);   // DY-S10 (tier 2)
-    XIC = lu2.solve(QIC);
-    for(int i = (rho_version_ == 1 ? m+1 : m); i <= k_; i++) {
-      err += (ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose()).norm();
-      ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) = ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose();
-    }
-  }
-
-  if(rho_version_==1) {
-    // redo diagonal
-    MIC = ZMatrix::Zero(k_*nao_, k_*nao_);
-    XIC = ZMatrix::Zero(k_*nao_, nao_);
-    QIC = ZMatrix::Zero(k_*nao_, nao_);
-
-    for(int i = 1; i <= k_; i++) {
-      for(int j = 1; j <= k_; j++) {
-        auto MBlock = MIC.block((i-1)*nao_, (j-1)*nao_, nao_, nao_);
-        MBlock = 1./h * I.poly_diff(i,j) * IMap;
-      }
-    }
-
-    // B34: B is evaluated with the diagonal-method values G^<(i,i) (the row solves above treat them as known and do
-    // not overwrite them) and with the off-diagonal row values of this pass. The update is explicit in G^<(i,i), as in
-    // the RHO_DIAGONAL time stepper (G^<_old(T,T)), so the bootstrap iteration converges to the same kind of fixed
-    // point: the converged diagonal solves the discrete diagonal equation evaluated with its own values (exactly
-    // anti-Hermitian; trace-conserving for Sigma = 0).
-    // Solving \partial_t G = -ih_oG -iG^\dagger h_o^\dagger -iI -iI^\dagger -2\xi i\ell^<
-    //                      = -ih_oG +iG h_o^\dagger -iI -iI^\dagger -2\xi i\ell^<
-    //                      = [iG h_o^\dagger-iI^\dagger] + [-ih_oG-iI] -2\xi i\ell^<
-    //                      = [iG h_o^\dagger-iI^\dagger] + [iG^\dagger h_o^\dagger + iI^dagger]^\dagger -2\xi i\ell^<
-    //                      = [iG h_o^\dagger-iI^\dagger] + [-iG h_o^\dagger + iI^dagger]^\dagger -2\xi i\ell^<
-    //                      = [iG h_o^\dagger-iI^\dagger] - [iG h_o^\dagger - iI^dagger]^\dagger -2\xi i\ell^<
-    // I         =  S^R G^< + S^< G^A
-    // I^\dagger = -G^< S^A - G^R S^<
-    for(int i = 1; i <= k_; i++) {
-      auto QBlock = QIC.block((i-1)*nao_, 0, nao_, nao_);
-      QBlock += cplxi * ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) * (ZMatrixMap(H+i*es_, nao_, nao_) - mu*IMap);
-
-      for(int l = 0; l <= i; l++) {
-        QBlock += cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_ret_ptr(i,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_les_ptr(l,i), nao_, nao_);
-      }
-      for(int l = i+1; l <= k_; l++) {
-        QBlock += cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_ret_ptr(l,i), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_les_ptr(i,l), nao_, nao_).adjoint();
-      }
-      for(int l = 0; l < i; l++) {
-        QBlock -= cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_les_ptr(l,i), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_ret_ptr(i,l), nao_, nao_).adjoint();
-      }
-      // l = i: the diagonal-method value G^<(i,i) itself (B34; not -G^<(i,i)^dagger)
-      QBlock += cplxi * I.poly_integ(0,i,i) * h * ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(i,i), nao_, nao_).adjoint();
-      for(int l = i+1; l <= k_; l++) {
-        QBlock -= cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_les_ptr(i,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(l,i), nao_, nao_);
-      }
-      ZMatrixMap(M_.data(), nao_, nao_) = ZMatrix::Zero(nao_, nao_);
-      les_it_int(i, i, G, Sigma, M_.data());
-      QBlock += cplxi*ZMatrixMap(M_.data(), nao_, nao_).transpose();
-
-      ZMatrixMap(XIC.data(), nao_, nao_) = QBlock-QBlock.adjoint();
-      QBlock = ZMatrixMap(XIC.data(), nao_, nao_);
-
-      QBlock -= 1./h * I.poly_diff(i,0) * ZMatrixMap(G.curr_timestep_les_ptr(0,0), nao_, nao_);
-    }
-
-    Eigen::FullPivLU<ZMatrix> lu3(MIC);
-
-    ensure_lu(lu3, where);   // DY-S10 (tier 2)
-    XIC = lu3.solve(QIC);
-    for(int i = 1; i <= k_; i++) {
-      err += (ZMatrixMap(XIC.data()+(i-1)*es_, nao_, nao_) - ZMatrixMap(DIC.data() + (i-1)*es_, nao_, nao_)).norm();
-      ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) = ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_);
-    }
-  }
+  // rows m = 1..k and, with RHO_DIAGONAL, the diagonal (converged to the fixed point of the pair, B34)
+  start_les_rows_(G, mu, H, Sigma, I, h, false, true, err, where);
 
   return cs.outer() ? ensure_finite_(err, where) : err;
 }
@@ -627,110 +556,8 @@ double dyson::dyson_start_les_2leg(herm_matrix_hodlr &G, double mu, cplx *H, her
     ZMatrixMap(G.curr_timestep_les_ptr(0,i), nao_, nao_) = ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose();
   }
 
-  // store diagonal in case we do the diagonal correction.
-  // needed for evaluating iteration error
-  ZMatrix DIC = ZMatrix::Zero(k_*nao_, nao_);
-  for(int i = 1; i <= k_; i++) {
-    ZMatrixMap(DIC.data() + (i-1)*es_, nao_, nao_) = ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_);
-  }
-
-  // REST OF THE COLUMNS 
-  for(m = 1; m <= k_; m++) {
-    MIC = ZMatrix::Zero(k_*nao_, k_*nao_);
-    XIC = ZMatrix::Zero(k_*nao_, nao_);
-    QIC = ZMatrix::Zero(k_*nao_, nao_);
-
-    for(int n = 1; n <= k_; n++) {
-      auto QBlock = QIC.block((n-1)*nao_, 0, nao_, nao_);
-      for(int l = 0; l <= k_; l++) {
-        if(m>=l && n>=l) QBlock += (h * I.poly_integ(0,m,l) * ZMatrixMap(G.curr_timestep_ret_ptr(m,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_les_ptr(l,n), nao_, nao_)).transpose();
-        else if(m<l && n>=l) QBlock -= (h * I.poly_integ(0,m,l) * ZMatrixMap(G.curr_timestep_ret_ptr(l,m), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_les_ptr(l,n), nao_, nao_)).transpose();
-        else if(m>=l && n<l) QBlock -= (h * I.poly_integ(0,m,l) * ZMatrixMap(G.curr_timestep_ret_ptr(m,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_les_ptr(n,l), nao_, nao_).adjoint()).transpose();
-        else if(m<l && n<l) QBlock += (h * I.poly_integ(0,m,l) * ZMatrixMap(G.curr_timestep_ret_ptr(l,m), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_les_ptr(n,l), nao_, nao_).adjoint()).transpose();
-      }
-      QBlock -= (h * I.poly_integ(0,n,0) * ZMatrixMap(G.curr_timestep_les_ptr(0,m), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_ret_ptr(n,0), nao_, nao_).adjoint()).transpose();
-      QBlock -= (cplxi/h * I.poly_diff(n,0) * ZMatrixMap(G.curr_timestep_les_ptr(0,m), nao_, nao_).adjoint()).transpose();
-
-      ZMatrixMap(M_.data(), nao_, nao_) = ZMatrix::Zero(nao_, nao_);
-//      les_it_int(m, n, G, Sigma, M_.data());
-      QBlock += ZMatrixMap(M_.data(), nao_, nao_);
-    }
-    for(int n = 1; n <= k_; n++) {
-      for(int l = 1; l <= k_; l++) {
-        auto MBlock = MIC.block((n-1)*nao_, (l-1)*nao_, nao_, nao_);
-        MBlock += -cplxi/h * I.poly_diff(n,l) * IMap;
-        if(n==l) MBlock -= ZMatrixMap(H+l*es_, nao_, nao_).transpose() - mu*IMap;
-        if(n>=l) MBlock -= (h * I.poly_integ(0,n,l) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(n,l), nao_, nao_).adjoint()).transpose();
-        else if(n<l) MBlock += (h * I.poly_integ(0,n,l) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(l,n), nao_, nao_)).transpose();
-      }
-    }
-    Eigen::FullPivLU<ZMatrix> lu2(MIC);
-    ensure_lu(lu2, where);   // DY-S10 (tier 2)
-    XIC = lu2.solve(QIC);
-    for(int i = m; i <= k_; i++) {
-      if(rho_version_ == 1) err += i==m ? 0 : (ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose()).norm();
-      else                  err += (ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) - ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose()).norm();
-      ZMatrixMap(G.curr_timestep_les_ptr(m,i), nao_, nao_) = ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_).transpose();
-    }
-  }
-
-  if(rho_version_==1) {
-    // redo diagonal
-    MIC = ZMatrix::Zero(k_*nao_, k_*nao_);
-    XIC = ZMatrix::Zero(k_*nao_, nao_);
-    QIC = ZMatrix::Zero(k_*nao_, nao_);
-  
-  
-    for(int i = 1; i <= k_; i++) {
-      for(int j = 1; j <= k_; j++) {
-        auto MBlock = MIC.block((i-1)*nao_, (j-1)*nao_, nao_, nao_);
-        MBlock = 1./h * I.poly_diff(i,j) * IMap;
-      }
-    }
-
-    // Solving \partial_t G = -ih_oG -iG^\dagger h_o^\dagger -iI -iI^\dagger -2\xi i\ell^<
-    //                      = -ih_oG +iG h_o^\dagger -iI -iI^\dagger -2\xi i\ell^<
-    //                      = [iG h_o^\dagger-iI^\dagger] + [-ih_oG-iI] -2\xi i\ell^<
-    //                      = [iG h_o^\dagger-iI^\dagger] + [iG^\dagger h_o^\dagger + iI^dagger]^\dagger -2\xi i\ell^<
-    //                      = [iG h_o^\dagger-iI^\dagger] + [-iG h_o^\dagger + iI^dagger]^\dagger -2\xi i\ell^<
-    //                      = [iG h_o^\dagger-iI^\dagger] - [iG h_o^\dagger - iI^dagger]^\dagger -2\xi i\ell^<
-    // I         =  S^R G^< + S^< G^A
-    // I^\dagger = -G^< S^A - G^R S^<
-    for(int i = 1; i <= k_; i++) {
-      auto QBlock = QIC.block((i-1)*nao_, 0, nao_, nao_);
-      QBlock += cplxi * ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) * (ZMatrixMap(H+i*es_, nao_, nao_) - mu*IMap);
-  
-      for(int l = 0; l <= i; l++) {
-        QBlock += cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_ret_ptr(i,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_les_ptr(l,i), nao_, nao_);
-      }
-      for(int l = i+1; l <= k_; l++) {
-        QBlock += cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_ret_ptr(l,i), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_les_ptr(i,l), nao_, nao_).adjoint();
-      }
-      for(int l = 0; l <= i; l++) {
-        QBlock -= cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_les_ptr(l,i), nao_, nao_).adjoint() * ZMatrixMap(Sigma.curr_timestep_ret_ptr(i,l), nao_, nao_).adjoint();
-      }
-      for(int l = i+1; l <= k_; l++) {
-        QBlock -= cplxi * I.poly_integ(0,i,l) * h * ZMatrixMap(G.curr_timestep_les_ptr(i,l), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(l,i), nao_, nao_);
-      }
-      ZMatrixMap(M_.data(), nao_, nao_) = ZMatrix::Zero(nao_, nao_);
-  //    les_it_int(i, i, G, Sigma, M_.data());
-      QBlock += cplxi*ZMatrixMap(M_.data(), nao_, nao_).transpose();
-  
-      ZMatrixMap(XIC.data(), nao_, nao_) = QBlock-QBlock.adjoint();
-      QBlock = ZMatrixMap(XIC.data(), nao_, nao_);
-  
-      QBlock -= 1./h * I.poly_diff(i,0) * ZMatrixMap(G.curr_timestep_les_ptr(0,0), nao_, nao_);
-    }
-  
-    Eigen::FullPivLU<ZMatrix> lu3(MIC);
-  
-    ensure_lu(lu3, where);   // DY-S10 (tier 2)
-    XIC = lu3.solve(QIC);
-    for(int i = 1; i <= k_; i++) {
-      err += (ZMatrixMap(XIC.data()+(i-1)*es_, nao_, nao_) - ZMatrixMap(DIC.data() + (i-1)*es_, nao_, nao_)).norm();
-      ZMatrixMap(G.curr_timestep_les_ptr(i,i), nao_, nao_) = ZMatrixMap(XIC.data() + (i-1)*es_, nao_, nao_);
-    }
-  }
+  // rows m = 1..k and, with RHO_DIAGONAL, the diagonal (converged to the fixed point of the pair, B34)
+  start_les_rows_(G, mu, H, Sigma, I, h, false, false, err, where);
 
   return cs.outer() ? ensure_finite_(err, where) : err;
 }

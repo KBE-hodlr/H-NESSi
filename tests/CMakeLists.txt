@@ -154,12 +154,17 @@ add_test(NAME ScExampleEnergyBalance
   COMMAND bash ${_hn_ex}/sc_energy_balance.sh $<TARGET_FILE:SC.x> $<TARGET_FILE:h5flat> ${_hn_work}/sc_energy_balance
           ${CMAKE_CURRENT_SOURCE_DIR}/data/sc_pulse.inp ${CMAKE_CURRENT_SOURCE_DIR}/data/sc_pulse.h5)
 set_tests_properties(ScExampleEnergyBalance PROPERTIES LABELS "${_hn_ex_labels};Q10")
+# Energy balance of mpi_example for a contained smooth pulse (__pulse= smooth): same conventions (WP8b).
+add_test(NAME MpiExampleEnergyBalance
+  COMMAND bash ${_hn_ex}/mpi_energy_balance.sh $<TARGET_FILE:Main.x> $<TARGET_FILE:h5flat> ${_hn_work}/mpi_energy_balance
+          ${CMAKE_CURRENT_SOURCE_DIR}/data/mpi_pulse.inp)
+set_tests_properties(MpiExampleEnergyBalance PROPERTIES LABELS "${_hn_ex_labels};Q10")
 set_tests_properties(MpiExampleRestart_B16 PROPERTIES LABELS "${_hn_ex_labels};B16")
 set_tests_properties(MpiExampleIterRows_B17 PROPERTIES LABELS "${_hn_ex_labels};B17")
 set_tests_properties(ScExamplePhiLength_B24 PROPERTIES LABELS "${_hn_ex_labels};B24")
 set_tests_properties(ScExampleRun PROPERTIES LABELS "${_hn_ex_labels}")
 set_tests_properties(MpiExampleRestart_B16 MpiExampleIterRows_B17 ScExamplePhiLength_B24 ScExampleRun
-                     ScExampleEnergyBalance PROPERTIES ENVIRONMENT "OMP_NUM_THREADS=2" TIMEOUT 900)
+                     ScExampleEnergyBalance MpiExampleEnergyBalance PROPERTIES ENVIRONMENT "OMP_NUM_THREADS=2" TIMEOUT 900)
 
 # ------------------------------------------------------------------ labels for discovered tests (must be last)
 get_property(_hn_label_script GLOBAL PROPERTY HN_LABEL_SCRIPT)

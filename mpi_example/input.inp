@@ -24,3 +24,4 @@ __BootMaxIter=  20
 __BootMaxErr=  1e-15
 __StepMaxIter=  20
 __StepMaxErr=  1e-15
+__pulse=  step

@@ -1,5 +1,8 @@
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 
 #include "h_nessi/mpi_comm.hpp"
 #include "h_nessi/mpi_comm_utils.hpp"
@@ -19,6 +22,45 @@ static void restore_iter_rows(std::vector<std::vector<double>> &dst, const std::
     size_t ncols = std::min({dst[iter].size(), src[iter].size(), static_cast<size_t>(t0)});
     for(size_t ti = 0; ti < ncols; ti++) dst[iter][ti] = src[iter][ti];
   }
+}
+
+// Optional input parameter: x keeps its default when no line contains the flag (find_param throws in that case).
+template <typename T>
+static bool find_param_optional(char *file, const char *flag, T &x) {
+  std::ifstream in(file);
+  std::string line;
+  while(std::getline(in, line)) {
+    if(line.find(flag) != std::string::npos) { find_param(file, flag, x); return true; }
+  }
+  return false;
+}
+// Same for a one-word string value.
+static bool find_param_optional(char *file, const char *flag, std::string &x) {
+  std::ifstream in(file);
+  std::string line;
+  while(std::getline(in, line)) {
+    size_t pos = line.find(flag);
+    if(pos != std::string::npos) {
+      std::istringstream rest(line.substr(pos + std::strlen(flag)));
+      if(!(rest >> x)) throw std::runtime_error(std::string("missing value for input flag ") + flag);
+      return true;
+    }
+  }
+  return false;
+}
+
+// Restart: copy the energy-bookkeeping observables for ti < t0 from obs_checkpoint.h5 (absent in pre-WP8b checkpoints:
+// then they stay as computed, i.e. zero for ti < t0).
+static void restore_energy_rows(h5e::File &f, int t0, std::vector<double> &current_x, std::vector<double> &energy_band,
+                                std::vector<double> &energy_corr) {
+  auto restore = [&](const char *name, std::vector<double> &dst) {
+    if(!f.exist(name)) return;
+    std::vector<double> src = f.getDataSet(name).read<std::vector<double>>();
+    for(int ti = 0; ti < t0 && ti < (int)src.size() && ti < (int)dst.size(); ti++) dst[ti] = src[ti];
+  };
+  restore("current_x", current_x);
+  restore("energy_band", energy_band);
+  restore("energy_corr", energy_corr);
 }
 
 int main(int argc, char *argv[]) {
@@ -155,6 +197,29 @@ int main(int argc, char *argv[]) {
   if(mpi_rank==mpi_root) std::cout << "Amax = " << Amax << "\n";
   find_param(flin,"__Ainitx=",Ainitx);
   if(mpi_rank==mpi_root) std::cout << "Ainitx = " << Ainitx << "\n";
+  // Shape of A(t) (optional, WP8b): "step" (default, A_x = +Amax for t >= 0) or "smooth" (contained pulse
+  // A_x = Amax sin^npow(pi (t - pulse_tstart)/pulse_T) sin(pulse_omega (t - pulse_tstart)), npow = __pulse_npow= (default
+  // 2), lattice.cpp).
+  std::string pulse = "step";
+  double pulse_tstart = 0.0, pulse_T = 0.0, pulse_omega = 0.0;
+  int pulse_npow = 2;
+  find_param_optional(flin,"__pulse=",pulse);
+  if(pulse != "step" && pulse != "smooth") {
+    if(mpi_rank==mpi_root) std::cerr << "Error: __pulse= must be step or smooth, got '" << pulse << "'\n";
+    MPI_Abort(MPI_COMM_WORLD, 1);
+  }
+  if(pulse == "smooth") {
+    find_param(flin,"__pulse_tstart=",pulse_tstart);
+    find_param(flin,"__pulse_T=",pulse_T);
+    find_param(flin,"__pulse_omega=",pulse_omega);
+    find_param_optional(flin,"__pulse_npow=",pulse_npow);
+    if(pulse_npow < 2) {
+      if(mpi_rank==mpi_root) std::cerr << "Error: __pulse_npow= must be >= 2 (E = -dA/dt continuous)\n";
+      MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+  }
+  if(mpi_rank==mpi_root) std::cout << "pulse = " << pulse << " (tstart, T, omega, npow) = (" << pulse_tstart << ", "
+                                   << pulse_T << ", " << pulse_omega << ", " << pulse_npow << ")\n";
   
   // solver parameters
   find_param(flin,"__Nt=",Nt);
@@ -191,6 +256,8 @@ int main(int argc, char *argv[]) {
 
   //lattice
   lattice_2d_ysymm lattice(L, Nt, dt, J, Amax, mu, size);
+  lattice.Ainitx_ = Ainitx;   // vk and epsk_band use the same k - A(t) - Ainit as hk
+  if(pulse == "smooth") lattice.smooth_pulse_afield(Nt, dt, Amax, pulse_tstart, pulse_T, pulse_omega, pulse_npow);
   int Nk = lattice.Nk_;
   if(mpi_rank==mpi_root) std::cout << "Total number of k-points Nk = " << Nk << "\n";
 
@@ -200,6 +267,11 @@ int main(int argc, char *argv[]) {
   // observables
   std::vector<double> density_k(Nk), jxt_local(Nt), jyt_local(Nt), Ekint_local(Nt), Navgt_local(Nt);
   std::vector<double> jxt_total(Nt), jyt_total(Nt), Ekint_total(Nt), Navgt_total(Nt);
+  // Energy bookkeeping (WP8b, D-7; see the output section): current <j_x>(t) (Eq. 26, not divided by Amax), band energy
+  // (Eq. 27 with eps_{k-A(t)}), correlation energy (1/2) Im Tr[Sigma_2B * G]^<(t,t). Rank-local k-sums, reduced like
+  // the other observables; energy_hf/total, efield and energy_deposited are derived on the root at the end.
+  std::vector<double> current_x_local(Nt), energy_band_local(Nt), energy_corr_local(Nt);
+  std::vector<double> current_x_total(Nt), energy_band_total(Nt), energy_corr_total(Nt);
   // jxt_iter[iter][t]: current after bootstrap iteration iter (t <= SolverOrder) or corrector iteration iter (t > SolverOrder).
   // B17: the bootstrap loop runs iter = 0..BootMaxIter and the corrector loop iter = 0..StepMaxIter, so both bounds are needed.
   const int n_iter_rows = std::max(BootMaxIter, StepMaxIter) + 1;
@@ -357,6 +429,8 @@ int main(int argc, char *argv[]) {
         jyt_local[tstp]=obs[1]/Amax;
         Ekint_local[tstp]=obs[2];
         Navgt_local[tstp]=obs[3];
+        current_x_local[tstp]=obs[0];
+        energy_band_local[tstp]=observables::get_energy_band_local(tstp, Nk_rank, lattice, comm.kindex_rank, corrK_rank);
 
         jxt_iter_local[iter][tstp]=obs[0]/Amax;
       }
@@ -367,6 +441,17 @@ int main(int argc, char *argv[]) {
       if((tot_err <= BootMaxErr) && (iter!=0)) break;
 
     } // Bootstrap iteration loop
+
+    // Correlation energy for t = 0..k: (1/2) sum_spins (1/N_k) sum_k Re(-i[Sigma_k * G_k]^<(t,t)) (Galitskii-Migdal)
+    for(int tstp = 0; tstp <= SolverOrder; tstp++){
+      double ec = 0.0;
+      for(int k=0;k<Nk_rank;k++){
+        cplx res;
+        dyson_sol.gamma_integral(tstp, corrK_rank[k]->Sigma_, corrK_rank[k]->G_, dt, I, &res);
+        ec += observables::bz_weight(comm.kindex_rank[k], lattice) * res.real();
+      }
+      energy_corr_local[tstp] = 0.5 * 2.0 * ec;   // 1/2 (Galitskii-Migdal) x 2 spins
+    }
 
     end = MPI_Wtime();
 
@@ -403,6 +488,7 @@ int main(int argc, char *argv[]) {
   int time_stop_mess = 0; // local time limit reached 
   int tot_mem_stop_mess = 0; // global memory limit reached
   int err_mess_tstp = 0; // convergance reached at time step
+  std::vector<double> ecorr_k(Nk_rank); // per local k: Re(-i[Sigma_k * G_k]^<(t,t)) at the current time step
 
 #pragma omp parallel shared(comm, se_eval, time_stop_mess, tot_mem_stop_mess, mem_stop_mess, err_mess_tstp)
   {
@@ -503,6 +589,8 @@ int main(int argc, char *argv[]) {
           jyt_local[tstp]=obs[1]/Amax;
           Ekint_local[tstp]=obs[2];
           Navgt_local[tstp]=obs[3];
+          current_x_local[tstp]=obs[0];
+          energy_band_local[tstp]=observables::get_energy_band_local(tstp,Nk_rank,lattice,comm.kindex_rank,corrK_rank);
           jxt_iter_local[iter][tstp]=obs[0]/Amax;
 
           if(mpi_rank==mpi_root) std::cout << "------ Time Stepping Iteration: "  << iter << ", tot err: " << tot_err << std::endl;
@@ -514,8 +602,24 @@ int main(int argc, char *argv[]) {
         #pragma omp barrier
       }
 
+      // Correlation energy at tstp (converged G; Sigma of the last corrector iteration): each thread its own k-points,
+      // with its own dyson object (gamma_integral uses dyson scratch); thread 0 sums in k order (thread-count independent).
+      if(th_my_Nk != 0){
+        for(int k=th_my_init_k;k<=th_my_end_k;k++){
+          cplx res;
+          dyson_sol_vec[thread_id].gamma_integral(tstp, corrK_rank[k]->Sigma_, corrK_rank[k]->G_, dt, I, &res);
+          ecorr_k[k] = res.real();
+        }
+      }
+      #pragma omp barrier
+
       //check for time and memory limits and perform checkpoint if needed
       if(thread_id==0){
+        {
+          double ec = 0.0;
+          for(int k=0;k<Nk_rank;k++) ec += observables::bz_weight(comm.kindex_rank[k], lattice) * ecorr_k[k];
+          energy_corr_local[tstp] = 0.5 * 2.0 * ec;   // 1/2 (Galitskii-Migdal) x 2 spins
+        }
 
         double time_now = MPI_Wtime();
         double stop_time = time_now - start_tot;
@@ -581,6 +685,9 @@ int main(int argc, char *argv[]) {
           MPI_Reduce(jyt_local.data(), jyt_total.data(), jyt_total.size(), MPI_DOUBLE, MPI_SUM, mpi_root, MPI_COMM_WORLD);
           MPI_Reduce(Ekint_local.data(), Ekint_total.data(), Ekint_total.size(), MPI_DOUBLE, MPI_SUM, mpi_root, MPI_COMM_WORLD);
           MPI_Reduce(Navgt_local.data(), Navgt_total.data(), Navgt_total.size(), MPI_DOUBLE, MPI_SUM, mpi_root, MPI_COMM_WORLD);
+          MPI_Reduce(current_x_local.data(), current_x_total.data(), Nt, MPI_DOUBLE, MPI_SUM, mpi_root, MPI_COMM_WORLD);
+          MPI_Reduce(energy_band_local.data(), energy_band_total.data(), Nt, MPI_DOUBLE, MPI_SUM, mpi_root, MPI_COMM_WORLD);
+          MPI_Reduce(energy_corr_local.data(), energy_corr_total.data(), Nt, MPI_DOUBLE, MPI_SUM, mpi_root, MPI_COMM_WORLD);
 
           for(int iter=0; iter<n_iter_rows; iter++){
             MPI_Reduce(jxt_iter_local[iter].data(), jxt_iter_total[iter].data(), jxt_iter_total[iter].size(), MPI_DOUBLE, MPI_SUM, mpi_root, MPI_COMM_WORLD);
@@ -606,6 +713,7 @@ int main(int argc, char *argv[]) {
                     Navgt_total[ti] = Navgtcheckpoint[ti];
                   }
                   restore_iter_rows(jxt_iter_total, jxt_iter_checkpoint, t0);
+                  restore_energy_rows(jcheckpoint_file, t0, current_x_total, energy_band_total, energy_corr_total);
               }
             }
 
@@ -616,6 +724,9 @@ int main(int argc, char *argv[]) {
             h5e::dump<std::vector<double>>(out_file, "Ekint", Ekint_total);
             h5e::dump<std::vector<double>>(out_file, "Navgt", Navgt_total);
             h5e::dump<std::vector<std::vector<double>>>(out_file, "jxt_iter", jxt_iter_total);
+            h5e::dump<std::vector<double>>(out_file, "current_x", current_x_total);
+            h5e::dump<std::vector<double>>(out_file, "energy_band", energy_band_total);
+            h5e::dump<std::vector<double>>(out_file, "energy_corr", energy_corr_total);
           }
         }// checkpoint
       }// thread_id==0
@@ -627,6 +738,9 @@ int main(int argc, char *argv[]) {
   MPI_Reduce(jyt_local.data(), jyt_total.data(), jyt_total.size(), MPI_DOUBLE, MPI_SUM, mpi_root, MPI_COMM_WORLD);
   MPI_Reduce(Ekint_local.data(), Ekint_total.data(), Ekint_total.size(), MPI_DOUBLE, MPI_SUM, mpi_root, MPI_COMM_WORLD);
   MPI_Reduce(Navgt_local.data(), Navgt_total.data(), Navgt_total.size(), MPI_DOUBLE, MPI_SUM, mpi_root, MPI_COMM_WORLD);
+  MPI_Reduce(current_x_local.data(), current_x_total.data(), Nt, MPI_DOUBLE, MPI_SUM, mpi_root, MPI_COMM_WORLD);
+  MPI_Reduce(energy_band_local.data(), energy_band_total.data(), Nt, MPI_DOUBLE, MPI_SUM, mpi_root, MPI_COMM_WORLD);
+  MPI_Reduce(energy_corr_local.data(), energy_corr_total.data(), Nt, MPI_DOUBLE, MPI_SUM, mpi_root, MPI_COMM_WORLD);
 
   for(int iter=0; iter<n_iter_rows; iter++){
     MPI_Reduce(jxt_iter_local[iter].data(), jxt_iter_total[iter].data(), jxt_iter_total[iter].size(), MPI_DOUBLE, MPI_SUM, mpi_root, MPI_COMM_WORLD);
@@ -676,6 +790,7 @@ int main(int argc, char *argv[]) {
         Navgt_total[ti] = Navgcheckpoint[ti];
       }
       restore_iter_rows(jxt_iter_total, jxt_iter_checkpoint, t0);
+      restore_energy_rows(jcheckpoint_file, t0, current_x_total, energy_band_total, energy_corr_total);
     }
 
     //write new observables
@@ -685,6 +800,81 @@ int main(int argc, char *argv[]) {
     h5e::dump<std::vector<double>>(new_out_file, "Ekint", Ekint_total);
     h5e::dump<std::vector<double>>(new_out_file, "Navgt", Navgt_total);
     h5e::dump<std::vector<std::vector<double>>>(new_out_file, "jxt_iter", jxt_iter_total);
+    // descriptions of the pre-WP8b datasets (data unchanged)
+    {
+      auto describe = [&](const std::string &name, const std::string &desc){
+        new_out_file.getDataSet(name).createAttribute<std::string>("description", desc);
+      };
+      describe("jxtnorm", "<j_x>(t)/Amax (paper Eq. 26, spin summed). A(t) = +Amax theta(t) here (paper Eq. 29: -Amax), "
+                          "so jxtnorm = -sigma(t) of paper Eq. 30 for the default step");
+      describe("jytnorm", "<j_y>(t)/Amax (paper Eq. 26, spin summed)");
+      describe("Ekint", "(2/N_k) sum_k (eps_k - mu~) rho_k(t) with the BARE eps_k (no A(t)) and the input mu~ (paper Eq. 27 "
+                        "as printed); not the band energy of the driven system: see energy_band");
+      describe("Navgt", "<n_s>(t) = (1/N_k) sum_k rho_k(t), density per spin (paper Eq. 28)");
+      describe("jxt_iter", "jxtnorm after each bootstrap (t <= k) or corrector (t > k) iteration; rows = iterations");
+    }
+
+    // ---- Energy bookkeeping (WP8b; conventions D-7, the same as SC_example). Per lattice site, spin summed.
+    // Hamiltonian (paper Eq. 25): H(t) = sum_{k,s} eps_{k-A(t)} n_{k,s} + U sum_i n_{i,up} n_{i,dn} - mu N, with
+    // eps_k = -2J(cos kx + cos ky). The code solves HF + second Born with the Hartree shift absorbed into the input
+    // chemical potential (__MuChem= is mu~ = mu - U<n_s>, paper below Eq. 25; Navgt = <n_s> is conserved).
+    // Galitskii-Migdal (thesis Eq. 4.29): one-body terms count fully, interaction terms with 1/2:
+    //   energy_band  = (2/N_k) sum_k eps_{k-A(t)} rho_k(t)                          (Eq. 27 with the driven eps)
+    //   energy_hf    = (1/2) Tr[rho Sigma^H] = (1/2) sum_s <n_s> U <n_-s> = U Navgt^2  (Sigma^H_s = U <n_-s>; Fock = 0)
+    //   energy_corr  = (1/2) (2/N_k) sum_k Im[Sigma_2B,k * G_k]^<(t,t)              (dyson::gamma_integral = -i[.*.]^<)
+    //   energy_total = energy_band + energy_hf + energy_corr  ( = <H> + mu N; mu N is constant and omitted)
+    //   current_x    = <j_x>(t) = (2/N_k) sum_k v_{k-A(t)} rho_k(t), v = d eps/dk     (Eq. 26; = Amax * jxtnorm)
+    //   efield       = E_x(t) = -dA_x/dt (Eq. 29; degree-k polynomial derivative of the A_x grid values)
+    //   energy_deposited = E^j(t) = int_0^t E_x j_x dt' (Gregory quadrature of order k)
+    // dE/dt = <dH/dt> = sum v (-dA/dt) n = E j, so energy_total(t) - energy_total(0) = energy_deposited(t) up to the
+    // discretisation error (ctest MpiExampleEnergyBalance, __pulse= smooth). For the default step A = +Amax theta(t)
+    // the kick happens between t = -1 (equilibrium, A = 0) and t = 0: efield = energy_deposited = 0 on the grid
+    // t >= 0, energy_total(t) stays constant, and energy_total(0) already contains the kick energy.
+    std::vector<double> energy_hf_total(Nt), energy_total_total(Nt), efield_total(Nt), energy_deposited_total(Nt);
+    for(int t = 0; t < Nt; t++){
+      energy_hf_total[t] = U * Navgt_total[t] * Navgt_total[t];
+      energy_total_total[t] = energy_band_total[t] + energy_hf_total[t] + energy_corr_total[t];
+    }
+    {
+      const int k = SolverOrder;
+      for(int t = 0; t < Nt; t++){
+        int st = std::min(std::max(t - k/2, 0), Nt - 1 - k);
+        double d = 0.0;
+        for(int l = 0; l <= k; l++) d += I.poly_diff(t - st, l) * lattice.A_[st + l].x();
+        efield_total[t] = -d / dt;
+      }
+      for(int t = 0; t < Nt; t++){
+        double e = 0.0;
+        for(int j = 0; j <= std::max(t, k); j++) e += I.gregory_weights(t, j) * efield_total[j] * current_x_total[j];
+        energy_deposited_total[t] = dt * e;
+      }
+    }
+    auto dump_described = [&](const std::string &name, const std::vector<double> &v, const std::string &desc){
+      h5e::dump<std::vector<double>>(new_out_file, name, v);
+      new_out_file.getDataSet(name).createAttribute<std::string>("description", desc);
+    };
+    dump_described("current_x", current_x_total,
+      "<j_x>(t) = -(2i/N_k) sum_k v_{k-A(t)} G^<_k(t,t), v = d eps/dk = 2J sin(k_x - A_x - Ainit) (paper Eq. 26), "
+      "spin summed, per site; = Amax * jxtnorm. Sign: A(t) enters as eps_{k-A(t)}, E = -dA/dt (Eq. 29)");
+    dump_described("energy_band", energy_band_total,
+      "band energy (2/N_k) sum_k eps_{k-A(t)} rho_k(t) = -(2i/N_k) sum_k eps_{k-A(t)} G^<_k(t,t), eps_k = "
+      "-2J(cos kx + cos ky) WITHOUT mu (paper Eq. 27 with the driven dispersion); one-body: Galitskii-Migdal factor 1. "
+      "Not equal to Ekint (bare eps_k without A(t), includes -mu)");
+    dump_described("energy_hf", energy_hf_total,
+      "(1/2) Tr[rho Sigma^H] = U <n_s>^2 = U Navgt^2 per site (Galitskii-Migdal HF part, thesis Eq. 4.29; the Hartree "
+      "shift U<n_s> is absorbed in the input mu~ = mu - U<n_s>, paper Eq. 25; Fock = 0 for on-site U)");
+    dump_described("energy_corr", energy_corr_total,
+      "(1/2) (2/N_k) sum_k Im[Sigma_2B,k * G_k]^<(t,t) = (1/2) sum_spins (1/N_k) sum_k Re(-i[Sigma*G]^<) "
+      "(Galitskii-Migdal correlation part, thesis Eq. 4.29; dyson::gamma_integral per k-point)");
+    dump_described("energy_total", energy_total_total,
+      "energy_band + energy_hf + energy_corr = <H(t)> + mu N of paper Eq. 25 (mu N conserved, omitted); "
+      "energy_total(t) - energy_total(0) = energy_deposited(t) up to the discretisation error");
+    dump_described("efield", efield_total,
+      "E_x(t) = -dA_x/dt (paper Eq. 29), degree-k polynomial derivative of the A_x grid values; the default step "
+      "A = +Amax theta(t) gives 0 for t >= 0 (the kick lies between t = -1 and t = 0)");
+    dump_described("energy_deposited", energy_deposited_total,
+      "E^j(t) = int_0^t E_x(t') <j_x>(t') dt' (paper Eq. 29 field, thesis Eq. 6.17) = int efield * current_x, "
+      "Gregory quadrature of order k");
 
     //write timings
     h5e::File dyson_file(output_dir + "dyson_timings.h5", h5e::File::Overwrite | h5e::File::ReadWrite | h5e::File::Create);

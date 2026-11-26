@@ -7,12 +7,14 @@
 //  (c) agent_scratch/51/t_start*.cpp: order of dyson_start_ret_ntti with the slot (n,l>n) left zero (B12) and
 //      with imp_tp0 (B13); (d) B25: dyson_start_2leg(function&) must forward imp_tp0; (e) B31: imp_tp0 error.
 //  B12, B13, B25 and B31 are fixed in WP1; their former KnownBug_* tests are ordinary tests now.
-//  (f) B34 (WP7): with RHO_DIAGONAL the lesser row solves of dyson_start_ntti / _ntti_nobc treat G^<(m,m) as known
+//  (f) B34 (WP7, _2leg in WP7b): with RHO_DIAGONAL the lesser row solves of dyson_start_ntti / _ntti_nobc / _2leg
+//      treat G^<(m,m) as known
 //      (the diagonal value before the call) and the diagonal redo evaluates B with the diagonal values, so the
 //      converged bootstrap diagonal solves its own discrete diagonal equation (as the time stepper's does).  The
 //      dense reference implements this independently (column m moved to the right-hand side, equation n = m dropped).
-//      _2leg keeps the old scheme (not part of B34's fix).  Closed-system tests (Sigma = 0, both xi): residual of the
-//      diagonal equation, anti-Hermiticity and particle number over the bootstrap window, order k+1.
+//      WP7b: one call iterates rows <-> diagonal to that fixed point, so it is idempotent for fixed Sigma.
+//      Closed-system tests (Sigma = 0, both xi, ntti / nobc / 2leg): residual of the diagonal equation,
+//      anti-Hermiticity and particle number over the bootstrap window, order k+1, fixed point (one more call is a no-op).
 #include <gtest/gtest.h>
 
 #include <cmath>
@@ -259,11 +261,10 @@ Result reference(int k, double h, double mu, function &H, herm_matrix_hodlr &Sig
     Dref.les_it_int(t, tp, Gref, Sig, z.data());
     return CM(z).transpose();
   };
-  // B34: RHO_DIAGONAL (ntti, nobc): in rows m >= 1 the diagonal G^<(m,m) = Ldiag0[m] is known; its column goes to
+  // B34: RHO_DIAGONAL (ntti, nobc, 2leg): in rows m >= 1 the diagonal G^<(m,m) = Ldiag0[m] is known; its column goes to
   // the right-hand side and the equation at the diagonal node n = m is dropped ((k-1) unknowns, (k-1) equations).
-  const bool consistent = rhodiag && lm != LES_2LEG;
   auto solve_row = [&](int m, const CM &Gm0) {
-    const int known = (consistent && m >= 1) ? m : -1;
+    const int known = (rhodiag && m >= 1) ? m : -1;
     std::vector<int> idx;  // unknown nodes = equation nodes
     for (int n = 1; n <= k; n++)
       if (n != known) idx.push_back(n);
@@ -312,15 +313,14 @@ Result reference(int k, double h, double mu, function &H, herm_matrix_hodlr &Sig
   }
   if (rhodiag) {
     // consistent (B34): res.L[i][i] is the diagonal value before the call (the rows did not overwrite it), and the
-    // l == i term of int G^< Sigma^A uses G^<(i,i) itself.  _2leg (old scheme): this call's horizontal value, and the
-    // l == i term uses -G^<(i,i)^dagger.
+    // l == i term of int G^< Sigma^A uses G^<(i,i) itself (all variants, _2leg since WP7b).
     CM A = CM::Zero(k * es, k * es);
     CV b = CV::Zero(k * es);
     for (int i = 1; i <= k; i++) {
       CM B = res.L[i][i] * (getmap(H.ptr(i)).adjoint() - mu * ID());
       for (int l = 0; l <= k; l++) B += h * Iw(0, i, l) * Gtl(i, l) * SLt(l, i);
       for (int l = 0; l <= k; l++) {
-        CM gl = (l < i || (l == i && !consistent)) ? CM(-res.L[l][i].adjoint()) : CM(res.L[i][l]);
+        CM gl = (l < i) ? CM(-res.L[l][i].adjoint()) : CM(res.L[i][l]);
         B += h * Iw(0, i, l) * gl * SA(l, i);
       }
       B += mix(i, i);
@@ -337,7 +337,7 @@ Result reference(int k, double h, double mu, function &H, herm_matrix_hodlr &Sig
 
 // variant: 0 dyson_start, 1 dyson_start_ntti, 2 dyson_start_ntti_nobc, 3 dyson_start_2leg
 struct Case { int variant; bool tti; LesMode lm; bool rhodiag; bool imp; SlotMode sm; };
-struct Errs { double R = 0, L = 0, tv = 0, libref = 0, fixpt = 0; int iters = 1; };
+struct Errs { double R = 0, L = 0, tv = 0, libref = 0, fixpt = 0, err2 = 0, idem = 0; int iters = 1; };
 
 Errs run_case(const Case &cs, int k, double h) {
   Model M;
@@ -382,23 +382,30 @@ Errs run_case(const Case &cs, int k, double h) {
   auto ref = [&](const std::vector<CM> &d0) { return reference(k, h, Mc.mu, H, Sig, Gref, Dref, dlr, I, cs.tti, cs.lm, cs.rhodiag, cs.imp, GL00, d0); };
   Errs e;
   std::vector<CM> d0 = diag();
-  double err = call();
+  call();
   Result R = ref(d0);
-  // B34: with RHO_DIAGONAL (ntti, nobc) one call is one fixed-point iteration of the diagonal (Sigma fixed here):
-  // the first call is checked against the reference (initial guess G^<(i,i) = 0 for i >= 1), then iterate to
-  // convergence and check the last call (its input diagonal) and the fixed point.
-  if (cs.rhodiag && cs.lm != LES_2LEG && !cs.tti) {
-    for (int n = 0; n <= k; n++)
-      for (int m = 0; m <= n; m++)
-        e.libref = std::max(e.libref, (getmap(G.curr_timestep_les_ptr(m, n)) - R.L[m][n]).norm());
-    while (err > 1e-13 && e.iters < 200) {
-      d0 = diag();
-      err = call();
-      e.iters++;
+  // B34: with RHO_DIAGONAL the reference does one pass (rows with the given diagonal, then the diagonal); WP7 called
+  // the library once per pass.  Since WP7b one library call iterates rows <-> diagonal to the fixed point: compare it
+  // with the reference iterated to convergence from the same initial diagonal, check that the converged diagonal is a
+  // fixed point of the reference, and that a second call (same Sigma) returns err ~ 0 and changes nothing.
+  if (cs.rhodiag && !cs.tti) {
+    std::vector<CM> d = d0;
+    for (e.iters = 1; e.iters < 200; e.iters++) {
+      R = ref(d);
+      double ch = 0;
+      for (int i = 1; i <= k; i++) ch = std::max(ch, (R.L[i][i] - d[i]).norm());
+      for (int i = 1; i <= k; i++) d[i] = R.L[i][i];
+      if (ch < 1e-15) break;
     }
-    R = ref(d0);
-    Result Rfix = ref(diag());  // one more pass of the reference on the converged diagonal must reproduce it
+    Result Rfix = ref(diag());  // one more pass of the reference on the library's diagonal must reproduce it
     for (int i = 1; i <= k; i++) e.fixpt = std::max(e.fixpt, (Rfix.L[i][i] - getmap(G.curr_timestep_les_ptr(i, i))).norm());
+    std::vector<CM> before;
+    for (int n = 0; n <= k; n++)
+      for (int m = 0; m <= n; m++) before.push_back(getmap(G.curr_timestep_les_ptr(m, n)));
+    e.err2 = call();
+    size_t q = 0;
+    for (int n = 0; n <= k; n++)
+      for (int m = 0; m <= n; m++) e.idem = std::max(e.idem, (getmap(G.curr_timestep_les_ptr(m, n)) - before[q++]).norm());
   }
   for (int n = 0; n <= k; n++)
     for (int m = 0; m <= n; m++) {
@@ -426,7 +433,11 @@ void check_case(const Case &cs, int kmax = 5, double h0 = 0.1) {
     EXPECT_LT(b.libref, 1e-13) << "k=" << k << " library vs dense reference";
     EXPECT_LT(a.fixpt, 1e-13) << "k=" << k << " converged diagonal is a fixed point of the diagonal equation (B34)";
     EXPECT_LT(b.fixpt, 1e-13) << "k=" << k << " converged diagonal is a fixed point of the diagonal equation (B34)";
-    EXPECT_LT(a.iters, 200) << "k=" << k << " bootstrap iteration must converge";
+    EXPECT_LT(a.iters, 200) << "k=" << k << " reference iteration must converge";
+    EXPECT_LT(a.err2, 1e-12) << "k=" << k << " second call with the same Sigma: err (WP7b idempotence)";
+    EXPECT_LT(b.err2, 1e-12) << "k=" << k << " second call with the same Sigma: err (WP7b idempotence)";
+    EXPECT_LT(a.idem, 1e-13) << "k=" << k << " second call with the same Sigma changes G^< (WP7b idempotence)";
+    EXPECT_LT(b.idem, 1e-13) << "k=" << k << " second call with the same Sigma changes G^< (WP7b idempotence)";
     double want = k + 1 - 0.5;  // h = 0.1 -> 0.05 is slightly pre-asymptotic for k = 5
     EXPECT_GT(hn_test::rate(a.R, b.R), want) << "k=" << k << " R " << a.R << " -> " << b.R;
     EXPECT_GT(hn_test::rate(a.L, b.L), want) << "k=" << k << " < " << a.L << " -> " << b.L;
@@ -482,18 +493,25 @@ TEST(Bootstrap, Slow_TwoLegHorizSlotZeroSweep) { bs::check_case_sweep({3, false,
 TEST(Bootstrap, Slow_NttiImpTp0SlotZeroSweep) { bs::check_case_sweep({1, false, LES_BC, false, true, SLOT_ZERO}); }
 
 // =============================================================================================== B34 (WP7)
-// Closed driven system (Sigma = 0), N_o = 3, both statistics, RHO_DIAGONAL, dyson_start_ntti and _ntti_nobc iterated
-// to convergence.  Over the bootstrap window t <= k: the diagonal solves its own discrete diagonal equation
+// Closed driven system (Sigma = 0), N_o = 3, both statistics, RHO_DIAGONAL, dyson_start_ntti, _ntti_nobc and (WP7b)
+// _2leg; since WP7b one call converges the bootstrap fixed point for the given Sigma.  Over the bootstrap window t <= k: the diagonal solves its own discrete diagonal equation
 //   (1/h) sum_j D_ij G^<(j,j) = B_i - B_i^dagger,  B_i = i G^<(i,i) (h(i) - mu)
 // to roundoff (B34: before WP7 the right-hand side used the horizontal row values, residual ~1e-5 at k = 3, h = 0.05),
-// G^<(t,t) is anti-Hermitian and N(t) = tr(xi i G^<(t,t)) is conserved to roundoff, and the order is k+1.
+// G^<(t,t) is anti-Hermitian and N(t) = tr(xi i G^<(t,t)) is conserved to roundoff, and the order is k+1.  Fixed
+// point: one more call on the converged G^< changes no element by more than roundoff.  (_2leg before WP7b: residual
+// 1.4e-4 .. 3.1e-7 for k = 2 .. 5 at h = 0.05, agent_scratch/wp7b_progress.md.)
 namespace cl {
 const C II(0, 1);
 const int NO = 3;
 CM getmap(cplx *p) { return ZMatrixMap(p, NO, NO); }
 void putmap(cplx *p, const CM &Y) { ZMatrixMap(p, NO, NO) = Y; }
-struct Out { double res = 0, ah = 0, dn = 0, eL = 0, eR = 0; int iters = 0; };
-Out run(int xi, int k, double h, bool nobc) {
+struct Out { double res = 0, ah = 0, dn = 0, eL = 0, eR = 0, fix = 0, err2 = 0; std::vector<CM> GLout; };
+enum Variant { NTTI = 0, NOBC = 1, TWOLEG = 2 };
+const char *vname(Variant v) { return v == NTTI ? "ntti" : v == NOBC ? "nobc" : "2leg"; }
+// bath = true: a fixed (not self-consistent) self-energy of one bath level coupled to the system, Sigma = V g_b V^dagger
+// (R, <, mixed, Matsubara); then only idempotence and the independence of the initial guess are checked.
+// init: 0 = fresh G (zero diagonal), 1 = green_from_H initial guess.
+Out run(int xi, int k, double h, Variant v, bool bath = false, int init = 0) {
   Eigen::MatrixXd H0(NO, NO);
   H0 << 0.4, 0.3, -0.2, 0.3, -0.5, 0.25, -0.2, 0.25, 0.9;
   CM A(NO, NO);
@@ -541,19 +559,45 @@ Out run(int xi, int k, double h, bool nobc) {
     DMatrix z = DMatrix::Zero(NO, NO);
     Sig.set_mat(j, z);
   }
+  // bath level eb (eb - mu > 0 for bosons), coupling vector V
+  CV V(NO);
+  V << C(0.3, 0.1), C(-0.2, 0.15), C(0.25, -0.05);
+  const CM VV = bath ? CM(V * V.adjoint()) : CM(CM::Zero(NO, NO));
+  const double eb = mu + 0.7, fb = 1. / (std::exp(beta * (eb - mu)) - double(xi));
+  auto ph = [&](double t) { return std::exp(-II * (eb - mu) * t); };
+  for (int j = 0; j < r; j++) {
+    double tau = dlr.it0B()[j];
+    DMatrix sm = (-VV * std::exp(-(eb - mu) * tau) * (1. + double(xi) * fb)).real();
+    Sig.set_mat(j, sm);
+  }
   G.initGMConvTensor(dlr);
   for (int n = 0; n <= k; n++) {
-    for (int l = 0; l <= k; l++) putmap(Sig.curr_timestep_ret_ptr(n, l), CM::Zero(NO, NO));
-    for (int l = 0; l <= k; l++) putmap(Sig.curr_timestep_les_ptr(l, n), CM::Zero(NO, NO));
-    for (int j = 0; j < r; j++) Sig.set_tv(n, j, ZMatrix(CM::Zero(NO, NO)));
+    for (int l = 0; l <= k; l++) putmap(Sig.curr_timestep_ret_ptr(n, l), l <= n ? CM(-II * VV * ph((n - l) * h)) : CM(CM::Zero(NO, NO)));
+    for (int l = 0; l <= k; l++) putmap(Sig.curr_timestep_les_ptr(l, n), l <= n ? CM(-II * double(xi) * fb * VV * ph((l - n) * h)) : CM(CM::Zero(NO, NO)));
+    for (int j = 0; j < r; j++)
+      Sig.set_tv(n, j, ZMatrix(-II * double(xi) * fb * VV * ph(n * h) * std::exp((eb - mu) * dlr.it0B()[j])));
   }
-  if (nobc) putmap(G.curr_timestep_les_ptr(0, 0), exGL(0, 0));
   dyson D(nt, NO, k, dlr, true, false);
+  if (init == 1) D.green_from_H(G, mu, H, h, k);
+  if (v != NTTI) putmap(G.curr_timestep_les_ptr(0, 0), exGL(0, 0));
+  auto call = [&]() {
+    if (v == NTTI) return D.dyson_start_ntti(G, mu, H, Sig, I, h);
+    if (v == NOBC) return D.dyson_start_ntti_nobc(G, mu, H, Sig, I, h);
+    return D.dyson_start_2leg(G, mu, H, Sig, I, h);
+  };
   Out o;
-  double err = 1;
-  for (o.iters = 0; o.iters < 200 && err > 1e-13; o.iters++)
-    err = nobc ? D.dyson_start_ntti_nobc(G, mu, H, Sig, I, h) : D.dyson_start_ntti(G, mu, H, Sig, I, h);
+  call();  // WP7b: one call converges the RHO_DIAGONAL bootstrap for the given Sigma
   auto GL = [&](int i, int j) { return CM(getmap(G.curr_timestep_les_ptr(i, j))); };
+  {  // idempotence: a second call (same Sigma) returns err ~ 0 and reproduces G^< (diagonal and rows)
+    std::vector<CM> old;
+    for (int i = 0; i <= k; i++)
+      for (int j = i; j <= k; j++) old.push_back(GL(i, j));
+    o.err2 = call();
+    size_t q = 0;
+    for (int i = 0; i <= k; i++)
+      for (int j = i; j <= k; j++) o.fix = std::max(o.fix, (GL(i, j) - old[q++]).norm());
+    o.GLout = old;
+  }
   auto N = [&](const CM &g) { return (II * double(xi) * g).trace(); };
   for (int i = 0; i <= k; i++) {
     CM g = GL(i, i);
@@ -572,25 +616,54 @@ Out run(int xi, int k, double h, bool nobc) {
   }
   return o;
 }
-void check(int xi, bool nobc) {
+void check(int xi, Variant v) {
   for (int k = 2; k <= 5; k++) {
-    Out a = run(xi, k, 0.1, nobc), b = run(xi, k, 0.05, nobc);
+    Out a = run(xi, k, 0.1, v), b = run(xi, k, 0.05, v);
     for (const Out *o : {&a, &b}) {
-      EXPECT_LT(o->iters, 200) << "xi=" << xi << " k=" << k;
-      EXPECT_LT(o->res, 1e-12) << "xi=" << xi << " k=" << k << " diagonal-equation residual (B34)";
-      EXPECT_LT(o->ah, 1e-12) << "xi=" << xi << " k=" << k << " anti-Hermiticity of G^<(t,t)";
-      EXPECT_LT(o->dn, 1e-13) << "xi=" << xi << " k=" << k << " |N(t) - N(0)|";
+      EXPECT_LT(o->res, 1e-12) << vname(v) << " xi=" << xi << " k=" << k << " diagonal-equation residual (B34)";
+      EXPECT_LT(o->ah, 1e-12) << vname(v) << " xi=" << xi << " k=" << k << " anti-Hermiticity of G^<(t,t)";
+      EXPECT_LT(o->dn, 1e-13) << vname(v) << " xi=" << xi << " k=" << k << " |N(t) - N(0)|";
+      EXPECT_LT(o->err2, 1e-12) << vname(v) << " xi=" << xi << " k=" << k << " second call: err (idempotence)";
+      EXPECT_LT(o->fix, 1e-13) << vname(v) << " xi=" << xi << " k=" << k << " second call changes G^< (idempotence)";
     }
-    EXPECT_GT(hn_test::rate(a.eL, b.eL), k + 1 - 0.5) << "xi=" << xi << " k=" << k << " < " << a.eL << " -> " << b.eL;
-    EXPECT_GT(hn_test::rate(a.eR, b.eR), k + 1 - 0.5) << "xi=" << xi << " k=" << k << " R " << a.eR << " -> " << b.eR;
+    EXPECT_GT(hn_test::rate(a.eL, b.eL), k + 1 - 0.5) << vname(v) << " xi=" << xi << " k=" << k << " < " << a.eL << " -> " << b.eL;
+    EXPECT_GT(hn_test::rate(a.eR, b.eR), k + 1 - 0.5) << vname(v) << " xi=" << xi << " k=" << k << " R " << a.eR << " -> " << b.eR;
+  }
+}
+// WP7b idempotence for fixed Sigma, closed system and bath self-energy, from a zero diagonal and from green_from_H
+void check_idempotent(int xi, Variant v, bool bath) {
+  for (int k = 2; k <= 5; k++) {
+    Out a = run(xi, k, 0.1, v, bath, 0), b = run(xi, k, 0.1, v, bath, 1);
+    for (const Out *o : {&a, &b}) {
+      EXPECT_LT(o->err2, 1e-12) << vname(v) << " xi=" << xi << " bath=" << bath << " k=" << k << " second call: err";
+      EXPECT_LT(o->fix, 1e-13) << vname(v) << " xi=" << xi << " bath=" << bath << " k=" << k << " second call changes G^<";
+    }
+    double d = 0;
+    for (size_t q = 0; q < a.GLout.size(); q++) d = std::max(d, (a.GLout[q] - b.GLout[q]).norm());
+    EXPECT_LT(d, 1e-12) << vname(v) << " xi=" << xi << " bath=" << bath << " k=" << k << " result depends on the initial guess";
   }
 }
 }  // namespace cl
 
-TEST(BootstrapRhoDiagonal, ClosedSystemFermionNtti) { cl::check(-1, false); }
-TEST(BootstrapRhoDiagonal, ClosedSystemBosonNtti) { cl::check(1, false); }
-TEST(BootstrapRhoDiagonal, ClosedSystemFermionNobc) { cl::check(-1, true); }
-TEST(BootstrapRhoDiagonal, ClosedSystemBosonNobc) { cl::check(1, true); }
+TEST(BootstrapRhoDiagonal, ClosedSystemFermionNtti) { cl::check(-1, cl::NTTI); }
+TEST(BootstrapRhoDiagonal, ClosedSystemBosonNtti) { cl::check(1, cl::NTTI); }
+TEST(BootstrapRhoDiagonal, ClosedSystemFermionNobc) { cl::check(-1, cl::NOBC); }
+TEST(BootstrapRhoDiagonal, ClosedSystemBosonNobc) { cl::check(1, cl::NOBC); }
+TEST(BootstrapRhoDiagonal, ClosedSystemFermionTwoLeg) { cl::check(-1, cl::TWOLEG); }  // WP7b
+TEST(BootstrapRhoDiagonal, ClosedSystemBosonTwoLeg) { cl::check(1, cl::TWOLEG); }     // WP7b
+// WP7b: one call is idempotent for fixed Sigma (closed system and bath self-energy, both xi, three variants)
+TEST(BootstrapRhoDiagonal, IdempotentClosedFermion) {
+  for (auto v : {cl::NTTI, cl::NOBC, cl::TWOLEG}) cl::check_idempotent(-1, v, false);
+}
+TEST(BootstrapRhoDiagonal, IdempotentClosedBoson) {
+  for (auto v : {cl::NTTI, cl::NOBC, cl::TWOLEG}) cl::check_idempotent(1, v, false);
+}
+TEST(BootstrapRhoDiagonal, IdempotentBathFermion) {
+  for (auto v : {cl::NTTI, cl::NOBC, cl::TWOLEG}) cl::check_idempotent(-1, v, true);
+}
+TEST(BootstrapRhoDiagonal, IdempotentBathBoson) {
+  for (auto v : {cl::NTTI, cl::NOBC, cl::TWOLEG}) cl::check_idempotent(1, v, true);
+}
 
 // =============================================================================================== agent_scratch/51/t_start
 // Exact system (nao orbitals) + bath, full 4x4 complex Hermitian H; G^R and Sigma^R exact.
@@ -718,4 +791,10 @@ TEST(Bootstrap2leg, FunctionOverloadForwardsImpTp0) {  // B25
       }
     EXPECT_EQ(d, 0.0) << "function& and pointer overloads differ with imp_tp0=true";
   }
+}
+
+// WP7b: a non-contracting RHO_DIAGONAL bootstrap fixed point (large h) raises numerical_error instead of returning an
+// unconverged result
+TEST(BootstrapRhoDiagonal, NonContractingThrows) {  // closed 3-level model: contracting at h = 0.4, diverging at h = 0.6
+  for (auto v : {cl::NTTI, cl::NOBC, cl::TWOLEG}) EXPECT_THROW(cl::run(-1, 3, 1.0, v), h_nessi::numerical_error) << cl::vname(v);
 }

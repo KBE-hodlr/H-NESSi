@@ -50,6 +50,30 @@ namespace observables {
 
    }
    
+   double bz_weight(int global_k, lattice_2d_ysymm &lattice)
+   {
+      int kyi = global_k%(lattice.L_/2+1);
+      double w = 1.0/(lattice.L_*lattice.L_);
+      return (kyi!=lattice.L_/2 && kyi!=0) ? 2.0*w : w;
+   }
+
+   double get_energy_band_local
+   (int tstp,
+    int Nk_rank,
+    lattice_2d_ysymm &lattice,
+    std::vector<int> &kindex_rank,
+    std::vector<std::unique_ptr<kpoint>> &corrK_rank
+   )
+   {
+      double Eband = 0.0;
+      for(int kindex=0; kindex<Nk_rank; kindex++){
+         int global_k = kindex_rank[kindex];
+         double rho_k = corrK_rank[kindex]->rho_[tstp](0,0);   // -i G^<_k(t,t), per spin
+         Eband += bz_weight(global_k, lattice) * lattice.epsk_band(tstp, lattice.kpoints_[global_k]) * rho_k;
+      }
+      return 2.0*Eband;   // two spins
+   }
+
    std::array<double,4> get_obs_local_no_parallel(int tstp,
                         lattice_2d_ysymm &lattice,
                         std::vector<std::unique_ptr<kpoint>> &corrK_rank
