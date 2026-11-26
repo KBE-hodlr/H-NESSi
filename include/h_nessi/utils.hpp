@@ -78,9 +78,24 @@ namespace h_nessi {
   // using ZColVectorConstMap = ColVectorConstMap<std::complex<double>>;
   // using DRowVectorConstMap = RowVectorConstMap<double>;
   // using ZRowVectorConstMap = RowVectorConstMap<std::complex<double>>;
+  /** Thin SVD M = U diag(S) V^H (S descending). BUGS B38: Eigen 3.4.0's BDCSVD can return a wrong factorisation,
+   *  so for max(rows, cols) >= 16 the BDCSVD result is verified (residual and orthogonality <= 50 n eps) and
+   *  recomputed with JacobiSVD if the check fails; below 16 JacobiSVD is used directly. */
   void svd(ZMatrix &M, ZMatrix &U, ZMatrix &V, DColVector &S);
+  /** Truncated SVD: the singular triplets with S_i >= svdtol (same verified SVD as svd()). Returns the rank. */
   int  tsvd(ZMatrix &M, ZMatrix &U, ZMatrix &V, DColVector &S,double svdtol);
+  /** Singular values only (same verified SVD as svd(); U and V are computed for the check). */
   void svd(ZMatrix &M, DColVector &S);
+
+  /** Which SVD produced a result (returned by arrow_svd, for tests and diagnostics). */
+  enum class svd_path { jacobi = 0, bdc = 1, bdc_rejected_jacobi = 2 };
+
+  /** SVD of the (r+1)x(r+1) arrow matrix K = [diag(s) 0; w beta] of the incremental TSVD (herm_matrix_hodlr::updatetsvd,
+   *  doc 12), s_i >= 0 and beta >= 0 real, w complex (1 x r). K = P A P^H with the real arrow matrix
+   *  A = [diag(s) 0; |w| beta] and P = diag(conj(w_i)/|w_i|, 1); A is decomposed by a real SVD (JacobiSVD for
+   *  r+1 < 40, else BDCSVD verified in O(r^2) + orthogonality, JacobiSVD fallback: B38), and U = P U_A, V = P V_A,
+   *  so K = U diag(S) V^H with S descending. Tier 1 (Debug): asserts ||A - U_A S V_A^T||_F <= 50 n eps ||A||_F. */
+  svd_path arrow_svd(const DColVector &s, const ZRowVector &w, double beta, ZMatrix &U, ZMatrix &V, DColVector &S);
 
   /** HDF5 path join (WP3 side finding 5): joins the non-empty parts with single '/' separators, so callers may pass
    *  labels with or without a trailing '/' ("G" and "G/" both give "G/name", not "G//name"). A leading '/' of the

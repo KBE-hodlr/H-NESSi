@@ -72,6 +72,8 @@ hn_add_test_exe(test_dlr_matsubara MODULE dlr SOURCES test_dlr_matsubara.cpp)
 hn_add_test_exe(test_bosonic MODULE bosonic SOURCES test_bosonic.cpp)
 hn_add_test_exe(test_free_extrap MODULE free_extrap SOURCES test_free_extrap.cpp)
 hn_add_test_exe(test_hodlr_storage MODULE storage SOURCES test_hodlr_storage.cpp)
+hn_add_test_exe(test_svd MODULE linalg SOURCES test_svd.cpp)
+target_compile_definitions(test_svd PRIVATE HN_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 hn_add_test_exe(test_timestep MODULE timestep SOURCES test_timestep.cpp)
 hn_add_test_exe(test_bootstrap MODULE bootstrap SOURCES test_bootstrap.cpp)
 
@@ -120,6 +122,7 @@ hn_bug_tests(B33 HodlrCheckpoint.FreshGMConvTensorZero_B33)
 hn_bug_tests(B34 Bootstrap.*Diag* BootstrapRhoDiagonal.ClosedSystem* BootstrapRhoDiagonal.Idempotent*
                  BootstrapRhoDiagonal.NonContractingThrows)
 hn_bug_tests(B37 ExtrapolateState.BubbleWriteIntoRowTBeforeExtrapolate)
+hn_bug_tests(B38 SvdB38.*)
 
 # ------------------------------------------------------------------ helper tool: HDF5 dataset flattener
 add_executable(h5flat tools/h5flat.cpp)

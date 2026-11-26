@@ -285,7 +285,6 @@ void herm_matrix_hodlr::updatetsvd(block &B,const ZRowVector &row,int row_cur){
                 HNESSI_KV(rank));
   double nrm;
   ZRowVector Vrow(rank);
-  ZMatrix uu(rank+1,rank+1); //Temporal U matrix
   DColVector su(rank+1); // Updated singular values
   ZMatrix uout(row_cur,rank+1),vout(cols,rank+1); //Final update
   ZRowVector q(cols);
@@ -299,30 +298,24 @@ void herm_matrix_hodlr::updatetsvd(block &B,const ZRowVector &row,int row_cur){
   dur = end-start;
   timing(tstpmk_, 10) += dur.count();
 
-  // Construct middle matrix [uu] in Eq. 15 of Low rank compression in the numerical solution of the nonequilibrium Dyson equation
+  // Middle matrix K = [diag(S) 0; conj(Vrow) nrm] of Eq. 15 of "Low rank compression in the numerical solution of the
+  // nonequilibrium Dyson equation" (doc 12). K is unitarily equivalent to a real arrow matrix: arrow_svd takes its
+  // three parts and decomposes the real matrix (B38: never Eigen 3.4.0's complex BDCSVD, which can return a wrong
+  // factorisation; the real BDCSVD result is verified). Column 11 builds the last row of K.
   start = std::chrono::steady_clock::now();
-  uu.setZero();
-  for(int i=0;i<rank;i++){
-    uu(i,i)=B.S()(i);
-  }
-  uu.block(rank,0,1,rank)=Vrow.conjugate();
-  uu(rank,rank)=nrm;
+  const ZRowVector Klast = Vrow.conjugate();
   end = std::chrono::steady_clock::now();
   dur = end-start;
   timing(tstpmk_, 11) += dur.count();
 
-  // Compute SVD [TODO: can be done faster as in Ref. 65]
+  // SVD of K [TODO: can be done faster as in Ref. 65]
   start = std::chrono::steady_clock::now();
   ZMatrix unew,vnew;
-  svd(uu,unew,vnew,su);
+  arrow_svd(B.S(),Klast,nrm,unew,vnew,su);
   end = std::chrono::steady_clock::now();
   dur = end-start;
   timing(tstpmk_, 12) += dur.count();
 
-  // Eigen::BDCSVD<Eigen::MatrixXcd> svd(uu,Eigen::ComputeThinU | Eigen::ComputeThinV);
-  // ZMatrix unew=svd.matrixU(); 
-  // ZMatrix vnew=svd.matrixV();
-  // su= svd.singularValues().array();
   // Update block
   if(su(rank)<svdtol_){ //if rank has not increased
 
