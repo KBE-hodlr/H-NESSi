@@ -3,8 +3,8 @@
 Built when the project is configured with `-DBUILD_TEST=ON` (`../build.sh.example`; on Perlmutter `../build.sh` for
 Release and `../build-debug.sh` for Debug). googletest is fetched by CPM. Every test checks the **correct** physics:
 exact references, dense re-implementations of the documented discrete equations, or convergence orders. Every bug of
-`agent_docs/BUGS.md` is fixed on this branch and has a regression test (map below); no expected-failure tests remain
-(`ctest -L known_bug` is empty).
+`agent_docs/BUGS.md` is fixed on this branch and has a regression test (map below), which carries the bug ID as a ctest
+label. There are no expected-failure tests.
 
 ## How to run
 
@@ -16,8 +16,9 @@ ctest -L slow              # only those
 ctest -L bootstrap         # one module: integration dlr bosonic free_extrap storage timestep bootstrap mpi_comm
                            #             read_inputfile checks tv nessi link example
 ctest -L unit              # all gtest tests except the slow ones
-ctest -R _B14              # tests whose name carries a bug ID; the full bug -> test map is below
-ctest -L B16               # the link and example tests also carry their bug ID as a label (B6 B16 B17 B19 B24 B35, Q10)
+ctest -L '^B14$'           # the regression tests of one bug (map below); -L is a regex, so plain `-L B1` would
+                           # also select B10..B19
+ctest -L Q10               # the energy-balance tests of ISSUES Q10
 ```
 
 Run the gtest executables through ctest. Each test then gets its own process. If you run a binary directly, use
@@ -34,7 +35,7 @@ Build types (top-level `README.md`, "Compilation"):
   those death tests. The OpenMP-policy death tests (a failed check inside a user parallel region aborts;
   `ChecksOpenMPDeathTest.*`, `MpiCommChecksDeathTest.*`, `MpiCommChecksWP6bDeathTest.TerminateHandlerCallsMpiAbort`)
   run in every build.
-* **`-DINCLUDE_NESSI=ON`** (with `-DNESSI_ROOT=…`): adds `test_nessi_interop`, labels `unit;nessi` (`ctest -L nessi`).
+* **`-DINCLUDE_NESSI=ON`** (with `-DNESSI_ROOT=…`): adds `test_nessi_interop`, labels `unit;nessi;B8` (`ctest -L nessi`).
 * **`-DHN_EXAMPLE_MPI_LAUNCH="srun -n 6 -c 2"`** (inside an allocation): registers the multi-rank restart test
   `MpiExampleRestartManyRanks_B35` (labels `example;B35;mpi`). Without it the test does not exist.
 * **AddressSanitizer** build: see the end of the Executables section (label `asan`).
@@ -47,21 +48,20 @@ and the energy-balance runs dominate); `-DINCLUDE_NESSI=ON` adds 13 `nessi` test
 
 | gtest name pattern / test | ctest labels | properties |
 |---|---|---|
-| `*.Slow_*` | `slow;<module>` | timeout 3600 s |
-| every other gtest test | `unit;<module>` | timeout 600 s, `OMP_NUM_THREADS=2` (`test_mpi_comm`: 4) |
+| `*.Slow_*` | `slow;<module>` (+ `B<id>`) | timeout 3600 s |
+| every other gtest test | `unit;<module>` (+ `B<id>`) | timeout 600 s, `OMP_NUM_THREADS=2` (`test_mpi_comm`: 4) |
 | link tests `OperatorAssignLinkAndDeepCopy_B6`, `ReadInputfileTwoTULink_B19` | `unit;B<id>;link` | `RESOURCE_LOCK hn_build_tree` |
 | example tests (7, see below) | `example;<bug ID or Q10>` (+ `slow` for the two energy-balance tests, + `asan` in an ASan build) | timeout 900 s, `OMP_NUM_THREADS=2` |
-| `*.KnownBug_B<id>_*`, `*.KnownBugDebug_B<id>_*` | `known_bug;B<id>;<module>` | `WILL_FAIL`; **none at present** |
 
 * **Labels of gtest tests.** `gtest_discover_tests` flattens list-valued properties, so labels are attached by the
-  generated ctest include file `hn_labels.cmake`. The gtest tests carry only `unit`/`slow` and their module; a bug ID
-  appears in the test name where it was added for that bug (`*_B14`, `*_B23`, …), not as a label.
-* **Known-bug machinery** (kept for future bugs, `CMakeLists.txt`): a test of the correct behaviour that fails because
-  of a BUGS entry is named `KnownBug_B<id>_…`, its id goes into the `BUGS` (or, for a failed-assert symptom,
-  `DEBUG_BUGS`) list of `hn_add_test_exe`, and its body runs in a forked child (`hn_test::run_isolated`,
-  `common/test_util.hpp`) so that a crash becomes an ordinary failure (`WILL_FAIL` does not invert crashes). When the
-  bug is fixed the test shows up as `Failed` (unexpected pass): remove the id from the list and rename the test. All
-  known-bug tests of WP0 have been flipped this way.
+  generated ctest include file `hn_labels.cmake`. Every gtest test carries `unit` or `slow` and its module. The
+  regression tests of a bug also carry `B<id>`: the `hn_bug_tests(B<id> <pattern>…)` calls in `CMakeLists.txt` (gtest
+  names, `*` as wildcard) are the machine-readable form of the map below, so update both when adding a test for a bug.
+  `hn_add_test_exe(… LABELS …)` adds labels to every test of an executable (`test_nessi_interop`: `B8`).
+* **Bugs found later.** The WP0 expected-failure machinery (`KnownBug_B<id>_*` tests registered with `WILL_FAIL`) was
+  removed in WP12b once every bug was fixed. A regression test for a new bug is written against the correct behaviour
+  and added with the fix; a body that may crash or fail an `assert()` can run in a forked child
+  (`hn_test::run_isolated`, `common/test_util.hpp`), so that it fails as an ordinary test.
 * **Link tests** (B6, fixed in WP4; B19, fixed in WP6a). The targets `test_b6_operator_assign` and
   `test_read_inputfile_2tu` are `EXCLUDE_FROM_ALL`; the ctest builds the target with `cmake --build`
   (`link/build_and_run.cmake`) and then runs it.
@@ -106,7 +106,8 @@ fail on any `Sanitizer` line in the program output. The whole suite also runs in
 ## BUG ID → test map
 
 All entries are fixed (WP and commit in `agent_docs/BUGS.md`); every listed test passes in Release, Debug and
-RelWithAsserts (and the `nessi` tests with `-DINCLUDE_NESSI=ON`).
+RelWithAsserts (and the `nessi` tests with `-DINCLUDE_NESSI=ON`). Every listed test carries the label `B<id>`
+(`ctest -L '^B<id>$'`).
 
 | BUGS id | test(s) | fixed in | symptom before the fix |
 |---|---|---|---|
@@ -141,6 +142,7 @@ RelWithAsserts (and the `nessi` tests with `-DINCLUDE_NESSI=ON`).
 | B34 | `Bootstrap.*Diag*` (fixed-point check), `BootstrapRhoDiagonal.ClosedSystem*`, `BootstrapRhoDiagonal.Idempotent*`, `BootstrapRhoDiagonal.NonContractingThrows` | WP7, WP7b | converged bootstrap diagonal violated its own diagonal equation (residual ≈1e-5 at k = 3) |
 | B35 | `MpiExampleRestartManyRanks_B35` (only with `-DHN_EXAMPLE_MPI_LAUNCH`) | WP9b | restart segfaulted on ranks without k-points |
 | B36 | — (bitwise for the default `__Ainitx= 0`; energy bookkeeping checked by `MpiExampleEnergyBalance`) | WP8b | velocity omitted `Ainitx` |
+| B37 | `ExtrapolateState.BubbleWriteIntoRowTBeforeExtrapolate` | WP12 | `extrapolate` after `Bubble1/2` into row `tstp()` replaced the bubble's G^< by a prediction (Δ 0.02) |
 
 ISSUES entries with tests: Q10/D-7 energy conventions (`ScExampleEnergyBalance`, `MpiExampleEnergyBalance`, label
 `Q10`); H27 (`test_tv_contractions`); H3 (`DlrInfoThreads.ConcurrentConstructionMatchesSerial`); the checks of doc 61

@@ -11,7 +11,6 @@ lattice_2d_ysymm::lattice_2d_ysymm(int L, int Nt, double dt, double J, double Am
     dt_=dt;
     J_=J;
     Nk_ = L*(L/2+1);
-    h_nessi::ZMatrix tmp(size,size);
     efield_to_afield(Nt, dt, Amax);   // sizes A_ to Nt+1
 
     init_kk(L);

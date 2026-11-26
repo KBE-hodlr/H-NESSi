@@ -3,26 +3,9 @@
 # Naming convention inside the gtest sources (it drives the ctest registration below):
 #   *.Slow_*                 long convergence sweeps; LABELS "slow;<module>".
 #   everything else          LABELS "unit;<module>".
-#   *.KnownBug_B<id>_*       (none at present: every BUGS.md entry is fixed) test of the CORRECT behaviour that fails
-#                            because of BUGS.md entry B<id>; registered via the BUGS list of hn_add_test_exe with
-#                            WILL_FAIL and LABELS "known_bug;B<id>;<module>". When the bug is fixed the test shows up as
-#                            a failure ("unexpected pass"): remove the id from BUGS and rename the test.
-#   *.KnownBugDebug_B<id>_*  as above, but the symptom is a failed assert(); WILL_FAIL only in builds with
-#                            asserts enabled (no -DNDEBUG), a plain test otherwise (DEBUG_BUGS list).
-# A known-bug test body should run in a forked child (hn_test::run_isolated), so that crashes and failed asserts
-# are reported as ordinary failures and WILL_FAIL works.
+# Regression tests of a fixed BUGS.md entry B<id> also carry the label B<id> (ctest -L B<id>): see hn_bug_tests below.
 
 include(GoogleTest)
-
-# Are asserts active in this build?  (Release/RelWithDebInfo/MinSizeRel add -DNDEBUG.)
-string(TOUPPER "${CMAKE_BUILD_TYPE}" _hn_bt)
-set(_hn_flags "${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${_hn_bt}}")
-if(_hn_flags MATCHES "-DNDEBUG")
-  set(HN_ASSERTS_ON OFF)
-else()
-  set(HN_ASSERTS_ON ON)
-endif()
-message(STATUS "H-NESSi tests: asserts active = ${HN_ASSERTS_ON}")
 
 set(HN_TEST_ENV "OMP_NUM_THREADS=2")
 
@@ -30,6 +13,7 @@ set(HN_TEST_ENV "OMP_NUM_THREADS=2")
 # so labels are attached by a ctest include file (hn_labels.cmake, written at the end of this file) that runs
 # after the discovered-test files and loops over the TEST_LIST variables they define.
 set_property(GLOBAL PROPERTY HN_LABEL_SCRIPT "")
+set_property(GLOBAL PROPERTY HN_BUG_SCRIPT "")
 function(_hn_discover name filter var labels)
   set(_wd ${CMAKE_CURRENT_BINARY_DIR}/work)
   gtest_discover_tests(${name}
@@ -38,41 +22,48 @@ function(_hn_discover name filter var labels)
     WORKING_DIRECTORY ${_wd}
     PROPERTIES ${ARGN}
     DISCOVERY_TIMEOUT 120)
-  set_property(GLOBAL APPEND_STRING PROPERTY HN_LABEL_SCRIPT
-    "foreach(t IN LISTS ${var})\n  set_tests_properties(\"\${t}\" PROPERTIES LABELS \"${labels}\")\nendforeach()\n")
+  set_property(GLOBAL APPEND_STRING PROPERTY HN_LABEL_SCRIPT "_hn_label(${var} \"${labels}\")\n")
 endfunction()
 
-# hn_add_test_exe(<name> MODULE <label> SOURCES ... [ENV ...] [BUGS id...] [DEBUG_BUGS id...])
+# hn_add_test_exe(<name> MODULE <label> SOURCES ... [ENV ...] [LABELS label...])
+# LABELS: extra labels for every test of the executable (e.g. a bug ID that the whole executable covers).
 function(hn_add_test_exe name)
-  cmake_parse_arguments(A "" "MODULE" "SOURCES;ENV;BUGS;DEBUG_BUGS" ${ARGN})
+  cmake_parse_arguments(A "" "MODULE" "SOURCES;ENV;LABELS" ${ARGN})
   if(NOT A_ENV)
     set(A_ENV ${HN_TEST_ENV})
   endif()
+  set(_lab "${A_MODULE}")
+  foreach(l ${A_LABELS})
+    string(APPEND _lab ";${l}")
+  endforeach()
   add_executable(${name} ${A_SOURCES})
   target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   target_link_libraries(${name} PRIVATE HighFive GTest::gtest_main h_nessi ${COMMON_LIBS})
   file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/work)
   # ordinary tests
-  _hn_discover(${name} "-*KnownBug*:*Slow_*" HN_${name}_unit "unit;${A_MODULE}"
+  _hn_discover(${name} "-*Slow_*" HN_${name}_unit "unit;${_lab}"
     ENVIRONMENT "${A_ENV}" TIMEOUT 600)
   # slow sweeps
-  _hn_discover(${name} "*Slow_*" HN_${name}_slow "slow;${A_MODULE}"
+  _hn_discover(${name} "*Slow_*" HN_${name}_slow "slow;${_lab}"
     ENVIRONMENT "${A_ENV}" TIMEOUT 3600)
-  # known bugs: expected to fail
-  foreach(b ${A_BUGS})
-    _hn_discover(${name} "*KnownBug_B${b}_*" HN_${name}_B${b} "known_bug;B${b};${A_MODULE}"
-      WILL_FAIL TRUE ENVIRONMENT "${A_ENV}" TIMEOUT 600)
-  endforeach()
-  # known bugs whose symptom is a failed assert(): expected to fail only when asserts are active
-  foreach(b ${A_DEBUG_BUGS})
-    if(HN_ASSERTS_ON)
-      _hn_discover(${name} "*KnownBugDebug_B${b}_*" HN_${name}_DB${b} "known_bug;B${b};${A_MODULE}"
-        WILL_FAIL TRUE ENVIRONMENT "${A_ENV}" TIMEOUT 600)
-    else()
-      _hn_discover(${name} "*KnownBugDebug_B${b}_*" HN_${name}_DB${b} "unit;B${b};${A_MODULE}"
-        ENVIRONMENT "${A_ENV}" TIMEOUT 600)
+endfunction()
+
+# hn_bug_tests(B<id> <pattern>...): every discovered gtest test whose full name matches one of the patterns gets the
+# label B<id>. Patterns are gtest names with '*' as wildcard (whole-name match; parameterised tests are named
+# <Prefix>/<Suite>.<Test>/<param>). This is the bug -> test map of tests/README.md; keep the two consistent.
+# Link and example tests get their bug label directly in set_tests_properties below.
+function(hn_bug_tests id)
+  set(_re "")
+  foreach(p ${ARGN})
+    string(REPLACE "." "[.]" p "${p}")
+    string(REPLACE "*" ".*" p "${p}")
+    if(_re)
+      string(APPEND _re "|")
     endif()
+    string(APPEND _re "${p}")
   endforeach()
+  set_property(GLOBAL APPEND_STRING PROPERTY HN_BUG_SCRIPT
+    "list(APPEND _hn_bug_ids ${id})\nset(_hn_bug_re_${id} \"^(${_re})$\")\n")
 endfunction()
 
 # ------------------------------------------------------------------ gtest executables
@@ -90,10 +81,45 @@ hn_add_test_exe(test_checks MODULE checks SOURCES test_checks.cpp)
 hn_add_test_exe(test_checks_wp6b MODULE checks SOURCES test_checks_wp6b.cpp)
 hn_add_test_exe(test_tv_contractions MODULE tv SOURCES test_tv_contractions.cpp)
 
-# NESSi interoperability (WP-N, B8): only with -DINCLUDE_NESSI=ON; labels "unit;nessi" (ctest -L nessi).
+# NESSi interoperability (WP-N, B8): only with -DINCLUDE_NESSI=ON; labels "unit;nessi;B8" (ctest -L nessi).
 if(INCLUDE_NESSI)
-  hn_add_test_exe(test_nessi_interop MODULE nessi SOURCES test_nessi_interop.cpp)
+  hn_add_test_exe(test_nessi_interop MODULE nessi SOURCES test_nessi_interop.cpp LABELS B8)
 endif()
+
+# ------------------------------------------------------------------ bug-ID labels of the gtest tests (tests/README.md)
+hn_bug_tests(B1 DlrBoson.TvItConvVsQuadrature ResolventBoson.TvItConv EndToEndBoson.MatStartTimestepVsExact
+                GMConvTensor.DlrXiOrRankMismatchThrows HodlrCheckpoint.FormatVersion*)
+hn_bug_tests(B2 DlrBoson.GammaIntegralMixedTerm ResolventBoson.GammaIntegralEquilibrium ResolventBoson.GammaIntegralVsMat
+                GammaIntegralBoson.VsQuadrature GammaIntegralBoson.EquilibriumVsMat
+                GammaIntegralBoson.EquilibriumVsMatSingleOrbital)
+hn_bug_tests(B3 DlrArray.GetMatTauArray DlrArray.GetTvTauArray *DlrArrayP.MatTauArrayEqualsPointwise/*
+                *DlrArrayP.TvTauArrayEqualsPointwise/*)
+hn_bug_tests(B4 DysonMat.FixHamSecondCall *DysonMatFixHam.ReusesSavedG0/*)
+hn_bug_tests(B6 HodlrAssign.DeepCopyIndependent HodlrAssign.CopyContinuesDysonIdentically)
+hn_bug_tests(B9 HodlrCheckpoint.TimingZeroWhenMissing_B9)
+hn_bug_tests(B10 ResolventBoson.GreenFromHdm GreenFromHdm.BosonExact)
+hn_bug_tests(B12 Bootstrap.NttiHorizSlotZero Bootstrap.NttiDiagSlotZero Bootstrap.TwoLegDiagSlotZero
+                 BootstrapRetNtti.OrderSlotZero Bootstrap.Slow_*SlotZeroSweep)
+hn_bug_tests(B13 Bootstrap.NttiImpTp0 BootstrapRetNtti.OrderImpTp0TwoOrbitals BootstrapRetNtti.OrderImpTp0TwoOrbitalsSlotZero
+                 Bootstrap.Slow_NttiImpTp0SlotZeroSweep)
+hn_bug_tests(B14 LesNobc.AccuracyAndBoundary_B14 LesNobc.MatchesDefaultTimestep_B14)
+hn_bug_tests(B15 ReadInputfile.EmptyBoolThrows_B15 ReadInputfile.ErrorsAreRuntimeErrorsWithContext)
+hn_bug_tests(B20 MpiCommChecks.TooFewComponentsHighLevel MpiCommChecks.TooManyLambdas
+                 MpiCommChecksDeathTest.NospawnCheckInsideRegionAborts)
+hn_bug_tests(B21 MpiCommNospawn.TeamSmallerThanMaxThreads MpiCommNospawn.CalledOutsideParallel
+                 MpiCommNospawn.LambdaTeamSmallerThanMaxThreads MpiCommNospawn.LambdaCalledOutsideParallel)
+hn_bug_tests(B22 HodlrCopy.GetTimestepCurrWindow HodlrCopy.GetTimestepCurrSourceUnchangedAndContinues
+                 HodlrCopy.SetTimestepCurrSourceUnchanged HodlrCopy.GetTimestepCurrMatsubara HodlrCopyChecks.WindowAndGeometryThrow)
+hn_bug_tests(B23 HodlrGeometry.NlvlZeroRejected_B23 CtorChecks.HermMatrixHodlrGeometry)
+hn_bug_tests(B25 Bootstrap2leg.FunctionOverloadForwardsImpTp0)
+hn_bug_tests(B26 HodlrMemory.MemoryReport_B26)
+hn_bug_tests(B28 DysonTiming.Column5Accumulated_B28)
+hn_bug_tests(B31 BootstrapRetNtti.ImpTp0ErrorEstimateTwoOrbitals)
+hn_bug_tests(B32 DysonMemory.CountsAllBuffers)
+hn_bug_tests(B33 HodlrCheckpoint.FreshGMConvTensorZero_B33)
+hn_bug_tests(B34 Bootstrap.*Diag* BootstrapRhoDiagonal.ClosedSystem* BootstrapRhoDiagonal.Idempotent*
+                 BootstrapRhoDiagonal.NonContractingThrows)
+hn_bug_tests(B37 ExtrapolateState.BubbleWriteIntoRowTBeforeExtrapolate)
 
 # ------------------------------------------------------------------ helper tool: HDF5 dataset flattener
 add_executable(h5flat tools/h5flat.cpp)
@@ -186,6 +212,21 @@ set_tests_properties(MpiExampleRestart_B16 MpiExampleRestartMidRun MpiExampleIte
                      ScExampleEnergyBalance MpiExampleEnergyBalance PROPERTIES ENVIRONMENT "OMP_NUM_THREADS=2" TIMEOUT 900)
 
 # ------------------------------------------------------------------ labels for discovered tests (must be last)
+get_property(_hn_bug_script GLOBAL PROPERTY HN_BUG_SCRIPT)
 get_property(_hn_label_script GLOBAL PROPERTY HN_LABEL_SCRIPT)
-file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/hn_labels.cmake "${_hn_label_script}")
+file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/hn_labels.cmake "# generated by tests/CMakeLists.txt\nset(_hn_bug_ids \"\")\n"
+     "${_hn_bug_script}")
+file(APPEND ${CMAKE_CURRENT_BINARY_DIR}/hn_labels.cmake [=[
+function(_hn_label var labels)
+  foreach(t IN LISTS ${var})
+    set(_l "${labels}")
+    foreach(b IN LISTS _hn_bug_ids)
+      if(t MATCHES "${_hn_bug_re_${b}}")
+        list(APPEND _l ${b})
+      endif()
+    endforeach()
+    set_tests_properties("${t}" PROPERTIES LABELS "${_l}")
+  endforeach()
+endfunction()
+]=] "${_hn_label_script}")
 set_property(DIRECTORY APPEND PROPERTY TEST_INCLUDE_FILES ${CMAKE_CURRENT_BINARY_DIR}/hn_labels.cmake)

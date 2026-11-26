@@ -492,10 +492,9 @@ class herm_matrix_hodlr{
    * Update an existing block `B` by adding the information contained in
    * `row` (complex row vector). `row_cur` is the current row index in the
    * global time/orbital layout. This routine may trigger an SVD update and
-   * rank truncation based on the instance's svdtol_. If `print` is true,
-   * the routine outputs diagnostic information.
+   * rank truncation based on the instance's svdtol_.
    */
-  void updatetsvd(block &B,const ZRowVector &row,int row_cur, bool print = false);
+  void updatetsvd(block &B,const ZRowVector &row,int row_cur);
 
   /// @private last row that is computed and allocated: min(tstp(), nt-1)
   int last_row_() const { return std::min(tstpmk_ + k_, nt_ - 1); }

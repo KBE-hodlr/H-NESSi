@@ -76,10 +76,10 @@ ctest -j16                 # everything (Release: well under a minute with -j16)
 ctest -j16 -LE slow        # skip the long convergence sweeps and energy-balance runs (recommended for Debug)
 ctest -L bootstrap         # one module: integration dlr bosonic free_extrap storage timestep bootstrap mpi_comm
                            #             read_inputfile checks tv nessi link example
-ctest -R _B14              # tests named after a (fixed) bug of agent_docs/BUGS.md; the full map is in tests/README.md
+ctest -L '^B14$'           # the regression tests of one (fixed) bug of agent_docs/BUGS.md; map in tests/README.md
 ```
 
-* Tests check exact references, dense re-implementations of the discrete equations, and convergence orders. Every bug fixed on this branch has a regression test (`tests/README.md` has the bug → test map; the link and example tests also carry the bug ID as a label, e.g. `ctest -L B16`). No expected-failure tests remain.
+* Tests check exact references, dense re-implementations of the discrete equations, and convergence orders. Every bug fixed on this branch has a regression test labelled with the bug ID (`tests/README.md` has the bug → test map). `ctest -L` takes a regex, so anchor the ID: `-L B1` would also select B10–B19. No expected-failure tests remain.
 * Label `slow`: the `*.Slow_*` convergence sweeps and the example energy-balance tests `ScExampleEnergyBalance` (about 200 s in Debug) and `MpiExampleEnergyBalance` (about 110 s in Debug).
 * Build the suite in Debug (`./build.sh Debug` with `BUILD_DIR=build-debug`) or RelWithAsserts to run the death tests of the asserts; they are skipped in Release.
 * `-DINCLUDE_NESSI=ON` adds the `nessi` tests (`ctest -L nessi`). `-DHN_EXAMPLE_MPI_LAUNCH="srun -n 6 -c 2"` (inside an allocation) registers the multi-rank restart test `MpiExampleRestartManyRanks_B35`.

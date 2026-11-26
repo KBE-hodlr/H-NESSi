@@ -76,7 +76,7 @@ void herm_matrix_hodlr::update_blocks(Integration::Integrator &I) {
       built_blocks_ += 1;
       for(int i = 0; i < size1_; i++) {
         for(int j = 0; j < size2_; j++) {
-          y = Eigen::Map<Eigen::MatrixXcd, 0, Eigen::InnerStride<> >(curr_timestep_ret_ptr(tstpmk_,0) + blkc1(bindex)*size1_*size2_ + i*size1_ + j, 1, blkc2(bindex)-blkc1(bindex)+1, Eigen::InnerStride<>(size1_*size2_));
+          y = Eigen::Map<Eigen::MatrixXcd, 0, Eigen::InnerStride<> >(curr_timestep_ret_ptr(tstpmk_,0) + blkc1(bindex)*size1_*size2_ + i*size2_ + j, 1, blkc2(bindex)-blkc1(bindex)+1, Eigen::InnerStride<>(size1_*size2_));
           // simply fill U, S, V from trivial SVD of y
           if(y.norm() > 1e-15) {
             ret_.data().blocks()[bindex][i][j].U() = ZMatrix::Ones(1,1);
@@ -100,7 +100,7 @@ void herm_matrix_hodlr::update_blocks(Integration::Integrator &I) {
       start = std::chrono::system_clock::now();
       for(int i = 0; i < size1_; i++) {
         for(int j = 0; j < size2_; j++) {
-          y = Eigen::Map<Eigen::MatrixXcd, 0, Eigen::InnerStride<> >(curr_timestep_ret_ptr(tstpmk_,0) + blkc1(bindex)*size1_*size2_ + i*size1_ + j, 1, blkc2(bindex)-blkc1(bindex)+1, Eigen::InnerStride<>(size1_*size2_));
+          y = Eigen::Map<Eigen::MatrixXcd, 0, Eigen::InnerStride<> >(curr_timestep_ret_ptr(tstpmk_,0) + blkc1(bindex)*size1_*size2_ + i*size2_ + j, 1, blkc2(bindex)-blkc1(bindex)+1, Eigen::InnerStride<>(size1_*size2_));
           updatetsvd(ret_.data().blocks()[bindex][i][j],y,blklen_[bindex]);
         }
       }
@@ -112,7 +112,7 @@ void herm_matrix_hodlr::update_blocks(Integration::Integrator &I) {
       start = std::chrono::system_clock::now();
       for(int i = 0; i < size1_; i++) {
         for(int j = 0; j < size2_; j++) {
-          y = Eigen::Map<Eigen::MatrixXcd, 0, Eigen::InnerStride<> >(curr_timestep_les_ptr(0,tstpmk_) + blkc1(bindex)*size1_*size2_ + i*size1_ + j, 1, blkc2(bindex)-blkc1(bindex)+1, Eigen::InnerStride<>(size1_*size2_));
+          y = Eigen::Map<Eigen::MatrixXcd, 0, Eigen::InnerStride<> >(curr_timestep_les_ptr(0,tstpmk_) + blkc1(bindex)*size1_*size2_ + i*size2_ + j, 1, blkc2(bindex)-blkc1(bindex)+1, Eigen::InnerStride<>(size1_*size2_));
           // simply fill U, S, V from trivial SVD of y
           if(y.norm() > 1e-15) {
             les_.data().blocks()[bindex][i][j].U() = ZMatrix::Ones(1,1);
@@ -136,7 +136,7 @@ void herm_matrix_hodlr::update_blocks(Integration::Integrator &I) {
       start = std::chrono::system_clock::now();
       for(int i = 0; i < size1_; i++) {
         for(int j = 0; j < size2_; j++) {
-          y = Eigen::Map<Eigen::MatrixXcd, 0, Eigen::InnerStride<> >(curr_timestep_les_ptr(0,tstpmk_) + blkc1(bindex)*size1_*size2_ + i*size1_ + j, 1, blkc2(bindex)-blkc1(bindex)+1, Eigen::InnerStride<>(size1_*size2_));
+          y = Eigen::Map<Eigen::MatrixXcd, 0, Eigen::InnerStride<> >(curr_timestep_les_ptr(0,tstpmk_) + blkc1(bindex)*size1_*size2_ + i*size2_ + j, 1, blkc2(bindex)-blkc1(bindex)+1, Eigen::InnerStride<>(size1_*size2_));
           updatetsvd(les_.data().blocks()[bindex][i][j],y,blklen_[bindex]);
         }
       }
@@ -270,7 +270,7 @@ double herm_matrix_hodlr::mgs(const ZMatrix &V, const ZRowVector &b, const ZRowV
 }
 
 
-void herm_matrix_hodlr::updatetsvd(block &B,const ZRowVector &row,int row_cur, bool print){
+void herm_matrix_hodlr::updatetsvd(block &B,const ZRowVector &row,int row_cur){
   std::chrono::time_point<std::chrono::system_clock> start, end;
   std::chrono::duration<double, std::micro> dur;
 
@@ -293,21 +293,11 @@ void herm_matrix_hodlr::updatetsvd(block &B,const ZRowVector &row,int row_cur, b
   dur = end-start;
   timing(tstpmk_, 9) += dur.count();
 
-  if(print) {
-    std::cout << "row   " << row .norm() << std::endl;
-  }
-
   start = std::chrono::system_clock::now();
   nrm=mgs(B.V(),row.adjoint(),q,Vrow);
   end = std::chrono::system_clock::now();
   dur = end-start;
   timing(tstpmk_, 10) += dur.count();
-
-  if(print) {
-    std::cout << "q     " << q   .norm() << std::endl;
-    std::cout << "nrm   " << nrm         << std::endl;
-    std::cout << "Vrow  " << Vrow.norm() << std::endl;
-  }
 
   // Construct middle matrix [uu] in Eq. 15 of Low rank compression in the numerical solution of the nonequilibrium Dyson equation
   start = std::chrono::system_clock::now();
@@ -321,10 +311,6 @@ void herm_matrix_hodlr::updatetsvd(block &B,const ZRowVector &row,int row_cur, b
   dur = end-start;
   timing(tstpmk_, 11) += dur.count();
 
-  if(print) {
-    std::cout << "uu    " << uu  .norm() << std::endl;
-  }
-
   // Compute SVD [TODO: can be done faster as in Ref. 65]
   start = std::chrono::system_clock::now();
   ZMatrix unew,vnew;
@@ -332,15 +318,6 @@ void herm_matrix_hodlr::updatetsvd(block &B,const ZRowVector &row,int row_cur, b
   end = std::chrono::system_clock::now();
   dur = end-start;
   timing(tstpmk_, 12) += dur.count();
-
-  if(print) {
-    std::cout << "unew  " << unew.norm() << std::endl;
-    std::cout << "vnew  " << vnew.norm() << std::endl;
-    std::cout << "su    " << su  .norm() << std::endl;
-    std::cout << "inc?  " << !(su(rank)<svdtol_) << std::endl;
-    std::cout << "sv(r) " << su(rank) << std::endl;
-    std::cout << "svtol " << svdtol_ << std::endl;
-  }
 
   // Eigen::BDCSVD<Eigen::MatrixXcd> svd(uu,Eigen::ComputeThinU | Eigen::ComputeThinV);
   // ZMatrix unew=svd.matrixU(); 
@@ -356,30 +333,17 @@ void herm_matrix_hodlr::updatetsvd(block &B,const ZRowVector &row,int row_cur, b
     timing(tstpmk_, 13) += dur.count();
 
     // Set up U
-  if(print) {
-    std::cout << "==================" << std::endl;
-    std::cout << "==   U update   ==" << std::endl;
-    std::cout << "==================" << std::endl;
-  }
     start = std::chrono::system_clock::now();
     uout=B.U().block(0,0,row_cur,rank)*unew.block(0,0,rank,rank+1);
     end = std::chrono::system_clock::now();
     dur = end-start;
     timing(tstpmk_, 14) += dur.count();
 
-  if(print) {
-    std::cout << "uout    " << uout.norm() << std::endl;
-  }
-
     start = std::chrono::system_clock::now();
     ufin.block(0,0,row_cur,rank+1)=uout.block(0,0,row_cur,rank+1);
     end = std::chrono::system_clock::now();
     dur = end-start;
     timing(tstpmk_, 15) += dur.count();
-
-  if(print) {
-    std::cout << "ufin1   " << ufin.block(0,0,row_cur,rank+1).norm() << std::endl;
-  }
 
     start = std::chrono::system_clock::now();
     ufin.block(row_cur,0,1,rank+1)=unew.block(rank,0,1,rank+1);
@@ -393,26 +357,12 @@ void herm_matrix_hodlr::updatetsvd(block &B,const ZRowVector &row,int row_cur, b
     dur = end-start;
     timing(tstpmk_, 17) += dur.count();
 
-  if(print) {
-    std::cout << "ufin2   " << ufin.block(0,0,row_cur+1,rank).norm() << std::endl;
-  }
-
-
     // Set up V
-  if(print) {
-    std::cout << "==================" << std::endl;
-    std::cout << "==   V update   ==" << std::endl;
-    std::cout << "==================" << std::endl;
-  }
     start = std::chrono::system_clock::now();
     vout.block(0,0,cols,rank)=B.V().block(0,0,cols,rank);
     end = std::chrono::system_clock::now();
     dur = end-start;
     timing(tstpmk_, 18) += dur.count();
-
-  if(print) {
-    std::cout << "vout    " << vout.block(0,0,cols,rank).norm() << std::endl;
-  }
 
     start = std::chrono::system_clock::now();
     vout.block(0,rank,cols,1)=q.transpose();
@@ -420,22 +370,11 @@ void herm_matrix_hodlr::updatetsvd(block &B,const ZRowVector &row,int row_cur, b
     dur = end-start;
     timing(tstpmk_, 19) += dur.count();
 
-  if(print) {
-    std::cout << "vout2   " << vout.norm() << std::endl;
-  }
-
     start = std::chrono::system_clock::now();
     vout=vout*vnew.block(0,0,rank+1,rank+1);
     end = std::chrono::system_clock::now();
     dur = end-start;
     timing(tstpmk_, 20) += dur.count();
-
-  if(print) {
-    std::cout << "vout3   " << vout.norm() << std::endl;
-  }
-  if(print) {
-    std::cout << "vout4   " << vout.block(0,0,cols,rank).norm() << std::endl;
-  }
 
     start = std::chrono::system_clock::now();
     B.set_V(vout.block(0,0,cols,rank));
