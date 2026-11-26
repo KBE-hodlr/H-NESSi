@@ -15,10 +15,10 @@ void herm_matrix_hodlr::update_blocks(Integration::Integrator &I) {
                                     "times after the last step"});
   // HM-U2 (tier 2): the left-edge pre-weighting uses I.omega(tbar), tbar <= k (doc 12 §4.1)
   HNESSI_REQUIRE(I.k() == k_, "herm_matrix_hodlr::update_blocks", HNESSI_KV(I.k()), HNESSI_KV(k_));
-  std::chrono::time_point<std::chrono::system_clock> start, end;
+  std::chrono::time_point<std::chrono::steady_clock> start, end;
   std::chrono::duration<double, std::micro> dur;
 
-  start = std::chrono::system_clock::now();
+  start = std::chrono::steady_clock::now();
   // First look at the timestep that you are putting into the svds and see what blocks need to be updated
   std::vector<int> blocks_list(0);
   for( int b = 0; b < nbox_; b++) {
@@ -36,43 +36,43 @@ void herm_matrix_hodlr::update_blocks(Integration::Integrator &I) {
   for(int i = 0; i < ndir; i++) {
     ZMatrixMap(retptr_col(tstpmk_, tstpmk_-i), size1_, size2_) = ZMatrixMap(dataptr - i*size1_*size2_, size1_, size2_);
   }
-  end = std::chrono::system_clock::now();
+  end = std::chrono::steady_clock::now();
   dur = end-start;
   timing(tstpmk_, 0) = dur.count();
 
   // Put data into ret_corr container
-  start = std::chrono::system_clock::now();
+  start = std::chrono::steady_clock::now();
   for(int t2 = std::max(tstpmk_-k_,0); t2 < c1_dir_[tstpmk_]; t2++) {
     ZMatrixMap(retptr_corr(tstpmk_, t2), size1_, size2_) = ZMatrixMap(curr_timestep_ret_ptr(tstpmk_, t2), size1_, size2_);
   }
-  end = std::chrono::system_clock::now();
+  end = std::chrono::steady_clock::now();
   dur = end-start;
   timing(tstpmk_, 1) = dur.count();
 
   // Put data into ret_left_edge conainer
-  start = std::chrono::system_clock::now();
+  start = std::chrono::steady_clock::now();
   for(int t2 = 0; t2 <= k_; t2++) {
     ZMatrixMap(ret_left_edge_.data() + (tstpmk_*(k_+1) + t2)*size1_*size2_, size1_, size2_) = ZMatrixMap(curr_timestep_ret_ptr(tstpmk_, t2), size1_, size2_);
   }
-  end = std::chrono::system_clock::now();
+  end = std::chrono::steady_clock::now();
   dur = end-start;
   timing(tstpmk_, 2) = dur.count();
 
   // Loop over blocks and update svds.  Column 5 times the whole loop (BUGS B27: `start` is reused for the per-block
   // columns 6-8 inside the loop, so column 5 used to measure only the last segment); columns 6-8 accumulate.
-  const auto loop_start = std::chrono::system_clock::now();
+  const auto loop_start = std::chrono::steady_clock::now();
   for(int b = 0; b < blocks_list.size(); b++) {
-    start = std::chrono::system_clock::now();
+    start = std::chrono::steady_clock::now();
     int bindex = blocks_list[b];
     ZMatrix y(1,blkc2_[bindex]-blkc1_[bindex]+1);
     // HM-U5 (tier 1): the block has archived exactly the rows blkr1..tstpmk-1
     HNESSI_ASSERT(blklen_[bindex] == tstpmk_ - blkr1_[bindex], "herm_matrix_hodlr::update_blocks", HNESSI_KV(bindex),
                   HNESSI_KV(blklen_[bindex]), HNESSI_KV(tstpmk_), HNESSI_KV(blkr1_[bindex]));
-    end = std::chrono::system_clock::now();
+    end = std::chrono::steady_clock::now();
     dur = end-start;
     timing(tstpmk_, 6) += dur.count();
     if(blklen_[bindex] == 0) { // no data yet, init the block
-      start = std::chrono::system_clock::now();
+      start = std::chrono::steady_clock::now();
       built_blocks_ += 1;
       for(int i = 0; i < size1_; i++) {
         for(int j = 0; j < size2_; j++) {
@@ -92,24 +92,24 @@ void herm_matrix_hodlr::update_blocks(Integration::Integrator &I) {
           }
         }
       }
-      end = std::chrono::system_clock::now();
+      end = std::chrono::steady_clock::now();
       dur = end-start;
       timing(tstpmk_, 7) += dur.count();
     }
     else { // update the tsvd
-      start = std::chrono::system_clock::now();
+      start = std::chrono::steady_clock::now();
       for(int i = 0; i < size1_; i++) {
         for(int j = 0; j < size2_; j++) {
           y = Eigen::Map<Eigen::MatrixXcd, 0, Eigen::InnerStride<> >(curr_timestep_ret_ptr(tstpmk_,0) + blkc1(bindex)*size1_*size2_ + i*size2_ + j, 1, blkc2(bindex)-blkc1(bindex)+1, Eigen::InnerStride<>(size1_*size2_));
           updatetsvd(ret_.data().blocks()[bindex][i][j],y,blklen_[bindex]);
         }
       }
-      end = std::chrono::system_clock::now();
+      end = std::chrono::steady_clock::now();
       dur = end-start;
       timing(tstpmk_, 8) += dur.count();
     }
     if(blklen_[bindex] == 0) { // no data yet, init the block
-      start = std::chrono::system_clock::now();
+      start = std::chrono::steady_clock::now();
       for(int i = 0; i < size1_; i++) {
         for(int j = 0; j < size2_; j++) {
           y = Eigen::Map<Eigen::MatrixXcd, 0, Eigen::InnerStride<> >(curr_timestep_les_ptr(0,tstpmk_) + blkc1(bindex)*size1_*size2_ + i*size2_ + j, 1, blkc2(bindex)-blkc1(bindex)+1, Eigen::InnerStride<>(size1_*size2_));
@@ -128,26 +128,26 @@ void herm_matrix_hodlr::update_blocks(Integration::Integrator &I) {
           }
         }
       }
-      end = std::chrono::system_clock::now();
+      end = std::chrono::steady_clock::now();
       dur = end-start;
       timing(tstpmk_, 7) += dur.count();
     }
     else { // update the tsvd
-      start = std::chrono::system_clock::now();
+      start = std::chrono::steady_clock::now();
       for(int i = 0; i < size1_; i++) {
         for(int j = 0; j < size2_; j++) {
           y = Eigen::Map<Eigen::MatrixXcd, 0, Eigen::InnerStride<> >(curr_timestep_les_ptr(0,tstpmk_) + blkc1(bindex)*size1_*size2_ + i*size2_ + j, 1, blkc2(bindex)-blkc1(bindex)+1, Eigen::InnerStride<>(size1_*size2_));
           updatetsvd(les_.data().blocks()[bindex][i][j],y,blklen_[bindex]);
         }
       }
-      end = std::chrono::system_clock::now();
+      end = std::chrono::steady_clock::now();
       dur = end-start;
       timing(tstpmk_, 8) += dur.count();
     }
     // block now has one more row
     blklen_[bindex] = blklen_[bindex]+1;
   }
-  end = std::chrono::system_clock::now();
+  end = std::chrono::steady_clock::now();
   dur = end-loop_start;
   timing(tstpmk_, 5) = dur.count();
   // HM-U4 (tier 1): segment index of row tstpmk used for les_dir_square_ below
@@ -157,7 +157,7 @@ void herm_matrix_hodlr::update_blocks(Integration::Integrator &I) {
   int nao_ = size1_;
   int es_ = nao_*nao_;
   int row = ndir-1;
-  start = std::chrono::system_clock::now();
+  start = std::chrono::steady_clock::now();
   for(int d = 0; d < ndir; d++) {
     for(int i = 0; i < nao_; i++) {
       for(int j = 0; j < nao_; j++) {
@@ -167,11 +167,11 @@ void herm_matrix_hodlr::update_blocks(Integration::Integrator &I) {
       }
     }
   }
-  end = std::chrono::system_clock::now();
+  end = std::chrono::steady_clock::now();
   dur = end-start;
   timing(tstpmk_, 3) = dur.count();
 
-  start = std::chrono::system_clock::now();
+  start = std::chrono::steady_clock::now();
   int min = std::min(std::min(tstpmk_, k_), c1_dir_[tstpmk_]-1);
   for(int tbar = 0; tbar <= min; tbar++) {
     for(int i = 0; i < nao_; i++) {
@@ -187,7 +187,7 @@ void herm_matrix_hodlr::update_blocks(Integration::Integrator &I) {
       }
     }
   }
-  end = std::chrono::system_clock::now();
+  end = std::chrono::steady_clock::now();
   dur = end-start;
   timing(tstpmk_, 4) = dur.count();
   can_extrap_ = true;
@@ -271,10 +271,10 @@ double herm_matrix_hodlr::mgs(const ZMatrix &V, const ZRowVector &b, const ZRowV
 
 
 void herm_matrix_hodlr::updatetsvd(block &B,const ZRowVector &row,int row_cur){
-  std::chrono::time_point<std::chrono::system_clock> start, end;
+  std::chrono::time_point<std::chrono::steady_clock> start, end;
   std::chrono::duration<double, std::micro> dur;
 
-  start = std::chrono::system_clock::now();
+  start = std::chrono::steady_clock::now();
   int cols=B.cols();
   int rank=B.epsrank();
   // HM-U8 (tier 1): the block holds row_cur rows of rank `rank`
@@ -289,33 +289,33 @@ void herm_matrix_hodlr::updatetsvd(block &B,const ZRowVector &row,int row_cur){
   DColVector su(rank+1); // Updated singular values
   ZMatrix uout(row_cur,rank+1),vout(cols,rank+1); //Final update
   ZRowVector q(cols);
-  end = std::chrono::system_clock::now();
+  end = std::chrono::steady_clock::now();
   dur = end-start;
   timing(tstpmk_, 9) += dur.count();
 
-  start = std::chrono::system_clock::now();
+  start = std::chrono::steady_clock::now();
   nrm=mgs(B.V(),row.adjoint(),q,Vrow);
-  end = std::chrono::system_clock::now();
+  end = std::chrono::steady_clock::now();
   dur = end-start;
   timing(tstpmk_, 10) += dur.count();
 
   // Construct middle matrix [uu] in Eq. 15 of Low rank compression in the numerical solution of the nonequilibrium Dyson equation
-  start = std::chrono::system_clock::now();
+  start = std::chrono::steady_clock::now();
   uu.setZero();
   for(int i=0;i<rank;i++){
     uu(i,i)=B.S()(i);
   }
   uu.block(rank,0,1,rank)=Vrow.conjugate();
   uu(rank,rank)=nrm;
-  end = std::chrono::system_clock::now();
+  end = std::chrono::steady_clock::now();
   dur = end-start;
   timing(tstpmk_, 11) += dur.count();
 
   // Compute SVD [TODO: can be done faster as in Ref. 65]
-  start = std::chrono::system_clock::now();
+  start = std::chrono::steady_clock::now();
   ZMatrix unew,vnew;
   svd(uu,unew,vnew,su);
-  end = std::chrono::system_clock::now();
+  end = std::chrono::steady_clock::now();
   dur = end-start;
   timing(tstpmk_, 12) += dur.count();
 
@@ -326,120 +326,120 @@ void herm_matrix_hodlr::updatetsvd(block &B,const ZRowVector &row,int row_cur){
   // Update block
   if(su(rank)<svdtol_){ //if rank has not increased
 
-    start = std::chrono::system_clock::now();
+    start = std::chrono::steady_clock::now();
     ZMatrix ufin(row_cur+1,rank+1);
-    end = std::chrono::system_clock::now();
+    end = std::chrono::steady_clock::now();
     dur = end-start;
     timing(tstpmk_, 13) += dur.count();
 
     // Set up U
-    start = std::chrono::system_clock::now();
+    start = std::chrono::steady_clock::now();
     uout=B.U().block(0,0,row_cur,rank)*unew.block(0,0,rank,rank+1);
-    end = std::chrono::system_clock::now();
+    end = std::chrono::steady_clock::now();
     dur = end-start;
     timing(tstpmk_, 14) += dur.count();
 
-    start = std::chrono::system_clock::now();
+    start = std::chrono::steady_clock::now();
     ufin.block(0,0,row_cur,rank+1)=uout.block(0,0,row_cur,rank+1);
-    end = std::chrono::system_clock::now();
+    end = std::chrono::steady_clock::now();
     dur = end-start;
     timing(tstpmk_, 15) += dur.count();
 
-    start = std::chrono::system_clock::now();
+    start = std::chrono::steady_clock::now();
     ufin.block(row_cur,0,1,rank+1)=unew.block(rank,0,1,rank+1);
-    end = std::chrono::system_clock::now();
+    end = std::chrono::steady_clock::now();
     dur = end-start;
     timing(tstpmk_, 16) += dur.count();
 
-    start = std::chrono::system_clock::now();
+    start = std::chrono::steady_clock::now();
     B.set_U(ufin.block(0,0,row_cur+1,rank));
-    end = std::chrono::system_clock::now();
+    end = std::chrono::steady_clock::now();
     dur = end-start;
     timing(tstpmk_, 17) += dur.count();
 
     // Set up V
-    start = std::chrono::system_clock::now();
+    start = std::chrono::steady_clock::now();
     vout.block(0,0,cols,rank)=B.V().block(0,0,cols,rank);
-    end = std::chrono::system_clock::now();
+    end = std::chrono::steady_clock::now();
     dur = end-start;
     timing(tstpmk_, 18) += dur.count();
 
-    start = std::chrono::system_clock::now();
+    start = std::chrono::steady_clock::now();
     vout.block(0,rank,cols,1)=q.transpose();
-    end = std::chrono::system_clock::now();
+    end = std::chrono::steady_clock::now();
     dur = end-start;
     timing(tstpmk_, 19) += dur.count();
 
-    start = std::chrono::system_clock::now();
+    start = std::chrono::steady_clock::now();
     vout=vout*vnew.block(0,0,rank+1,rank+1);
-    end = std::chrono::system_clock::now();
+    end = std::chrono::steady_clock::now();
     dur = end-start;
     timing(tstpmk_, 20) += dur.count();
 
-    start = std::chrono::system_clock::now();
+    start = std::chrono::steady_clock::now();
     B.set_V(vout.block(0,0,cols,rank));
     B.set_S(su.head(rank));
-    end = std::chrono::system_clock::now();
+    end = std::chrono::steady_clock::now();
     dur = end-start;
     timing(tstpmk_, 21) += dur.count();
 
   }else{ //if rank has increased
 
-    start = std::chrono::system_clock::now();
+    start = std::chrono::steady_clock::now();
     ZMatrix ufin(row_cur+1,rank+1);
     B.set_rank(rank+1);
-    end = std::chrono::system_clock::now();
+    end = std::chrono::steady_clock::now();
     dur = end-start;
     timing(tstpmk_, 13) += dur.count();
 
     // Set up U+
-    start = std::chrono::system_clock::now();
+    start = std::chrono::steady_clock::now();
     uout=B.U().block(0,0,row_cur,rank)*unew.block(0,0,rank,rank+1);
-    end = std::chrono::system_clock::now();
+    end = std::chrono::steady_clock::now();
     dur = end-start;
     timing(tstpmk_, 14) += dur.count();
 
-    start = std::chrono::system_clock::now();
+    start = std::chrono::steady_clock::now();
     ufin.block(0,0,row_cur,rank+1)=uout.block(0,0,row_cur,rank+1);
-    end = std::chrono::system_clock::now();
+    end = std::chrono::steady_clock::now();
     dur = end-start;
     timing(tstpmk_, 15) += dur.count();
 
-    start = std::chrono::system_clock::now();
+    start = std::chrono::steady_clock::now();
     ufin.block(row_cur,0,1,rank+1)=unew.block(rank,0,1,rank+1);
-    end = std::chrono::system_clock::now();
+    end = std::chrono::steady_clock::now();
     dur = end-start;
     timing(tstpmk_, 16) += dur.count();
 
-    start = std::chrono::system_clock::now();
+    start = std::chrono::steady_clock::now();
     B.set_U(ufin);
-    end = std::chrono::system_clock::now();
+    end = std::chrono::steady_clock::now();
     dur = end-start;
     timing(tstpmk_, 17) += dur.count();
 
     // Set up V+
-    start = std::chrono::system_clock::now();
+    start = std::chrono::steady_clock::now();
     vout.block(0,0,cols,rank)=B.V().block(0,0,cols,rank);
-    end = std::chrono::system_clock::now();
+    end = std::chrono::steady_clock::now();
     dur = end-start;
     timing(tstpmk_, 18) += dur.count();
 
-    start = std::chrono::system_clock::now();
+    start = std::chrono::steady_clock::now();
     vout.block(0,rank,cols,1)=q.transpose();
-    end = std::chrono::system_clock::now();
+    end = std::chrono::steady_clock::now();
     dur = end-start;
     timing(tstpmk_, 19) += dur.count();
 
-    start = std::chrono::system_clock::now();
+    start = std::chrono::steady_clock::now();
     vout=vout*vnew.block(0,0,rank+1,rank+1);
-    end = std::chrono::system_clock::now();
+    end = std::chrono::steady_clock::now();
     dur = end-start;
     timing(tstpmk_, 20) += dur.count();
 
-    start = std::chrono::system_clock::now();
+    start = std::chrono::steady_clock::now();
     B.set_V(vout);
     B.set_S(su);
-    end = std::chrono::system_clock::now();
+    end = std::chrono::steady_clock::now();
     dur = end-start;
     timing(tstpmk_, 21) += dur.count();
 

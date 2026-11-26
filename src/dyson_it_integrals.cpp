@@ -216,7 +216,7 @@ void dyson::les_lesadv_int_0_tstp(int tstp, herm_matrix_hodlr &Sigma, herm_matri
   ZMatrixMap(X_.data(), nao_, (tstp+1)*nao_).noalias() = h * ZMatrixMap(G.curr_timestep_ret_ptr(tstp, 0), (tstp+1)*nao_, nao_).adjoint();
   ZMatrixMap(M_.data(), nao_, (k_+1)*nao_).noalias() = h * ZMatrixMap(G.curr_timestep_ret_ptr(tstp, 0), (k_+1)*nao_, nao_).adjoint();
 
-  std::chrono::time_point<std::chrono::system_clock> intstart, intend;
+  std::chrono::time_point<std::chrono::steady_clock> intstart, intend;
   std::chrono::duration<double, std::micro> dir, dircorr, blocks, blockstrans, blockscorrhor, blockscorrvert, currvert, currhor;
 
   cplx *resptr = Q_.data();
@@ -231,7 +231,7 @@ void dyson::les_lesadv_int_0_tstp(int tstp, herm_matrix_hodlr &Sigma, herm_matri
   // 8 curr timestep horiz
 
   // 1 This part of the integral does the triangular regions that are directly stored
-  intstart = std::chrono::system_clock::now();
+  intstart = std::chrono::steady_clock::now();
   int b = 0;
   for(b = 0; b < G.nbox() && G.blkr1(b) <= G.tstpmk(); b++) {
     for(int i = 0; i < nao_; i++) {
@@ -249,7 +249,7 @@ void dyson::les_lesadv_int_0_tstp(int tstp, herm_matrix_hodlr &Sigma, herm_matri
       Eigen::Map<Eigen::Matrix<cplx, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>, 0, Eigen::InnerStride<> >(G.curr_timestep_ret_ptr(tstp, Sigma.blkr1(b-1))+k, Sigma.tstpmk()-Sigma.blkr1(b-1), nao_, Eigen::InnerStride<>(nao_)).conjugate();
     }
   }
-  intend = std::chrono::system_clock::now();
+  intend = std::chrono::steady_clock::now();
   dir = intend-intstart;
 
   // 2 corrections for parts of integral in directly stored regions
@@ -258,7 +258,7 @@ void dyson::les_lesadv_int_0_tstp(int tstp, herm_matrix_hodlr &Sigma, herm_matri
   // Edge case where height of upper right square is smaller than k_
   // Both of these cases are covered in G.c1_dir(t) > k_
   // Also stop if you are about to hit curr_timestep tensor
-  intstart = std::chrono::system_clock::now();
+  intstart = std::chrono::steady_clock::now();
   for(int t = 0; t <= tstp; t++) {
     if(t == G.tstpmk() || G.c1_dir(t) > k_) break;
     auto corrMap = ZMatrixMap(resptr + t*es_, nao_, nao_);
@@ -277,11 +277,11 @@ void dyson::les_lesadv_int_0_tstp(int tstp, herm_matrix_hodlr &Sigma, herm_matri
                   Eigen::Map<Eigen::Matrix<cplx, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>, 0, Eigen::InnerStride<> >(Sigma.les_dir_square().data() + G.les_dir_square_first_index(blk) + row*G.blkdirheight(blk) + col, nao_, nao_, Eigen::InnerStride<>(G.len_les_dir_square())).transpose();
     }    
   }
-  intend = std::chrono::system_clock::now();
+  intend = std::chrono::steady_clock::now();
   dircorr = intend-intstart;
 
   // Step 3 is to apply the blocks
-  intstart = std::chrono::system_clock::now();
+  intstart = std::chrono::steady_clock::now();
   auto startR = high_resolution_clock::now();
   for(int b = 0; b < Sigma.built_blocks(); b++) {
     for( int i = 0; i < nao_; i++) {
@@ -306,11 +306,11 @@ void dyson::les_lesadv_int_0_tstp(int tstp, herm_matrix_hodlr &Sigma, herm_matri
   }
   auto endR = high_resolution_clock::now();
   auto duration=duration_cast<microseconds>(endR - startR);
-  intend = std::chrono::system_clock::now();
+  intend = std::chrono::steady_clock::now();
   blocks = intend-intstart;
 
   // Step 4 is to apply the transposed blocks
-  intstart = std::chrono::system_clock::now();
+  intstart = std::chrono::steady_clock::now();
   for(int b = 0; b < Sigma.built_blocks(); b++) {
     for( int k = 0; k < nao_; k++) {
       for( int i = 0; i < nao_; i++) {
@@ -332,10 +332,10 @@ void dyson::les_lesadv_int_0_tstp(int tstp, herm_matrix_hodlr &Sigma, herm_matri
       }
     }
   }
-  intend = std::chrono::system_clock::now();
+  intend = std::chrono::steady_clock::now();
   blockstrans = intend-intstart;
 
-  intstart = std::chrono::system_clock::now();
+  intstart = std::chrono::steady_clock::now();
   // Step 5 is horizontal corrections
   if( tstp < 2*k_+1) { // les_left_edge has omega, but for these timesteps we need the weights that overlap.
     for(int t = Sigma.blkr1(0); t < Sigma.tstpmk(); t++) {
@@ -355,11 +355,11 @@ void dyson::les_lesadv_int_0_tstp(int tstp, herm_matrix_hodlr &Sigma, herm_matri
       }
     }
   }
-  intend = std::chrono::system_clock::now();
+  intend = std::chrono::steady_clock::now();
   blockscorrhor = intend-intstart;
 
   // Step 6 is vertical corrections
-  intstart = std::chrono::system_clock::now();
+  intstart = std::chrono::steady_clock::now();
   for(int t = 0; t <= k_+1; t++) {
     // if correction region runs out of triangular region
     // need to make sure not to run into curr_timestep
@@ -371,21 +371,21 @@ void dyson::les_lesadv_int_0_tstp(int tstp, herm_matrix_hodlr &Sigma, herm_matri
       ZMatrixMap(resptr + t*es_, nao_, nao_) += h * (I.gregory_weights(tstp, tbar)-1.) * ZMatrixMap(G.curr_timestep_ret_ptr(tstp,tbar), nao_, nao_).conjugate() * ZMatrixMap(bound_.data(), nao_, nao_).transpose();
     }
   }
-  intend = std::chrono::system_clock::now();
+  intend = std::chrono::steady_clock::now();
   blockscorrvert = intend-intstart;
 
   // Step 7 is to apply the curr_timestep region vertical
-  intstart = std::chrono::system_clock::now();
+  intstart = std::chrono::steady_clock::now();
   for(int t = 0; t <= tstp; t++) {
     for(int tbar = std::max(Sigma.tstpmk(), t); tbar <= tstp; tbar++) {
       ZMatrixMap(resptr + t*es_, nao_, nao_) += h * I.gregory_weights(tstp, tbar) * ZMatrixMap(G.curr_timestep_ret_ptr(tstp,tbar), nao_, nao_).conjugate() * ZMatrixMap(Sigma.curr_timestep_les_ptr(t,tbar), nao_, nao_).transpose();
     }
   }
-  intend = std::chrono::system_clock::now();
+  intend = std::chrono::steady_clock::now();
   currvert = intend-intstart;
 
   // Step 8 is curr_timestep horizontal
-  intstart = std::chrono::system_clock::now();
+  intstart = std::chrono::steady_clock::now();
   for(int t = Sigma.tstpmk(); t <= tstp; t++) {
     // the diagonal element is at tbar=t.  This element is done in Step 7, where tbar = std::max(Sigma.tstpmk(), t) = t
     // this is why the loop ends at tbar < t instead of tbar <= t
@@ -393,7 +393,7 @@ void dyson::les_lesadv_int_0_tstp(int tstp, herm_matrix_hodlr &Sigma, herm_matri
       ZMatrixMap(resptr + t*es_, nao_, nao_) -= h * I.gregory_weights(tstp, tbar) * (ZMatrixMap(G.curr_timestep_ret_ptr(tstp, tbar), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_les_ptr(tbar, t), nao_, nao_)).conjugate();
     }
   }
-  intend = std::chrono::system_clock::now();
+  intend = std::chrono::steady_clock::now();
   currhor = intend-intstart;
 
   if(profile_) timing(tstp, 13) = dir.count();

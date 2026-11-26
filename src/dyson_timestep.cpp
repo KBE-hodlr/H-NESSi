@@ -18,10 +18,10 @@ double dyson::dyson_timestep_ret(int tstp, herm_matrix_hodlr &G, double mu, cplx
   if(cs.outer()) enter_timestep_(where, tstp, G, Sigma, I, h, mu, H, 0, tstp-1, false);
 
 
-  std::chrono::time_point<std::chrono::system_clock> retstart, retend, intstart, intend;
+  std::chrono::time_point<std::chrono::steady_clock> retstart, retend, intstart, intend;
   std::chrono::duration<double, std::micro> retdur(0), intdur(0), intcurrdur(0), intblkdur(0), intcorrdur(0), intdirdur(0), intdircorrdur(0);
 
-  retstart = std::chrono::system_clock::now();
+  retstart = std::chrono::steady_clock::now();
 
 
   assert(tstp > I.get_k());
@@ -112,7 +112,7 @@ double dyson::dyson_timestep_ret(int tstp, herm_matrix_hodlr &G, double mu, cplx
   ZMatrixMap MMapSmall = ZMatrixMap(M_.data(), nao_, nao_);
   ZMatrixMap XMapSmall = ZMatrixMap(X_.data(), nao_, nao_);
 
-  intstart = std::chrono::system_clock::now();
+  intstart = std::chrono::steady_clock::now();
   // Do first part of integral
   memset(Q_.data(), 0, (tstp+1)*es_*sizeof(cplx));
   for( n = k_+1; n <= tstp; n++) {
@@ -122,7 +122,7 @@ double dyson::dyson_timestep_ret(int tstp, herm_matrix_hodlr &G, double mu, cplx
                                           * ZMatrixMap(Sigma.curr_timestep_ret_ptr(tstp-l, tstp-n), nao_, nao_);
     }
   }
-  intend = std::chrono::system_clock::now();
+  intend = std::chrono::steady_clock::now();
   intcurrdur += intend-intstart;
   intdur += intend-intstart;
 
@@ -150,7 +150,7 @@ double dyson::dyson_timestep_ret(int tstp, herm_matrix_hodlr &G, double mu, cplx
     ZMatrixMap(G.curr_timestep_ret_ptr(tstp,tstp-n), nao_, nao_).noalias() = XMapSmall;
 
     // Now we have a new value of G which needs to be put into integrals
-    intstart = std::chrono::system_clock::now();
+    intstart = std::chrono::steady_clock::now();
     if(n == next_block_apply_at) {
       for( int j = 0; j < nao_; j++) {
         for( int k = 0; k < nao_; k++) {
@@ -176,7 +176,7 @@ double dyson::dyson_timestep_ret(int tstp, herm_matrix_hodlr &G, double mu, cplx
         next_block_apply_at = tstp-Sigma.blkr1(next_block);
       }
     }
-    intend = std::chrono::system_clock::now();
+    intend = std::chrono::steady_clock::now();
     intblkdur += intend-intstart;
     intdur +=    intend-intstart;
 
@@ -186,14 +186,14 @@ double dyson::dyson_timestep_ret(int tstp, herm_matrix_hodlr &G, double mu, cplx
     // second argument is the case where the curr_timestep() tensor is the cutoff
     if( n != tstp) {
 
-      intstart = std::chrono::system_clock::now();
+      intstart = std::chrono::steady_clock::now();
       const auto dircorrstart = intstart;   // column 5: direct + correction regions together (BUGS B28)
       int lstart = std::max(tstp-Sigma.r2_dir(tstp-n-1), k_+1);
       for(int ll = tstp-n; ll < tstp-lstart+1; ll++) {
         double weight = ll > tstp-n+k_-1 ? 1. : I.gregory_weights(n+1, tstp-ll);
         ZMatrixMap(Q_.data() + (tstp-n-1) * es_, nao_, nao_) += weight * ZMatrixMap(G.curr_timestep_ret_ptr(tstp, ll), nao_, nao_) * ZMatrixMap(Sigma.retptr_col(ll, tstp-n-1), nao_, nao_);
       }
-      intend = std::chrono::system_clock::now();
+      intend = std::chrono::steady_clock::now();
       intdirdur += intend-intstart;
       intdur += intend-intstart;
 
@@ -201,18 +201,18 @@ double dyson::dyson_timestep_ret(int tstp, herm_matrix_hodlr &G, double mu, cplx
       // adjust some of the values from the svd blocks, which at the moment have coefficient 1
       int lstartcorr = std::max(n+1-k_, k_+1);
       int lendcorr = tstp-Sigma.r2_dir(tstp-n-1)-1;
-      intstart = std::chrono::system_clock::now();
+      intstart = std::chrono::steady_clock::now();
       for( l = lstartcorr; l <= lendcorr; l++) {
         ZMatrixMap(Q_.data() + (tstp-n-1) * es_, nao_, nao_) += (I.gregory_weights(n+1, l) - 1.)* ZMatrixMap(G.curr_timestep_ret_ptr(tstp, tstp-l), nao_, nao_) * ZMatrixMap(Sigma.retptr_corr(tstp-l,tstp-n-1), nao_, nao_);
       }
-      intend = std::chrono::system_clock::now();
+      intend = std::chrono::steady_clock::now();
       intcorrdur += intend-intstart;
       intdur += intend-intstart;
       intdircorrdur += intend-dircorrstart;
     }
   }
 
-  retend = std::chrono::system_clock::now();
+  retend = std::chrono::steady_clock::now();
   retdur = retend-retstart;
 
   if(profile_) timing(tstp, 0) = retdur.count();
@@ -246,10 +246,10 @@ double dyson::dyson_timestep_les_nobc(int tstp, herm_matrix_hodlr &G, double mu,
   assert(G.size1() == nao_);
   assert(I.get_k() == k_);
 
-  std::chrono::time_point<std::chrono::system_clock> lesstart, lesend, int1start, int1end, int2start, int2end, int3start, int3end;
+  std::chrono::time_point<std::chrono::steady_clock> lesstart, lesend, int1start, int1end, int2start, int2end, int3start, int3end;
   std::chrono::duration<double, std::micro> lesdur(0), int1dur(0), int2dur(0), int3dur(0), int3dur_curr(0), int3dur_corr(0), int3dur_block(0);
 
-  lesstart = std::chrono::system_clock::now();
+  lesstart = std::chrono::steady_clock::now();
 
   int next_block_apply_at = Sigma.blkc2(0);
   int next_block = 0;
@@ -269,14 +269,14 @@ double dyson::dyson_timestep_les_nobc(int tstp, herm_matrix_hodlr &G, double mu,
 
 
   // INTEGRAL 1 AND 2 GO
-  int2start = std::chrono::system_clock::now();
+  int2start = std::chrono::steady_clock::now();
   les_it_int(tstp, Sigma, G, Q_.data());
-  int2end = std::chrono::system_clock::now();
+  int2end = std::chrono::steady_clock::now();
   int2dur = int2end-int2start;
 
-  int1start = std::chrono::system_clock::now();
+  int1start = std::chrono::steady_clock::now();
   les_lesadv_int_0_tstp(tstp, Sigma, G, h, I);
-  int1end = std::chrono::system_clock::now();
+  int1end = std::chrono::steady_clock::now();
   int1dur = int1end-int1start;
 
   // Initial Condition. Do not use tv, remember integral is transposed
@@ -390,7 +390,7 @@ double dyson::dyson_timestep_les_nobc(int tstp, herm_matrix_hodlr &G, double mu,
     ZMatrixMap(X_.data() + i*es_, nao_, nao_) = ZMatrixMap(X_.data() + i*es_, nao_, nao_).transpose().eval();
   }
 
-  int3start = std::chrono::system_clock::now();
+  int3start = std::chrono::steady_clock::now();
   // Do first part of retles integral
   for(int b = 0; b < Sigma.built_blocks(); b++) {
     if(Sigma.blkc2(b) <= k_) {
@@ -418,7 +418,7 @@ double dyson::dyson_timestep_les_nobc(int tstp, herm_matrix_hodlr &G, double mu,
       break;
     }
   }
-  int3end = std::chrono::system_clock::now();
+  int3end = std::chrono::steady_clock::now();
   int3dur += int3end-int3start;
   int3dur_block += int3end-int3start;
 
@@ -427,7 +427,7 @@ double dyson::dyson_timestep_les_nobc(int tstp, herm_matrix_hodlr &G, double mu,
   for(int m = k_+1; m <= tstp; m++) {
 
     // Check if next box can be applied
-    int3start = std::chrono::system_clock::now();
+    int3start = std::chrono::steady_clock::now();
     if(next_block_apply_at == m-1) {
       int b = next_block;
       for(int i = 0; i < nao_; i++) {
@@ -447,12 +447,12 @@ double dyson::dyson_timestep_les_nobc(int tstp, herm_matrix_hodlr &G, double mu,
       next_block++;
       if(next_block < Sigma.nbox()) next_block_apply_at = Sigma.blkc2(next_block);
     }
-    int3end = std::chrono::system_clock::now();
+    int3end = std::chrono::steady_clock::now();
     int3dur += int3end-int3start;
     int3dur_block += int3end-int3start;
 
     // finish direct
-    int3start = std::chrono::system_clock::now();
+    int3start = std::chrono::steady_clock::now();
     if(m < Sigma.tstpmk()) {
       for(int tbar = Sigma.c1_dir(m); tbar < m; tbar++) {
         ZMatrixMap(Q_.data() + m*es_, nao_, nao_) += h * I.gregory_weights(m,tbar) * ZMatrixMap(X_.data()+tbar*es_, nao_, nao_) * ZMatrixMap(Sigma.retptr_col(m,tbar), nao_, nao_).transpose();
@@ -463,12 +463,12 @@ double dyson::dyson_timestep_les_nobc(int tstp, herm_matrix_hodlr &G, double mu,
         ZMatrixMap(Q_.data() + m*es_, nao_, nao_) += h * I.gregory_weights(m,tbar) * ZMatrixMap(X_.data() + tbar*es_, nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(m,tbar), nao_, nao_).transpose();
       }
     }
-    int3end = std::chrono::system_clock::now();
+    int3end = std::chrono::steady_clock::now();
     int3dur += int3end-int3start;
     int3dur_curr += int3end-int3start;
 
     // do edge corrections on left
-    int3start = std::chrono::system_clock::now();
+    int3start = std::chrono::steady_clock::now();
     if(m < Sigma.tstpmk() && m >= Sigma.blkr1(0)) {
       for(int tbar = 0; tbar <= std::min(k_, Sigma.c1_dir(m)-1); tbar++) {
         ZMatrixMap(Q_.data() + m*es_, nao_, nao_) += h * (I.gregory_weights(m,tbar)-1) * ZMatrixMap(X_.data() + tbar*es_, nao_, nao_) * ZMatrixMap(Sigma.ret_left_edge().data() + (m*(k_+1) + tbar)*nao_*nao_, nao_, nao_).transpose();
@@ -478,7 +478,7 @@ double dyson::dyson_timestep_les_nobc(int tstp, herm_matrix_hodlr &G, double mu,
         ZMatrixMap(Q_.data() + m*es_, nao_, nao_) += h * (I.gregory_weights(m,tbar)-1) * ZMatrixMap(X_.data() + tbar*es_, nao_, nao_) * ZMatrixMap(Sigma.retptr_corr(m,tbar), nao_, nao_).transpose();
       }
     }
-    int3end = std::chrono::system_clock::now();
+    int3end = std::chrono::steady_clock::now();
     int3dur += int3end-int3start;
     int3dur_corr += int3end-int3start;
 
@@ -536,7 +536,7 @@ double dyson::dyson_timestep_les_nobc(int tstp, herm_matrix_hodlr &G, double mu,
     err += (ZMatrixMap(G.curr_timestep_les_ptr(l,tstp), nao_, nao_) - ZMatrixMap(X_.data() + l*es_, nao_, nao_).transpose()).norm();
     ZMatrixMap(G.curr_timestep_les_ptr(l,tstp), nao_, nao_).noalias() = ZMatrixMap(X_.data() + l*es_, nao_, nao_).transpose();
   }
-  lesend = std::chrono::system_clock::now();
+  lesend = std::chrono::steady_clock::now();
   lesdur = lesend-lesstart;
 
   if(profile_) timing(tstp, 10) = lesdur.count();
@@ -569,10 +569,10 @@ double dyson::dyson_timestep_les_2leg(int tstp, herm_matrix_hodlr &G, double mu,
   assert(G.size1() == nao_);
   assert(I.get_k() == k_);
 
-  std::chrono::time_point<std::chrono::system_clock> lesstart, lesend, int1start, int1end, int2start, int2end, int3start, int3end;
+  std::chrono::time_point<std::chrono::steady_clock> lesstart, lesend, int1start, int1end, int2start, int2end, int3start, int3end;
   std::chrono::duration<double, std::micro> lesdur(0), int1dur(0), int2dur(0), int3dur(0), int3dur_curr(0), int3dur_corr(0), int3dur_block(0);
 
-  lesstart = std::chrono::system_clock::now();
+  lesstart = std::chrono::steady_clock::now();
 
   int next_block_apply_at = Sigma.blkc2(0);
   int next_block = 0;
@@ -592,14 +592,14 @@ double dyson::dyson_timestep_les_2leg(int tstp, herm_matrix_hodlr &G, double mu,
 
 
   // INTEGRAL 1 AND 2 GO
-  int2start = std::chrono::system_clock::now();
+  int2start = std::chrono::steady_clock::now();
 //  les_it_int(tstp, Sigma, G, Q_.data());
-  int2end = std::chrono::system_clock::now();
+  int2end = std::chrono::steady_clock::now();
   int2dur = int2end-int2start;
 
-  int1start = std::chrono::system_clock::now();
+  int1start = std::chrono::steady_clock::now();
   les_lesadv_int_0_tstp(tstp, Sigma, G, h, I);
-  int1end = std::chrono::system_clock::now();
+  int1end = std::chrono::steady_clock::now();
   int1dur = int1end-int1start;
 
   // Initial Condition. Do not use tv, remember integral is transposed
@@ -709,7 +709,7 @@ double dyson::dyson_timestep_les_2leg(int tstp, herm_matrix_hodlr &G, double mu,
     ZMatrixMap(X_.data() + i*es_, nao_, nao_) = ZMatrixMap(X_.data() + i*es_, nao_, nao_).transpose().eval();
   }
 
-  int3start = std::chrono::system_clock::now();
+  int3start = std::chrono::steady_clock::now();
   // Do first part of retles integral
   for(int b = 0; b < Sigma.built_blocks(); b++) {
     if(Sigma.blkc2(b) <= k_) {
@@ -737,7 +737,7 @@ double dyson::dyson_timestep_les_2leg(int tstp, herm_matrix_hodlr &G, double mu,
       break;
     }
   }
-  int3end = std::chrono::system_clock::now();
+  int3end = std::chrono::steady_clock::now();
   int3dur += int3end-int3start;
   int3dur_block += int3end-int3start;
 
@@ -746,7 +746,7 @@ double dyson::dyson_timestep_les_2leg(int tstp, herm_matrix_hodlr &G, double mu,
   for(int m = k_+1; m <= tstp; m++) {
 
     // Check if next box can be applied
-    int3start = std::chrono::system_clock::now();
+    int3start = std::chrono::steady_clock::now();
     if(next_block_apply_at == m-1) {
       int b = next_block;
       for(int i = 0; i < nao_; i++) {
@@ -766,12 +766,12 @@ double dyson::dyson_timestep_les_2leg(int tstp, herm_matrix_hodlr &G, double mu,
       next_block++;
       if(next_block < Sigma.nbox()) next_block_apply_at = Sigma.blkc2(next_block);
     }
-    int3end = std::chrono::system_clock::now();
+    int3end = std::chrono::steady_clock::now();
     int3dur += int3end-int3start;
     int3dur_block += int3end-int3start;
 
     // finish direct
-    int3start = std::chrono::system_clock::now();
+    int3start = std::chrono::steady_clock::now();
     if(m < Sigma.tstpmk()) {
       for(int tbar = Sigma.c1_dir(m); tbar < m; tbar++) {
         ZMatrixMap(Q_.data() + m*es_, nao_, nao_) += h * I.gregory_weights(m,tbar) * ZMatrixMap(X_.data()+tbar*es_, nao_, nao_) * ZMatrixMap(Sigma.retptr_col(m,tbar), nao_, nao_).transpose();
@@ -782,12 +782,12 @@ double dyson::dyson_timestep_les_2leg(int tstp, herm_matrix_hodlr &G, double mu,
         ZMatrixMap(Q_.data() + m*es_, nao_, nao_) += h * I.gregory_weights(m,tbar) * ZMatrixMap(X_.data() + tbar*es_, nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(m,tbar), nao_, nao_).transpose();
       }
     }
-    int3end = std::chrono::system_clock::now();
+    int3end = std::chrono::steady_clock::now();
     int3dur += int3end-int3start;
     int3dur_curr += int3end-int3start;
 
     // do edge corrections on left
-    int3start = std::chrono::system_clock::now();
+    int3start = std::chrono::steady_clock::now();
     if(m < Sigma.tstpmk() && m >= Sigma.blkr1(0)) {
       for(int tbar = 0; tbar <= std::min(k_, Sigma.c1_dir(m)-1); tbar++) {
         ZMatrixMap(Q_.data() + m*es_, nao_, nao_) += h * (I.gregory_weights(m,tbar)-1) * ZMatrixMap(X_.data() + tbar*es_, nao_, nao_) * ZMatrixMap(Sigma.ret_left_edge().data() + (m*(k_+1) + tbar)*nao_*nao_, nao_, nao_).transpose();
@@ -798,7 +798,7 @@ double dyson::dyson_timestep_les_2leg(int tstp, herm_matrix_hodlr &G, double mu,
         ZMatrixMap(Q_.data() + m*es_, nao_, nao_) += h * (I.gregory_weights(m,tbar)-1) * ZMatrixMap(X_.data() + tbar*es_, nao_, nao_) * ZMatrixMap(Sigma.retptr_corr(m,tbar), nao_, nao_).transpose();
       }
     }
-    int3end = std::chrono::system_clock::now();
+    int3end = std::chrono::steady_clock::now();
     int3dur += int3end-int3start;
     int3dur_corr += int3end-int3start;
 
@@ -856,7 +856,7 @@ double dyson::dyson_timestep_les_2leg(int tstp, herm_matrix_hodlr &G, double mu,
     err += (ZMatrixMap(G.curr_timestep_les_ptr(l,tstp), nao_, nao_) - ZMatrixMap(X_.data() + l*es_, nao_, nao_).transpose()).norm();
     ZMatrixMap(G.curr_timestep_les_ptr(l,tstp), nao_, nao_).noalias() = ZMatrixMap(X_.data() + l*es_, nao_, nao_).transpose();
   }
-  lesend = std::chrono::system_clock::now();
+  lesend = std::chrono::steady_clock::now();
   lesdur = lesend-lesstart;
 
   if(profile_) timing(tstp, 10) = lesdur.count();
@@ -889,10 +889,10 @@ double dyson::dyson_timestep_les(int tstp, herm_matrix_hodlr &G, double mu, cplx
   assert(G.size1() == nao_);
   assert(I.get_k() == k_);
 
-  std::chrono::time_point<std::chrono::system_clock> lesstart, lesend, int1start, int1end, int2start, int2end, int3start, int3end;
+  std::chrono::time_point<std::chrono::steady_clock> lesstart, lesend, int1start, int1end, int2start, int2end, int3start, int3end;
   std::chrono::duration<double, std::micro> lesdur(0), int1dur(0), int2dur(0), int3dur(0), int3dur_curr(0), int3dur_corr(0), int3dur_block(0);
 
-  lesstart = std::chrono::system_clock::now();
+  lesstart = std::chrono::steady_clock::now();
 
   int next_block_apply_at = Sigma.blkc2(0);
   int next_block = 0;
@@ -910,14 +910,14 @@ double dyson::dyson_timestep_les(int tstp, herm_matrix_hodlr &G, double mu, cplx
   memset(Q_.data(),0,sizeof(cplx)*(tstp+1)*es_);
 
   // INTEGRAL 1 AND 2 GO - Integrals are transposed
-  int2start = std::chrono::system_clock::now();
+  int2start = std::chrono::steady_clock::now();
   les_it_int(tstp, Sigma, G, Q_.data());
-  int2end = std::chrono::system_clock::now();
+  int2end = std::chrono::steady_clock::now();
   int2dur = int2end-int2start;
 
-  int1start = std::chrono::system_clock::now();
+  int1start = std::chrono::steady_clock::now();
   les_lesadv_int_0_tstp(tstp, Sigma, G, h, I);
-  int1end = std::chrono::system_clock::now();
+  int1end = std::chrono::steady_clock::now();
   int1dur = int1end-int1start;
 
   // Initial Condition. remember that we transpose X at the end when filling G
@@ -967,7 +967,7 @@ double dyson::dyson_timestep_les(int tstp, herm_matrix_hodlr &G, double mu, cplx
     ZMatrixMap(X_.data() + i*es_, nao_, nao_) = ZMatrixMap(X_.data() + i*es_, nao_, nao_).transpose().eval();
   }
 
-  int3start = std::chrono::system_clock::now();
+  int3start = std::chrono::steady_clock::now();
   // Do first part of retles integral
   for(int b = 0; b < Sigma.built_blocks(); b++) {
     if(Sigma.blkc2(b) <= k_) {
@@ -995,7 +995,7 @@ double dyson::dyson_timestep_les(int tstp, herm_matrix_hodlr &G, double mu, cplx
       break;
     }
   }
-  int3end = std::chrono::system_clock::now();
+  int3end = std::chrono::steady_clock::now();
   int3dur += int3end-int3start;
   int3dur_block += int3end-int3start;
 
@@ -1004,7 +1004,7 @@ double dyson::dyson_timestep_les(int tstp, herm_matrix_hodlr &G, double mu, cplx
   for(int m = k_+1; m <= tstp; m++) {
 
     // Check if next box can be applied
-    int3start = std::chrono::system_clock::now();
+    int3start = std::chrono::steady_clock::now();
     if(next_block_apply_at == m-1) {
       int b = next_block;
       for(int i = 0; i < nao_; i++) {
@@ -1024,12 +1024,12 @@ double dyson::dyson_timestep_les(int tstp, herm_matrix_hodlr &G, double mu, cplx
       next_block++;
       if(next_block < Sigma.nbox()) next_block_apply_at = Sigma.blkc2(next_block);
     }
-    int3end = std::chrono::system_clock::now();
+    int3end = std::chrono::steady_clock::now();
     int3dur += int3end-int3start;
     int3dur_block += int3end-int3start;
 
     // finish direct
-    int3start = std::chrono::system_clock::now();
+    int3start = std::chrono::steady_clock::now();
     if(m < Sigma.tstpmk()) {
       for(int tbar = Sigma.c1_dir(m); tbar < m; tbar++) {
         ZMatrixMap(Q_.data() + m*es_, nao_, nao_) += h * I.gregory_weights(m,tbar) * ZMatrixMap(X_.data()+tbar*es_, nao_, nao_) * ZMatrixMap(Sigma.retptr_col(m,tbar), nao_, nao_).transpose();
@@ -1040,12 +1040,12 @@ double dyson::dyson_timestep_les(int tstp, herm_matrix_hodlr &G, double mu, cplx
         ZMatrixMap(Q_.data() + m*es_, nao_, nao_) += h * I.gregory_weights(m,tbar) * ZMatrixMap(X_.data() + tbar*es_, nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_ret_ptr(m,tbar), nao_, nao_).transpose();
       }
     }
-    int3end = std::chrono::system_clock::now();
+    int3end = std::chrono::steady_clock::now();
     int3dur += int3end-int3start;
     int3dur_curr += int3end-int3start;
 
     // do edge corrections on left
-    int3start = std::chrono::system_clock::now();
+    int3start = std::chrono::steady_clock::now();
     if(m < Sigma.tstpmk() && m >= Sigma.blkr1(0)) {
       for(int tbar = 0; tbar <= std::min(k_, Sigma.c1_dir(m)-1); tbar++) {
         ZMatrixMap(Q_.data() + m*es_, nao_, nao_) += h * (I.gregory_weights(m,tbar)-1) * ZMatrixMap(X_.data() + tbar*es_, nao_, nao_) * ZMatrixMap(Sigma.ret_left_edge().data() + (m*(k_+1) + tbar)*nao_*nao_, nao_, nao_).transpose();
@@ -1055,7 +1055,7 @@ double dyson::dyson_timestep_les(int tstp, herm_matrix_hodlr &G, double mu, cplx
         ZMatrixMap(Q_.data() + m*es_, nao_, nao_) += h * (I.gregory_weights(m,tbar)-1) * ZMatrixMap(X_.data() + tbar*es_, nao_, nao_) * ZMatrixMap(Sigma.retptr_corr(m,tbar), nao_, nao_).transpose();
       }
     }
-    int3end = std::chrono::system_clock::now();
+    int3end = std::chrono::steady_clock::now();
     int3dur += int3end-int3start;
     int3dur_corr += int3end-int3start;
 
@@ -1113,7 +1113,7 @@ double dyson::dyson_timestep_les(int tstp, herm_matrix_hodlr &G, double mu, cplx
     err += (ZMatrixMap(G.curr_timestep_les_ptr(l,tstp), nao_, nao_) - ZMatrixMap(X_.data() + l*es_, nao_, nao_).transpose()).norm();
     ZMatrixMap(G.curr_timestep_les_ptr(l,tstp), nao_, nao_).noalias() = ZMatrixMap(X_.data() + l*es_, nao_, nao_).transpose();
   }
-  lesend = std::chrono::system_clock::now();
+  lesend = std::chrono::steady_clock::now();
   lesdur = lesend-lesstart;
 
   if(profile_) timing(tstp, 10) = lesdur.count();
@@ -1145,10 +1145,10 @@ double dyson::dyson_timestep_tv(int tstp, herm_matrix_hodlr &G, double mu, cplx 
   assert(G.size1() == nao_);
   assert(I.get_k() == k_);
 
-  std::chrono::time_point<std::chrono::system_clock> tvstart, tvend, int1start, int1end, int2start, int2end;
+  std::chrono::time_point<std::chrono::steady_clock> tvstart, tvend, int1start, int1end, int2start, int2end;
   std::chrono::duration<double, std::micro> tvdur(0), int1dur(0), int2dur(0);
 
-  tvstart = std::chrono::system_clock::now();
+  tvstart = std::chrono::steady_clock::now();
 
   double err = 0;
 
@@ -1158,14 +1158,14 @@ double dyson::dyson_timestep_tv(int tstp, herm_matrix_hodlr &G, double mu, cplx 
   auto MMap = ZMatrixMap(M_.data(), nao_, nao_);
 
   // Do integrals and put them into G.tv(tstp,:)
-  int1start = std::chrono::system_clock::now();
+  int1start = std::chrono::steady_clock::now();
   tv_ret_int(tstp, Sigma, G, I, h);
-  int1end = std::chrono::system_clock::now();
+  int1end = std::chrono::steady_clock::now();
   int1dur = int1end-int1start;
 
-  int2start = std::chrono::system_clock::now();
+  int2start = std::chrono::steady_clock::now();
   tv_it_conv(tstp, Sigma, G, G.tvptr(tstp,0));
-  int2end = std::chrono::system_clock::now();
+  int2end = std::chrono::steady_clock::now();
   int2dur = int2end-int2start;
 
   // Put derivatives into G.tv(tstp,m)
@@ -1189,7 +1189,7 @@ double dyson::dyson_timestep_tv(int tstp, herm_matrix_hodlr &G, double mu, cplx 
     ZMatrixMap(G.tvptr(tstp,m), nao_, nao_).noalias() = XMap;
   }
 
-  tvend = std::chrono::system_clock::now();
+  tvend = std::chrono::steady_clock::now();
   tvdur = tvend-tvstart;
 
 
