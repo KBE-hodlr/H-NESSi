@@ -839,3 +839,191 @@ TEST(DysonTiming, Column5Accumulated_B28) {
     EXPECT_GT(t.col(6).maxCoeff(), 0.0) << "sanity: column 6 is accumulated";
   });
 }
+
+// =============================================================================================== P1
+// P1: the cached LU factorisations of the step matrices (dyson.hpp lu_*_; h(t), Sigma^R(t,t) of archived times are
+// final, so each M(t') is factorised once): a long-lived dyson object (warm cache, corrector iterations) gives BITWISE
+// the same G as a fresh object per call (cold cache), also when mu changes in the middle of the run (the cache must be
+// cleared). In Debug every reuse is also checked against a fresh factorisation (DY-T12). Also: profile on and off give
+// bitwise the same G, and the per-level block timing (timing_lvl_) sums to timing columns 3, 22 and is bounded by 15, 16.
+namespace p1 {
+struct Run {
+  int nt = 48, nlvl = 3, k = 3, nao = 2;
+  double h = 0.05, beta = 5.0;
+};
+// march T = k+1..nt-1 with two corrector iterations; fresh = a new dyson object for every call
+void march(const Run &P, bool rho_version, bool profile, bool fresh, bool kick, herm_matrix_hodlr &G, dyson *&Dkeep,
+           dlr_info &dlr) {
+  Integration::Integrator I(P.k);
+  herm_matrix_hodlr S(P.nt, dlr.r(), P.nlvl, 1e-12, P.nao, P.nao, -1, P.k);
+  Dkeep = new dyson(P.nt, P.nao, P.k, dlr, rho_version, profile);
+  ZMatrix H0(P.nao, P.nao);
+  H0 << 0.3, 0.1, 0.1, -0.2;
+  function H(P.nt, P.nao, P.nao);
+  for (int t = -1; t < P.nt; t++) {
+    ZMatrix Ht = H0 + 0.05 * std::cos(0.3 * t) * ZMatrix::Identity(P.nao, P.nao);
+    H.set_value(t, Ht);
+  }
+  Dkeep->green_from_H(G, 0.0, H0, P.h, P.k, true);
+  G.initGMConvTensor(dlr);
+  auto fillS = [&](int T) {
+    for (int tp = 0; tp <= T; tp++) S.set_ret_curr(T, tp, ZMatrix(-II * 0.1 * std::exp(-II * 0.5 * double(T - tp) * P.h) * ZMatrix::Identity(P.nao, P.nao)));
+    for (int tp = 0; tp <= T; tp++) S.set_les_curr(tp, T, ZMatrix(II * 0.05 * std::exp(-II * 0.5 * double(tp - T) * P.h) * ZMatrix::Identity(P.nao, P.nao)));
+  };
+  for (int T = 0; T <= P.k; T++) fillS(T);
+  for (int T = P.k + 1; T < P.nt; T++) {
+    G.update_blocks(I);
+    S.update_blocks(I);
+    fillS(T);
+    Dkeep->extrapolate(G, I);
+    const double mu = (kick && T >= P.nt / 2) ? 0.1 : 0.0;   // a different mu must clear the cache
+    for (int it = 0; it < 2; it++) {
+      if (fresh) {
+        dyson Df(P.nt, P.nao, P.k, dlr, rho_version, profile);
+        Df.dyson_timestep(T, G, mu, H, S, I, P.h);
+      } else {
+        Dkeep->dyson_timestep(T, G, mu, H, S, I, P.h);
+      }
+    }
+  }
+}
+double maxdiff(herm_matrix_hodlr &A, herm_matrix_hodlr &B, int nt, int nao) {
+  double d = 0;
+  ZMatrix a(nao, nao), b(nao, nao);
+  for (int t = 0; t < nt; t++)
+    for (int tp = 0; tp <= t; tp++) {
+      A.get_ret(t, tp, a); B.get_ret(t, tp, b); d = std::max(d, (a - b).cwiseAbs().maxCoeff());
+      A.get_les(tp, t, a); B.get_les(tp, t, b); d = std::max(d, (a - b).cwiseAbs().maxCoeff());
+    }
+  d = std::max(d, (Eigen::Map<ZMatrix>(A.tvptr(0, 0), nt, A.r() * nao * nao) - Eigen::Map<ZMatrix>(B.tvptr(0, 0), nt, B.r() * nao * nao)).cwiseAbs().maxCoeff());
+  return d;
+}
+}  // namespace p1
+
+TEST(DysonP1, LuCacheBitwiseVsFreshObject) {
+  hn_test::run_isolated([] {
+    p1::Run P;
+    for (bool rhov : {false, true})
+      for (bool kick : {false, true}) {
+        int r = 0;
+        dlr_info dlr(r, 50., 1e-12, P.beta, P.nao, -1);
+        herm_matrix_hodlr Gw(P.nt, r, P.nlvl, 1e-12, P.nao, P.nao, -1, P.k), Gf(Gw);
+        dyson *Dw = nullptr, *Df = nullptr;
+        p1::march(P, rhov, true, false, kick, Gw, Dw, dlr);
+        p1::march(P, rhov, true, true, kick, Gf, Df, dlr);
+        // the warm object did reuse factorisations (slots of archived t' are valid)
+        int nvalid = 0;
+        for (unsigned char v : Dw->lu_valid_) nvalid += v;
+        EXPECT_GT(nvalid, P.nt / 2);
+        EXPECT_EQ(p1::maxdiff(Gw, Gf, P.nt, P.nao), 0.0) << "rho_version=" << rhov << " kick=" << kick;
+        delete Dw;
+        delete Df;
+      }
+  });
+}
+
+TEST(DysonP1, ProfileOffBitwiseAndLevelTiming) {
+  hn_test::run_isolated([] {
+    p1::Run P;
+    int r = 0;
+    dlr_info dlr(r, 50., 1e-12, P.beta, P.nao, -1);
+    herm_matrix_hodlr Gp(P.nt, r, P.nlvl, 1e-12, P.nao, P.nao, -1, P.k), Gn(Gp);
+    dyson *Dp = nullptr, *Dn = nullptr;
+    p1::march(P, true, true, false, false, Gp, Dp, dlr);
+    p1::march(P, true, false, false, false, Gn, Dn, dlr);
+    EXPECT_EQ(p1::maxdiff(Gp, Gn, P.nt, P.nao), 0.0);
+    EXPECT_EQ(Dn->timing.rows(), 0);
+    EXPECT_EQ(Dn->timing_lvl_.rows(), 0);
+    const int L = Dp->tl_lmax_;
+    EXPECT_EQ(L, 5);   // floor(log2(48))
+    ASSERT_EQ(Dp->timing_lvl_.rows(), P.nt);
+    ASSERT_EQ(Dp->timing_lvl_.cols(), 4 * L);
+    double tot[4] = {0, 0, 0, 0};
+    for (int t = P.k + 1; t < P.nt; t++) {
+      double g[4] = {0, 0, 0, 0};
+      for (int q = 0; q < 4; q++) {
+        for (int l = 0; l < L; l++) g[q] += Dp->timing_lvl_(t, q * L + l);
+        // levels above nlvl hold nothing
+        for (int l = P.nlvl; l < L; l++) EXPECT_EQ(Dp->timing_lvl_(t, q * L + l), 0.0);
+        tot[q] += g[q];
+      }
+      EXPECT_NEAR(g[0], Dp->timing(t, 3), 1e-9 * (1 + Dp->timing(t, 3))) << t;
+      EXPECT_NEAR(g[1], Dp->timing(t, 22), 1e-9 * (1 + Dp->timing(t, 22))) << t;
+      EXPECT_LE(g[2], Dp->timing(t, 15) * (1 + 1e-12) + 1e-9) << t;
+      EXPECT_LE(g[3], Dp->timing(t, 16) * (1 + 1e-12) + 1e-9) << t;
+    }
+    for (int q = 0; q < 4; q++) EXPECT_GT(tot[q], 0.0) << "group " << q;
+    // written by write_timing and read back by the checkpoint constructor
+    std::string fn = "dyson_timing_p1.h5";
+    std::remove(fn.c_str());
+    {
+      h5e::File out(fn, h5e::File::Overwrite | h5e::File::ReadWrite | h5e::File::Create);
+      Dp->write_checkpoint_hdf5(out, "d");
+      Dp->write_timing(out, "dt");
+    }
+    h5e::File in(fn, h5e::File::ReadOnly);
+    DMatrix tl = in.getDataSet("dt/timing_level").read<DMatrix>();
+    EXPECT_EQ((tl - Dp->timing_lvl_).cwiseAbs().maxCoeff(), 0.0);
+    dyson Dc(in, "d", dlr);
+    EXPECT_EQ((Dc.timing_lvl_ - Dp->timing_lvl_).cwiseAbs().maxCoeff(), 0.0);
+    std::remove(fn.c_str());
+    delete Dp;
+    delete Dn;
+  });
+}
+
+// P1: one dyson object used for two (G, Sigma, h) systems alternately (as the mpi_example does for several k-points per
+// thread) must give bitwise the same G as one object per system: the step-matrix cache is cleared when the Sigma object
+// or the h array changes (lu_params_). Before this check the Debug build stopped with DY-T12 in the mpi_example.
+TEST(DysonP1, LuCacheSharedObjectTwoSystems) {
+  hn_test::run_isolated([] {
+    p1::Run P;
+    int r = 0;
+    dlr_info dlr(r, 50., 1e-12, P.beta, P.nao, -1);
+    Integration::Integrator I(P.k);
+    struct Sys {
+      herm_matrix_hodlr G, S;
+      function H;
+      ZMatrix H0;
+    };
+    auto make = [&](double shift) {
+      Sys *s = new Sys{herm_matrix_hodlr(P.nt, r, P.nlvl, 1e-12, P.nao, P.nao, -1, P.k),
+                       herm_matrix_hodlr(P.nt, r, P.nlvl, 1e-12, P.nao, P.nao, -1, P.k), function(P.nt, P.nao, P.nao),
+                       ZMatrix(P.nao, P.nao)};
+      s->H0 << 0.3 + shift, 0.1, 0.1, -0.2 - shift;
+      for (int t = -1; t < P.nt; t++) {
+        ZMatrix Ht = s->H0 + 0.05 * std::cos(0.3 * t) * ZMatrix::Identity(P.nao, P.nao);
+        s->H.set_value(t, Ht);
+      }
+      return s;
+    };
+    auto fillS = [&](Sys &s, int T, double g) {
+      for (int tp = 0; tp <= T; tp++) s.S.set_ret_curr(T, tp, ZMatrix(-II * g * std::exp(-II * 0.5 * double(T - tp) * P.h) * ZMatrix::Identity(P.nao, P.nao)));
+      for (int tp = 0; tp <= T; tp++) s.S.set_les_curr(tp, T, ZMatrix(II * 0.5 * g * std::exp(-II * 0.5 * double(tp - T) * P.h) * ZMatrix::Identity(P.nao, P.nao)));
+    };
+    // shared: one dyson for A and B; separate: one per system
+    Sys *A1 = make(0.0), *B1 = make(0.2), *A2 = make(0.0), *B2 = make(0.2);
+    dyson Dsh(P.nt, P.nao, P.k, dlr, true, false), DA(P.nt, P.nao, P.k, dlr, true, false), DB(P.nt, P.nao, P.k, dlr, true, false);
+    Dsh.green_from_H(A1->G, 0.0, A1->H0, P.h, P.k, true);
+    Dsh.green_from_H(B1->G, 0.0, B1->H0, P.h, P.k, true);
+    DA.green_from_H(A2->G, 0.0, A2->H0, P.h, P.k, true);
+    DB.green_from_H(B2->G, 0.0, B2->H0, P.h, P.k, true);
+    for (Sys *s : {A1, B1, A2, B2}) s->G.initGMConvTensor(dlr);
+    for (int T = 0; T <= P.k; T++) { fillS(*A1, T, 0.1); fillS(*A2, T, 0.1); fillS(*B1, T, 0.15); fillS(*B2, T, 0.15); }
+    for (int T = P.k + 1; T < P.nt; T++) {
+      for (Sys *s : {A1, B1, A2, B2}) { s->G.update_blocks(I); s->S.update_blocks(I); }
+      fillS(*A1, T, 0.1); fillS(*A2, T, 0.1); fillS(*B1, T, 0.15); fillS(*B2, T, 0.15);
+      Dsh.extrapolate(A1->G, I); Dsh.extrapolate(B1->G, I); DA.extrapolate(A2->G, I); DB.extrapolate(B2->G, I);
+      for (int it = 0; it < 2; it++) {
+        Dsh.dyson_timestep(T, A1->G, 0.0, A1->H, A1->S, I, P.h);
+        Dsh.dyson_timestep(T, B1->G, 0.0, B1->H, B1->S, I, P.h);
+        DA.dyson_timestep(T, A2->G, 0.0, A2->H, A2->S, I, P.h);
+        DB.dyson_timestep(T, B2->G, 0.0, B2->H, B2->S, I, P.h);
+      }
+    }
+    EXPECT_EQ(p1::maxdiff(A1->G, A2->G, P.nt, P.nao), 0.0);
+    EXPECT_EQ(p1::maxdiff(B1->G, B2->G, P.nt, P.nao), 0.0);
+    EXPECT_GT(p1::maxdiff(A1->G, B1->G, P.nt, P.nao), 1e-3);   // the two systems differ
+    for (Sys *s : {A1, B1, A2, B2}) delete s;
+  });
+}

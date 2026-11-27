@@ -45,25 +45,31 @@ void dyson::gamma_integral(int tstp, herm_matrix_hodlr &G, herm_matrix_hodlr &De
   ZMatrixMap resMap(res, nao_, nao_);
   cplx cplxi = cplx(0.,1.);
 
-  for(int t = 0; t <= tstp; t++) {
-    resMap += -cplxi * h * I.gregory_weights(tstp,t) * ZMatrixMap(G.curr_timestep_ret_ptr(tstp, t), nao_, nao_) * ZMatrixMap(Delta.curr_timestep_les_ptr(t, tstp), nao_, nao_);
-  }
-  for(int t = 0; t <= tstp; t++) {
-    resMap -= -cplxi * h * I.gregory_weights(tstp, t) * ZMatrixMap(G.curr_timestep_les_ptr(t, tstp), nao_, nao_).adjoint() * ZMatrixMap(Delta.curr_timestep_ret_ptr(tstp, t), nao_, nao_).adjoint();
+  // P1: row tstp of the R curr buffer and column tstp of the < curr buffer are contiguous in t (doc 11 §3.3);
+  // products with noalias (no temporary per term)
+  {
+    cplx *GR = G.curr_timestep_ret_ptr(tstp, 0), *GL = G.curr_timestep_les_ptr(0, tstp);
+    cplx *DR = Delta.curr_timestep_ret_ptr(tstp, 0), *DL = Delta.curr_timestep_les_ptr(0, tstp);
+    for(int t = 0; t <= tstp; t++) {
+      resMap.noalias() += -cplxi * h * I.gregory_weights(tstp,t) * ZMatrixMap(GR + t*es_, nao_, nao_) * ZMatrixMap(DL + t*es_, nao_, nao_);
+    }
+    for(int t = 0; t <= tstp; t++) {
+      resMap.noalias() -= -cplxi * h * I.gregory_weights(tstp, t) * ZMatrixMap(GL + t*es_, nao_, nao_).adjoint() * ZMatrixMap(DR + t*es_, nao_, nao_).adjoint();
+    }
   }
 
   ZMatrixMap(NTauTmp_.data(), r_, es_) = DMatrixConstMap(dlr_.it2itr(), r_, r_).transpose() * ZMatrixMap(Delta.tvptr(tstp,0), r_, es_);
   ZMatrixMap(NTauTmp2_.data(), r_, es_) = DMatrixConstMap(dlr_.ipmat(), r_, r_).transpose() * ZMatrixMap(NTauTmp_.data(), r_, es_);
   for(int tau = 0; tau < r_; tau++) {
     // mixed term -i(-i\int G^\rceil \Delta^\lceil) = \xi \int G^\rceil(T,\tau) [\Delta^\rceil(T,\beta-\tau)]^\dagger
-    resMap += double(xi_) * ZMatrixMap(G.tvptr(tstp, tau), nao_, nao_) * ZMatrixMap(NTauTmp2_.data() + tau*es_, nao_, nao_).adjoint();
+    resMap.noalias() += double(xi_) * ZMatrixMap(G.tvptr(tstp, tau), nao_, nao_) * ZMatrixMap(NTauTmp2_.data() + tau*es_, nao_, nao_).adjoint();
   }
 
   for(int t = tstp+1; t <= k_; t++) {
-    resMap += -cplxi * h * I.gregory_weights(tstp, t) * ZMatrixMap(G.curr_timestep_ret_ptr(t, tstp), nao_, nao_).adjoint() * ZMatrixMap(Delta.curr_timestep_les_ptr(tstp, t), nao_, nao_).adjoint();
+    resMap.noalias() += -cplxi * h * I.gregory_weights(tstp, t) * ZMatrixMap(G.curr_timestep_ret_ptr(t, tstp), nao_, nao_).adjoint() * ZMatrixMap(Delta.curr_timestep_les_ptr(tstp, t), nao_, nao_).adjoint();
   }
   for(int t = tstp+1; t <= k_; t++) {
-    resMap -= -cplxi * h * I.gregory_weights(tstp, t) * ZMatrixMap(G.curr_timestep_les_ptr(tstp, t), nao_, nao_) * ZMatrixMap(Delta.curr_timestep_ret_ptr(t, tstp), nao_, nao_);
+    resMap.noalias() -= -cplxi * h * I.gregory_weights(tstp, t) * ZMatrixMap(G.curr_timestep_les_ptr(tstp, t), nao_, nao_) * ZMatrixMap(Delta.curr_timestep_ret_ptr(t, tstp), nao_, nao_);
   }
 }
 
@@ -193,9 +199,19 @@ void dyson::tv_ret_int(int tstp, herm_matrix_hodlr &Sigma, herm_matrix_hodlr &G,
   }
   memset(NTauTmp2_.data(),0,r_*es_*sizeof(cplx));
 
-  for( int t = 0; t < tstp; t++ ) {
-    ZMatrixMap(NTauTmp_.data(), es_, r_).noalias() = (h * I.gregory_weights(tstp,t)) * ZMatrixMap(G.tvptr(t,0), r_, es_).transpose();
-    ZMatrixMap(NTauTmp2_.data(), nao_, nao_*r_) += ZMatrixMap(Sigma.curr_timestep_ret_ptr(tstp, t), nao_, nao_) * ZMatrixMap(NTauTmp_.data(), nao_, nao_*r_);
+  // NTauTmp2 (nao x nao*r) = sum_t Sigma^R(tstp,t) [h w_t G^tv(t)^T] with G^tv(t)^T (es x r) viewed as nao x nao*r.
+  // P1: tv_chunk_ times per GEMM: [Sigma^R(tstp,t0) ... Sigma^R(tstp,t0+c-1)] (nao x c*nao, tv_wide_) times the
+  // stacked h w_t G^tv(t)^T (c*nao x nao*r, tv_stack_); was one nao x nao x nao*r product (with a temporary) per t
+  const cplx *SR = Sigma.curr_timestep_ret_ptr(tstp, 0);   // row tstp is contiguous in t (doc 11 §3.3)
+  for(int t0 = 0; t0 < tstp; t0 += tv_chunk_) {
+    const int c = std::min(tv_chunk_, tstp - t0);
+    for(int q = 0; q < c; q++) {
+      const int t = t0 + q;
+      for(int i = 0; i < nao_; i++)
+        std::memcpy(tv_wide_.data() + (size_t)i*c*nao_ + q*nao_, SR + (size_t)t*es_ + i*nao_, nao_*sizeof(cplx));
+      ZMatrixMap(tv_stack_.data() + (size_t)q*r_*es_, es_, r_).noalias() = (h * I.gregory_weights(tstp,t)) * ZMatrixMap(G.tvptr(t,0), r_, es_).transpose();
+    }
+    ZMatrixMap(NTauTmp2_.data(), nao_, nao_*r_).noalias() += ZMatrixMap(tv_wide_.data(), nao_, c*nao_) * ZMatrixMap(tv_stack_.data(), c*nao_, nao_*r_);
   }
 
   std::memcpy(NTauTmp_.data(), G.tvptr(tstp,0), r_*es_*sizeof(cplx));
@@ -216,8 +232,11 @@ void dyson::les_lesadv_int_0_tstp(int tstp, herm_matrix_hodlr &Sigma, herm_matri
   ZMatrixMap(X_.data(), nao_, (tstp+1)*nao_).noalias() = h * ZMatrixMap(G.curr_timestep_ret_ptr(tstp, 0), (tstp+1)*nao_, nao_).adjoint();
   ZMatrixMap(M_.data(), nao_, (k_+1)*nao_).noalias() = h * ZMatrixMap(G.curr_timestep_ret_ptr(tstp, 0), (k_+1)*nao_, nao_).adjoint();
 
-  std::chrono::time_point<std::chrono::steady_clock> intstart, intend;
+  // P1: timers only if profile_ (pnow_); blocks additionally per HODLR level (timing_lvl_ groups 2, 3)
+  clock_tp_ intstart, intend;
   std::chrono::duration<double, std::micro> dir, dircorr, blocks, blockstrans, blockscorrhor, blockscorrvert, currvert, currhor;
+  zero_lvl_(tstp, 2);
+  zero_lvl_(tstp, 3);
 
   cplx *resptr = Q_.data();
 
@@ -231,7 +250,7 @@ void dyson::les_lesadv_int_0_tstp(int tstp, herm_matrix_hodlr &Sigma, herm_matri
   // 8 curr timestep horiz
 
   // 1 This part of the integral does the triangular regions that are directly stored
-  intstart = std::chrono::steady_clock::now();
+  intstart = pnow_();
   int b = 0;
   for(b = 0; b < G.nbox() && G.blkr1(b) <= G.tstpmk(); b++) {
     for(int i = 0; i < nao_; i++) {
@@ -249,7 +268,7 @@ void dyson::les_lesadv_int_0_tstp(int tstp, herm_matrix_hodlr &Sigma, herm_matri
       Eigen::Map<Eigen::Matrix<cplx, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>, 0, Eigen::InnerStride<> >(G.curr_timestep_ret_ptr(tstp, Sigma.blkr1(b-1))+k, Sigma.tstpmk()-Sigma.blkr1(b-1), nao_, Eigen::InnerStride<>(nao_)).conjugate();
     }
   }
-  intend = std::chrono::steady_clock::now();
+  intend = pnow_();
   dir = intend-intstart;
 
   // 2 corrections for parts of integral in directly stored regions
@@ -258,7 +277,7 @@ void dyson::les_lesadv_int_0_tstp(int tstp, herm_matrix_hodlr &Sigma, herm_matri
   // Edge case where height of upper right square is smaller than k_
   // Both of these cases are covered in G.c1_dir(t) > k_
   // Also stop if you are about to hit curr_timestep tensor
-  intstart = std::chrono::steady_clock::now();
+  intstart = pnow_();
   for(int t = 0; t <= tstp; t++) {
     if(t == G.tstpmk() || G.c1_dir(t) > k_) break;
     auto corrMap = ZMatrixMap(resptr + t*es_, nao_, nao_);
@@ -277,13 +296,13 @@ void dyson::les_lesadv_int_0_tstp(int tstp, herm_matrix_hodlr &Sigma, herm_matri
                   Eigen::Map<Eigen::Matrix<cplx, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>, 0, Eigen::InnerStride<> >(Sigma.les_dir_square().data() + G.les_dir_square_first_index(blk) + row*G.blkdirheight(blk) + col, nao_, nao_, Eigen::InnerStride<>(G.len_les_dir_square())).transpose();
     }    
   }
-  intend = std::chrono::steady_clock::now();
+  intend = pnow_();
   dircorr = intend-intstart;
 
   // Step 3 is to apply the blocks
-  intstart = std::chrono::steady_clock::now();
-  auto startR = high_resolution_clock::now();
+  intstart = pnow_();
   for(int b = 0; b < Sigma.built_blocks(); b++) {
+    const auto bstart = pnow_();
     for( int i = 0; i < nao_; i++) {
       for( int k = 0; k < nao_; k++) {
         int blkrows = Sigma.blklen(b);
@@ -294,24 +313,24 @@ void dyson::les_lesadv_int_0_tstp(int tstp, herm_matrix_hodlr &Sigma, herm_matri
         HNESSI_ASSERT(epsrank*nao_ <= (int)epsnao_tmp_.size(), "dyson::les_lesadv_int_0_tstp", HNESSI_KV(epsrank),
                       HNESSI_KV(epsnao_tmp_.size()));
         ZMatrixMap tmp(epsnao_tmp_.data(), epsrank, nao_);
-        ZMatrixMap tmp2(epsnao_tmp_2_.data(), epsrank, nao_);
 
         tmp.noalias() = ZMatrixMap(Sigma.les().data().blocks()[b][i][k].Udata(), blkrows, epsrank).transpose() * ZMatrixMap(X_.data() + k*(tstp+1)*nao_ + blkr1*nao_, blkrows, nao_);
 
-        tmp2.noalias() = DColVectorMap(Sigma.les().data().blocks()[b][i][k].Sdata(), epsrank).asDiagonal() * tmp;
+        const double *Sv = Sigma.les().data().blocks()[b][i][k].Sdata();   // P1: S applied to the rows of tmp in place
+        for(int r = 0; r < epsrank; r++) tmp.row(r) *= Sv[r];
 
-        Eigen::Map<Eigen::Matrix<cplx, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>, 0, Eigen::InnerStride<> >(resptr + Sigma.blkc1(b)*es_ + i, blkcols, nao_, Eigen::InnerStride<>(nao_)).noalias() += ZMatrixMap(Sigma.les().data().blocks()[b][i][k].Vdata(), blkcols, epsrank).conjugate() * tmp2;
+        Eigen::Map<Eigen::Matrix<cplx, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>, 0, Eigen::InnerStride<> >(resptr + Sigma.blkc1(b)*es_ + i, blkcols, nao_, Eigen::InnerStride<>(nao_)).noalias() += ZMatrixMap(Sigma.les().data().blocks()[b][i][k].Vdata(), blkcols, epsrank).conjugate() * tmp;
       }
     }
+    add_lvl_(tstp, 2, Sigma.blklevel(b), bstart, pnow_());
   }
-  auto endR = high_resolution_clock::now();
-  auto duration=duration_cast<microseconds>(endR - startR);
-  intend = std::chrono::steady_clock::now();
+  intend = pnow_();
   blocks = intend-intstart;
 
   // Step 4 is to apply the transposed blocks
-  intstart = std::chrono::steady_clock::now();
+  intstart = pnow_();
   for(int b = 0; b < Sigma.built_blocks(); b++) {
+    const auto bstart = pnow_();
     for( int k = 0; k < nao_; k++) {
       for( int i = 0; i < nao_; i++) {
         int blkrows = Sigma.blklen(b);
@@ -322,27 +341,28 @@ void dyson::les_lesadv_int_0_tstp(int tstp, herm_matrix_hodlr &Sigma, herm_matri
         HNESSI_ASSERT(epsrank*nao_ <= (int)epsnao_tmp_.size(), "dyson::les_lesadv_int_0_tstp", HNESSI_KV(epsrank),
                       HNESSI_KV(epsnao_tmp_.size()));
         ZMatrixMap tmp(epsnao_tmp_.data(), epsrank, nao_);
-        ZMatrixMap tmp2(epsnao_tmp_2_.data(), epsrank, nao_);
 
         tmp.noalias() = ZMatrixMap(Sigma.les().data().blocks()[b][k][i].Vdata(), blkcols, epsrank).transpose() * ZMatrixMap(X_.data() + k*(tstp+1)*nao_ + Sigma.blkc1(b)*nao_, blkcols, nao_);
 
-        tmp2.noalias() = DColVectorMap(Sigma.les().data().blocks()[b][k][i].Sdata(), epsrank).asDiagonal() * tmp;
+        const double *Sv = Sigma.les().data().blocks()[b][k][i].Sdata();
+        for(int r = 0; r < epsrank; r++) tmp.row(r) *= Sv[r];
 
-        Eigen::Map<Eigen::Matrix<cplx, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>, 0, Eigen::InnerStride<> >(resptr + Sigma.blkr1(b)*es_ + i, blkrows, nao_, Eigen::InnerStride<>(nao_)).noalias() -= ZMatrixMap(Sigma.les().data().blocks()[b][k][i].Udata(), blkrows, epsrank).conjugate() * tmp2;
+        Eigen::Map<Eigen::Matrix<cplx, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>, 0, Eigen::InnerStride<> >(resptr + Sigma.blkr1(b)*es_ + i, blkrows, nao_, Eigen::InnerStride<>(nao_)).noalias() -= ZMatrixMap(Sigma.les().data().blocks()[b][k][i].Udata(), blkrows, epsrank).conjugate() * tmp;
       }
     }
+    add_lvl_(tstp, 3, Sigma.blklevel(b), bstart, pnow_());
   }
-  intend = std::chrono::steady_clock::now();
+  intend = pnow_();
   blockstrans = intend-intstart;
 
-  intstart = std::chrono::steady_clock::now();
+  intstart = pnow_();
   // Step 5 is horizontal corrections
   if( tstp < 2*k_+1) { // les_left_edge has omega, but for these timesteps we need the weights that overlap.
     for(int t = Sigma.blkr1(0); t < Sigma.tstpmk(); t++) {
       int max = std::min(k_, Sigma.c1_dir(t)-1);
       for(int tbar = 0; tbar <= max; tbar++) {
         Sigma.get_les(tbar, t, bound_.data());
-        ZMatrixMap(resptr + t*es_, nao_, nao_) -= h * (-1. + I.gregory_weights(tstp,tbar)) * (ZMatrixMap(G.curr_timestep_ret_ptr(tstp, tbar), nao_, nao_) * ZMatrixMap(bound_.data(), nao_, nao_)).conjugate();   
+        ZMatrixMap(resptr + t*es_, nao_, nao_).noalias() -= h * (-1. + I.gregory_weights(tstp,tbar)) * ZMatrixMap(G.curr_timestep_ret_ptr(tstp, tbar), nao_, nao_).conjugate() * ZMatrixMap(bound_.data(), nao_, nao_).conjugate();   
       }
     }
   }
@@ -355,11 +375,11 @@ void dyson::les_lesadv_int_0_tstp(int tstp, herm_matrix_hodlr &Sigma, herm_matri
       }
     }
   }
-  intend = std::chrono::steady_clock::now();
+  intend = pnow_();
   blockscorrhor = intend-intstart;
 
   // Step 6 is vertical corrections
-  intstart = std::chrono::steady_clock::now();
+  intstart = pnow_();
   for(int t = 0; t <= k_+1; t++) {
     // if correction region runs out of triangular region
     // need to make sure not to run into curr_timestep
@@ -368,32 +388,41 @@ void dyson::les_lesadv_int_0_tstp(int tstp, herm_matrix_hodlr &Sigma, herm_matri
     int correction_max = std::min(k_, Sigma.tstpmk()-1);
     for(int tbar = Sigma.r2_dir(t)+1; tbar <= correction_max; tbar++) {
       Sigma.get_les(t,tbar,bound_.data());
-      ZMatrixMap(resptr + t*es_, nao_, nao_) += h * (I.gregory_weights(tstp, tbar)-1.) * ZMatrixMap(G.curr_timestep_ret_ptr(tstp,tbar), nao_, nao_).conjugate() * ZMatrixMap(bound_.data(), nao_, nao_).transpose();
+      ZMatrixMap(resptr + t*es_, nao_, nao_).noalias() += h * (I.gregory_weights(tstp, tbar)-1.) * ZMatrixMap(G.curr_timestep_ret_ptr(tstp,tbar), nao_, nao_).conjugate() * ZMatrixMap(bound_.data(), nao_, nao_).transpose();
     }
   }
-  intend = std::chrono::steady_clock::now();
+  intend = pnow_();
   blockscorrvert = intend-intstart;
 
   // Step 7 is to apply the curr_timestep region vertical
-  intstart = std::chrono::steady_clock::now();
+  intstart = pnow_();
+  // P1: G^R(tstp, tbar) = GR + tbar*es (row tstp contiguous), Sigma^<(t, tbar) = SLcol[tbar-tstpmk] + t*es (column
+  // tbar of the < curr buffer contiguous in t; doc 11 §3.3); noalias products
+  cplx *GR = G.curr_timestep_ret_ptr(tstp, 0);
+  const int smk = Sigma.tstpmk();
+  cplx *SLcol[KMAX+1];
+  for(int tbar = smk; tbar <= tstp; tbar++) SLcol[tbar-smk] = Sigma.curr_timestep_les_ptr(0, tbar);
   for(int t = 0; t <= tstp; t++) {
-    for(int tbar = std::max(Sigma.tstpmk(), t); tbar <= tstp; tbar++) {
-      ZMatrixMap(resptr + t*es_, nao_, nao_) += h * I.gregory_weights(tstp, tbar) * ZMatrixMap(G.curr_timestep_ret_ptr(tstp,tbar), nao_, nao_).conjugate() * ZMatrixMap(Sigma.curr_timestep_les_ptr(t,tbar), nao_, nao_).transpose();
+    ZMatrixMap Rt(resptr + t*es_, nao_, nao_);
+    for(int tbar = std::max(smk, t); tbar <= tstp; tbar++) {
+      Rt.noalias() += h * I.gregory_weights(tstp, tbar) * ZMatrixMap(GR + tbar*es_, nao_, nao_).conjugate() * ZMatrixMap(SLcol[tbar-smk] + t*es_, nao_, nao_).transpose();
     }
   }
-  intend = std::chrono::steady_clock::now();
+  intend = pnow_();
   currvert = intend-intstart;
 
   // Step 8 is curr_timestep horizontal
-  intstart = std::chrono::steady_clock::now();
-  for(int t = Sigma.tstpmk(); t <= tstp; t++) {
+  intstart = pnow_();
+  for(int t = smk; t <= tstp; t++) {
     // the diagonal element is at tbar=t.  This element is done in Step 7, where tbar = std::max(Sigma.tstpmk(), t) = t
     // this is why the loop ends at tbar < t instead of tbar <= t
+    ZMatrixMap Rt(resptr + t*es_, nao_, nao_);
+    const cplx *SL = SLcol[t-smk];   // Sigma^<(tbar, t) = SL + tbar*es
     for(int tbar = 0; tbar < t; tbar++) {
-      ZMatrixMap(resptr + t*es_, nao_, nao_) -= h * I.gregory_weights(tstp, tbar) * (ZMatrixMap(G.curr_timestep_ret_ptr(tstp, tbar), nao_, nao_) * ZMatrixMap(Sigma.curr_timestep_les_ptr(tbar, t), nao_, nao_)).conjugate();
+      Rt.noalias() -= h * I.gregory_weights(tstp, tbar) * ZMatrixMap(GR + tbar*es_, nao_, nao_).conjugate() * ZMatrixMap(const_cast<cplx*>(SL) + tbar*es_, nao_, nao_).conjugate();
     }
   }
-  intend = std::chrono::steady_clock::now();
+  intend = pnow_();
   currhor = intend-intstart;
 
   if(profile_) timing(tstp, 13) = dir.count();

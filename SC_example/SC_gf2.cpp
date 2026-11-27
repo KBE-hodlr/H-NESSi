@@ -23,37 +23,62 @@ void SC_gf2::Delta_mat(function &t0, herm_matrix_hodlr &G, herm_matrix_hodlr &Si
 }
 
 void SC_gf2::Delta_tstp(int tstp, function &t0, herm_matrix_hodlr &G, herm_matrix_hodlr &Sigma) {
-  ZMatrix sGs = ZMatrix::Zero(2,2);
+  // P1: every product goes through preallocated 2x2 buffers with noalias (the chained products a*b*c used to allocate
+  // a temporary per factor pair); same products, same order up to the placement of the scalar 0.5
+  ZMatrix sGs = ZMatrix::Zero(2,2), A(2,2), Ac(2,2);
+  auto add = [&](auto &&dst, const auto &left, const auto &right) {   // dst += 0.5 * left * sGs * right
+    A.noalias() = left * sGs;
+    dst.noalias() += 0.5 * A * right;
+  };
+  auto tT = t0.get_map(tstp);
   for(int t = 0; t <= tstp; t++) {
-    sGs.noalias() = sigma3_ * G.map_ret_curr(tstp, t) * sigma3_;
-    Sigma.map_ret_curr(tstp, t).noalias() += 0.5 * t0.get_map(tstp) * sGs * t0.get_map(t).conjugate();
-    Sigma.map_ret_curr(tstp, t).noalias() += 0.5 * t0.get_map(tstp).conjugate() * sGs * t0.get_map(t);
+    auto tt = t0.get_map(t);
+    Ac.noalias() = sigma3_ * G.map_ret_curr(tstp, t);
+    sGs.noalias() = Ac * sigma3_;
+    add(Sigma.map_ret_curr(tstp, t), tT, tt.conjugate());
+    add(Sigma.map_ret_curr(tstp, t), tT.conjugate(), tt);
 
-    sGs.noalias() = sigma3_ * G.map_les_curr(t, tstp) * sigma3_;
-    Sigma.map_les_curr(t, tstp).noalias() += 0.5 * t0.get_map(t) * sGs * t0.get_map(tstp).conjugate();
-    Sigma.map_les_curr(t, tstp).noalias() += 0.5 * t0.get_map(t).conjugate() * sGs * t0.get_map(tstp);
+    Ac.noalias() = sigma3_ * G.map_les_curr(t, tstp);
+    sGs.noalias() = Ac * sigma3_;
+    add(Sigma.map_les_curr(t, tstp), tt, tT.conjugate());
+    add(Sigma.map_les_curr(t, tstp), tt.conjugate(), tT);
   }
 
+  auto tM = t0.get_map(-1);
   for(int tau = 0; tau < G.ntau(); tau++) {
-    sGs.noalias() = sigma3_ * G.map_tv(tstp, tau) * sigma3_;
-    Sigma.map_tv(tstp, tau).noalias() += 0.5 * t0.get_map(tstp) * sGs * t0.get_map(-1).conjugate();
-    Sigma.map_tv(tstp, tau).noalias() += 0.5 * t0.get_map(tstp).conjugate() * sGs * t0.get_map(-1);
+    Ac.noalias() = sigma3_ * G.map_tv(tstp, tau);
+    sGs.noalias() = Ac * sigma3_;
+    add(Sigma.map_tv(tstp, tau), tT, tM.conjugate());
+    add(Sigma.map_tv(tstp, tau), tT.conjugate(), tM);
   }
 }
 
 void SC_gf2::solve_Delta_LmR(int tstp, function &t0, herm_matrix_hodlr &G, herm_matrix_hodlr &Sigma) {
-  ZMatrix sGs = ZMatrix::Zero(2,2);
+  // P1: preallocated buffers + noalias as in Delta_tstp; dst += -0.5 t0(a) sGs t0(b)^* + 0.5 t0(a)^* sGs t0(b)
+  ZMatrix sGs = ZMatrix::Zero(2,2), A(2,2), Ac(2,2);
+  auto add = [&](auto &&dst, const auto &ta, const auto &tb) {
+    A.noalias() = ta * sGs;
+    dst.noalias() += -0.5 * A * tb.conjugate();
+    A.noalias() = ta.conjugate() * sGs;
+    dst.noalias() += 0.5 * A * tb;
+  };
+  auto tT = t0.get_map(tstp);
   for(int t = 0; t <= tstp; t++) {
-    sGs.noalias() = sigma3_ * G.map_ret_curr(tstp, t) * sigma3_;
-    Sigma.map_ret_curr(tstp, t).noalias() += -0.5 * t0.get_map(tstp) * sGs * t0.get_map(t).conjugate() + 0.5 * t0.get_map(tstp).conjugate() * sGs * t0.get_map(t);
+    auto tt = t0.get_map(t);
+    Ac.noalias() = sigma3_ * G.map_ret_curr(tstp, t);
+    sGs.noalias() = Ac * sigma3_;
+    add(Sigma.map_ret_curr(tstp, t), tT, tt);
 
-    sGs.noalias() = sigma3_ * G.map_les_curr(t, tstp) * sigma3_;
-    Sigma.map_les_curr(t, tstp).noalias() += -0.5 * t0.get_map(t) * sGs * t0.get_map(tstp).conjugate() + 0.5 * t0.get_map(t).conjugate() * sGs * t0.get_map(tstp);
+    Ac.noalias() = sigma3_ * G.map_les_curr(t, tstp);
+    sGs.noalias() = Ac * sigma3_;
+    add(Sigma.map_les_curr(t, tstp), tt, tT);
   }
 
+  auto tM = t0.get_map(-1);
   for(int tau = 0; tau < G.ntau(); tau++) {
-    sGs.noalias() = sigma3_ * G.map_tv(tstp, tau) * sigma3_;
-    Sigma.map_tv(tstp, tau).noalias() += -0.5 * t0.get_map(tstp) * sGs * t0.get_map(-1).conjugate() + 0.5 * t0.get_map(tstp).conjugate() * sGs * t0.get_map(-1);
+    Ac.noalias() = sigma3_ * G.map_tv(tstp, tau);
+    sGs.noalias() = Ac * sigma3_;
+    add(Sigma.map_tv(tstp, tau), tT, tM);
   }
 }
 

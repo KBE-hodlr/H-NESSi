@@ -173,6 +173,8 @@ class herm_matrix_hodlr{
   int blkc1(int blk) {check_blk_("herm_matrix_hodlr::blkc1", blk); return blkc1_[blk];};
   /** last column index of block blk. */
   int blkc2(int blk) {check_blk_("herm_matrix_hodlr::blkc2", blk); return blkc2_[blk];};
+  /** code level of block blk (1 = smallest blocks next to the diagonal, nlvl = the one big block; doc 11 §2) */
+  int blklevel(int blk) const {check_blk_("herm_matrix_hodlr::blklevel", blk); return blklevel_[blk];};
   /** height of the direct square at the top of block blk (0 <= blk <= nbox; blk == nbox is the last square). */
   int blkdirheight(int blk)  {
     HNESSI_ASSERT(0 <= blk && blk <= nbox_, "herm_matrix_hodlr::blkdirheight", HNESSI_KV(blk), HNESSI_KV(nbox_));

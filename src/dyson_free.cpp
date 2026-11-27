@@ -150,6 +150,7 @@ void dyson::check_free_args_(const char *where, herm_matrix_hodlr &G, double mu,
   HNESSI_REQUIRE_STATE(G.tstpmk() == 0, where, HNESSI_KV(G.tstpmk()),
                        detail::note{"green_from_H* writes rows 0..tmax as if the window were 0..k"});
   HNESSI_REQUIRE(std::isfinite(h) && h > 0 && std::isfinite(mu), where, HNESSI_KV(h), HNESSI_KV(mu));
+  reset_lu_cache_();   // P1: green_from_H* starts a new run: no cached step matrix is valid any more
 }
 
 void dyson::green_from_H(herm_matrix_hodlr &G, double mu, function &H, double h, int tmax, bool inc_mat) {

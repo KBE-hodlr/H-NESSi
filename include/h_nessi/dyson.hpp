@@ -55,6 +55,15 @@ namespace h_nessi {
  * fixed tolerance becomes stricter per entry as T grows; divide by (T+1)*nao yourself for a per-entry measure.
  * dyson_mat returns the change of the unmixed Matsubara solution. The value is meant for self-consistency loops
  * (iterate until it is below a tolerance), not as an error estimate of the discretisation.
+ *
+ * **Contract of the time steps (P1): values at past times are final.** The time-step solvers factorise the nao x nao
+ * step matrix of each past time t (built from h(t), Sigma^R(t,t), mu, the step h) once and reuse it in all later
+ * corrector iterations and time steps. Hence h(t) and Sigma^R(t,t) must not be modified after the time step t is done
+ * (the corrector loop of step T may change row T only). The cache is cleared automatically when mu, h, the Sigma object
+ * or the h array (pointer) change (so one object may serve several systems, e.g. k-points, at the cost of refactorising
+ * on every switch), by every dyson_start* / green_from_H* call (start of a run), and is empty after construction or a
+ * checkpoint restart.
+ * Debug builds check every reuse (DY-T12, assertion failure on a violation).
  */
 class dyson {
 private:
@@ -83,8 +92,8 @@ private:
   std::vector<cplx> Q_;               /**< storage for timeslice quantities such as history integrals - size (nt+1)*es*/
   std::vector<cplx> M_;               /**< storage for Matrix which is solved when timestepping - size (k+1)*k*es */
   std::vector<cplx> X_;               /**< storage for timeslice quantities such as the G being solved for  - size (nt+1)*es */
-  std::vector<cplx> epsnao_tmp_;      /**< storage for intermediate quantities when applying U,S,V sequentially - size (nt+1)/2*nao */
-  std::vector<cplx> epsnao_tmp_2_;    /**< storage for intermediate quantities when applying U,S,V sequentially - size (nt+1)/2*nao*/
+  std::vector<cplx> epsnao_tmp_;      /**< storage for intermediate quantities when applying U,S,V sequentially - size (nt+1)/2*nao
+                                           (P1: S is applied in place, the second buffer epsnao_tmp_2_ was removed) */
   std::vector<cplx> iden_;            /**< Identity matrix storage. */
   std::vector<cplx> bound_;           /**< storage for matrices when we need to build them from compressed representations - size nao*nao */
 
@@ -114,9 +123,76 @@ private:
    * 22 - block applications of integral
    * 23 - current timestep region of integral
    * 24 - correction region below direct region of integral - retarded
+   * All timers (steady_clock::now() calls) run only if profile_ (P1); with profile_ = false nothing is measured.
+   * Per-HODLR-level split of cols 3, 22, 15, 16: timing_lvl_ below.
   */
   bool profile_;
-  DMatrix timing;         
+  DMatrix timing;
+  /**< P1: per-HODLR-level split of the TSVD block applications, nt x (4*tl_lmax_) if profile_, else 0 x (4*tl_lmax_),
+   * microseconds, last call per tstp (like timing). Column g*tl_lmax_ + (L-1) holds group g at code level L of the block
+   * (herm_matrix_hodlr::blklevel, 1 = smallest blocks next to the diagonal; doc 11 §2):
+   *   g = 0: ret integral blocks (sum over L = timing col 3), g = 1: les int3 blocks (col 22),
+   *   g = 2: lesadv blocks (col 15), g = 3: lesadv transposed blocks (col 16).
+   * tl_lmax_ = floor(log2(nt)), the largest nlvl a herm_matrix_hodlr with nt points can have (2^nlvl <= nt).
+   * Written by write_timing / write_checkpoint_hdf5 as <label>/timing_level. */
+  DMatrix timing_lvl_;
+  int tl_lmax_ = 1;
+  using clock_tp_ = std::chrono::steady_clock::time_point;
+  /** steady_clock::now() if profile_, else a zero time point (differences of zero time points are 0) */
+  clock_tp_ pnow_() const { return profile_ ? std::chrono::steady_clock::now() : clock_tp_(); }
+  /** accumulate the duration b-a (us) into timing_lvl_(tstp, g*tl_lmax_+L-1) (profile_ only) */
+  void add_lvl_(int tstp, int g, int L, clock_tp_ a, clock_tp_ b) {
+    if(profile_) timing_lvl_(tstp, g*tl_lmax_ + L-1) += std::chrono::duration<double, std::micro>(b-a).count();
+  }
+  /** zero group g of row tstp of timing_lvl_ (start of a call; profile_ only) */
+  void zero_lvl_(int tstp, int g) {
+    if(profile_) timing_lvl_.block(tstp, g*tl_lmax_, 1, tl_lmax_).setZero();
+  }
+
+  // ---- P1: cached LU factorisations of the nao x nao step matrices ------------------------------------------------
+  // dyson_timestep_ret solves M^T(t') X^T = Q^T for each t' = T-n, n > k (t' <= T-k-1, archived), with
+  //   M^T(t') = (mu - i a_0/h) 1 - h(t')^T - h w_0 Sigma^R(t',t')^T,
+  // the les march (les_march_) solves M(m) X^T = Q for m = k+1..T with M(m) = (mu + i a_0/h) 1 - h(m) - h w_0 Sigma^R(m,m)
+  // (RHO_DIAGONAL, m = T: a_0/h 1). a_0 = bd_weights(0), w_0 = omega(0) depend only on k (fixed per object).
+  // CONTRACT (maintainer decision): the values h(t) and Sigma^R(t,t) of a time t are final once the time step t is
+  // done; they are not modified afterwards. M^T(t') (ret, t' <= T-k-1) and M(m) (les, m < T) are therefore the same in
+  // every corrector iteration and every later time step, and each is factorised once, when first needed, and reused
+  // without comparing inputs. M(T) of the les march (row T changes every iteration) is never cached. The cache is
+  // cleared (lu_valid_ = 0) when mu, the step h, the Sigma object or the h array (pointer) differ from those it was built
+  // with (lu_mu_, lu_h_, lu_sig_, lu_H_; checked once per call: one dyson object used for several k-points, as in the
+  // mpi_example, refactorises on every switch), by every dyson_start* and green_from_H* call (start of a run), and it
+  // starts empty in both constructors
+  // (a checkpoint restart rebuilds it lazily; not checkpointed). Debug builds (tier 1) verify every reuse against a fresh
+  // factorisation of the newly built M (DY-T12: a violation of the contract). Slots: ret t' -> t', les m -> nt_ + m,
+  // scratch (uncached) 2 nt_. Factorisation: LU with partial (row) pivoting, packed L\U with unit L.
+  std::vector<cplx> lu_fac_;            /**< (2nt+1)*es: packed L\U of slot s */
+  std::vector<int> lu_piv_;             /**< (2nt+1)*nao: row interchanges of slot s */
+  std::vector<unsigned char> lu_valid_; /**< 2nt: slot s holds a factorisation */
+  double lu_mu_ = 0, lu_h_ = 0;         /**< mu and h the cached factorisations were built with */
+  const void *lu_sig_ = nullptr;        /**< Sigma object the cache was built with (identity only, never dereferenced) */
+  const cplx *lu_H_ = nullptr;          /**< h array the cache was built with (identity only) */
+  // X = (A^{-1} op(B))^T with A = M (nao x nao, row-major), op(B) = B^T if transB else B; X must not alias M or B. With
+  // cache = true the factors of slot `slot` are reused if present (else computed and stored), with cache = false M is
+  // factorised into the scratch slot. DY-T11 (tier 1) is checked when M is factorised.
+  void lu_solve_cached_(int slot, bool cache, const cplx *M, const cplx *B, bool transB, cplx *X, const char *where);
+  // clear the cache if (mu, h, Sigma, h array) differ from the cached ones; reset_lu_cache_: clear unconditionally
+  void lu_params_(double mu, double h, const herm_matrix_hodlr &Sigma, const cplx *H) {
+    if(mu != lu_mu_ || h != lu_h_ || &Sigma != lu_sig_ || H != lu_H_) {
+      reset_lu_cache_(); lu_mu_ = mu; lu_h_ = h; lu_sig_ = &Sigma; lu_H_ = H;
+    }
+  }
+  void reset_lu_cache_() { std::fill(lu_valid_.begin(), lu_valid_.end(), (unsigned char)0); }
+  bool lu_cache_consistent_(int slot, const cplx *M);
+  void alloc_p1_buffers_();
+  // P1: tv_ret_int batches tv_chunk_ times t into one GEMM: wide w*Sigma^R row (nao x tv_chunk_*nao) times the stacked
+  // transposed G^tv rows (tv_chunk_*nao x nao*r)
+  static constexpr int tv_chunk_ = 32;
+  std::vector<cplx> tv_wide_;           /**< nao * tv_chunk_ * nao */
+  std::vector<cplx> tv_stack_;          /**< tv_chunk_ * r * es */
+  // march over rows m = k+1..T of the les components (identical in dyson_timestep_les, _les_nobc, _les_2leg): retles
+  // integral (timing cols 21-24), RHS, solve; writes G^<(.,T) from X_ and returns the change
+  double les_march_(int tstp, herm_matrix_hodlr &G, double mu, cplx *H, herm_matrix_hodlr &Sigma,
+                    Integration::Integrator &I, double h, const char *where);
 
   // ---- WP6 checks (checks.hpp) -------------------------------------------------------------------------------
   int api_depth_ = 0;          /**< nesting depth of public calls: entry checks run only in the outermost call */
@@ -284,8 +360,9 @@ public:
 
   /**
    * @brief Memory used by the dyson buffers in bytes (actual sizes of all heap buffers), as reported by print_memory_usage
-   * @return {DLR buffers (NTauTmp*_, DNTauTmp*_), G0 (DG0_), G0 conv. matrix (DG0ConvMat_), Mat Mul buffers (epsnao_tmp*_),
-   *          Solver buffers (Q_, X_, M_, iden_, bound_), Timing/diagnostics (timing, herm_diag_, herm_copy_, state), Total}
+   * @return {DLR buffers (NTauTmp*_, DNTauTmp*_), G0 (DG0_), G0 conv. matrix (DG0ConvMat_), Mat Mul buffer (epsnao_tmp_),
+   *          Solver buffers (Q_, X_, M_, iden_, bound_, P1 LU cache lu_*_, P1 tv_ret_int batch tv_wide_/tv_stack_),
+   *          Timing/diagnostics (timing, timing_lvl_, herm_diag_, herm_copy_, state), Total}
    */
   std::vector<double> memory_usage_bytes();
 

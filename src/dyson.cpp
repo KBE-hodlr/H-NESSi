@@ -10,6 +10,7 @@ namespace h_nessi {
 void dyson::write_timing(h5e::File &file, std::string label) {
   if(profile_) {
     h5e::dump(file, h5_join({label, "timing"}), timing);
+    h5e::dump(file, h5_join({label, "timing_level"}), timing_lvl_);   // P1: per-level block applications
   }
   else {
     std::cout << "write_timing() was called, however profiling was not enabled" << std::endl;
@@ -33,6 +34,7 @@ void dyson::write_checkpoint_hdf5(h5e::File &file, std::string label) {
   h5e::dump(file, h5_join({label, "rho_version"}), rho_version_);
   h5e::dump(file, h5_join({label, "profile"}), profile_);
   if(profile_) h5e::dump(file, h5_join({label, "timing"}), timing);
+  if(profile_) h5e::dump(file, h5_join({label, "timing_level"}), timing_lvl_);   // P1
 }
 
 
@@ -68,7 +70,7 @@ dlr_(dlr)
   DG0_.resize(r_ * es_);
   DG0ConvMat_.resize(r_ * r_ * es_);
   epsnao_tmp_.resize((nt_+1)/2 * nao_);
-  epsnao_tmp_2_.resize((nt_+1)/2 * nao_);
+  // (epsnao_tmp_2_ removed in P1: the block applications scale tmp by S in place)
 
   Q_.resize((nt_+1) * es_);
   X_.resize((nt_+1) * es_);
@@ -80,10 +82,24 @@ dlr_(dlr)
 
   profile_ = profile;
   timing = DMatrix::Zero(profile_ ? nt : 0, 25);
+  alloc_p1_buffers_();
   herm_diag_.assign(nt_+1, 0.0);
   herm_copy_.assign(es_, 0.);
   dlr_eps_ = dlr.eps();
   dlr_lambda_ = dlr.lambda();
+}
+
+// P1 buffers (both constructors): LU cache (empty slots), tv_ret_int batch buffers, per-level timing
+void dyson::alloc_p1_buffers_() {
+  lu_fac_.assign((2 * (size_t)nt_ + 1) * es_, cplx(0.));   // slots 0..2nt-1 cached, 2nt scratch
+  lu_piv_.assign((2 * (size_t)nt_ + 1) * nao_, 0);
+  lu_valid_.assign(2 * (size_t)nt_, 0);
+  lu_mu_ = 0; lu_h_ = 0; lu_sig_ = nullptr; lu_H_ = nullptr;
+  tv_wide_.assign((size_t)nao_ * tv_chunk_ * nao_, cplx(0.));
+  tv_stack_.assign((size_t)tv_chunk_ * r_ * es_, cplx(0.));
+  tl_lmax_ = 1;
+  while((2 << tl_lmax_) <= nt_ && tl_lmax_ < 30) tl_lmax_++;   // floor(log2(nt)) (>= 1; nt >= k+1 >= 2)
+  timing_lvl_ = DMatrix::Zero(profile_ ? nt_ : 0, 4 * tl_lmax_);
 }
 
 std::vector<double> dyson::memory_usage_bytes(void) {
@@ -102,9 +118,13 @@ std::vector<double> dyson::memory_usage_bytes(void) {
     tautmp = Z * (NTauTmp_.size() + NTauTmp2_.size()) + D * (DNTauTmp_.size() + DNTauTmp2_.size());
     g0 = D * DG0_.size();
     g0conv = D * DG0ConvMat_.size();
-    epsnaotmp = Z * (epsnao_tmp_.size() + epsnao_tmp_2_.size());
+    epsnaotmp = Z * epsnao_tmp_.size();
     qxm = Z * (Q_.size() + X_.size() + M_.size() + iden_.size() + bound_.size());
+    // P1: LU cache of the step matrices and the tv_ret_int batch buffers
+    qxm += Z * (lu_fac_.size() + tv_wide_.size() + tv_stack_.size()) + sizeof(int) * lu_piv_.size() +
+           sizeof(unsigned char) * lu_valid_.size() + sizeof(lu_mu_) + sizeof(lu_h_) + sizeof(lu_sig_) + sizeof(lu_H_);
     tim = D * timing.rows() * timing.cols() + D * herm_diag_.size();   // timing + Hermiticity diagnostic (D-11)
+    tim += D * timing_lvl_.rows() * timing_lvl_.cols() + sizeof(tl_lmax_);   // P1 per-level block timing
     // check state (memory rule: every member is counted): D-11 deferred slice (herm_copy_ + scalars), ST-3, ST-4,
     // ST-10, ST-11, DY-S7
     tim += Z * herm_copy_.size();
@@ -164,7 +184,7 @@ dlr_(dlr)
   DG0_.resize(r_ * es_);
   DG0ConvMat_.resize(r_ * r_ * es_);
   epsnao_tmp_.resize((nt_+1)/2 * nao_);
-  epsnao_tmp_2_.resize((nt_+1)/2 * nao_);
+  // (epsnao_tmp_2_ removed in P1: the block applications scale tmp by S in place)
 
   Q_.resize((nt_+1) * es_);
   X_.resize((nt_+1) * es_);
@@ -178,6 +198,14 @@ dlr_(dlr)
   timing = profile_ ? in.getDataSet(h5_join({label, "timing"})).read<DMatrix>() : DMatrix::Zero(0,25);
   HNESSI_REQUIRE(!profile_ || (timing.rows() == nt_ && timing.cols() == 25), "dyson::dyson(h5e::File&,label,dlr)",
                  HNESSI_KV(timing.rows()), HNESSI_KV(timing.cols()), HNESSI_KV(nt_));
+  alloc_p1_buffers_();
+  // P1: per-level timing (checkpoints written before P1 have none: it starts at zero)
+  if(profile_ && in.exist(h5_join({label, "timing_level"}))) {
+    DMatrix tl = in.getDataSet(h5_join({label, "timing_level"})).read<DMatrix>();
+    HNESSI_REQUIRE(tl.rows() == timing_lvl_.rows() && tl.cols() == timing_lvl_.cols(), "dyson::dyson(h5e::File&,label,dlr)",
+                   HNESSI_KV(tl.rows()), HNESSI_KV(tl.cols()), HNESSI_KV(timing_lvl_.rows()), HNESSI_KV(timing_lvl_.cols()));
+    timing_lvl_ = tl;
+  }
   herm_diag_.assign(nt_+1, 0.0);
   herm_copy_.assign(es_, 0.);
   dlr_eps_ = dlr.eps();
@@ -458,6 +486,7 @@ void dyson::enter_start_(const char *where, herm_matrix_hodlr &G, herm_matrix_ho
   check_boot_(where, G, Sigma);
   if(uses_tv) G.require_gmconv_current(where);   // ST-2 (DY-S5)
   if(reads_h) hermitize_(H, 0, k_, where);       // D-11 (DY-S3)
+  reset_lu_cache_();   // P1: a bootstrap starts a new run: no cached step matrix is valid any more
 }
 
 // =====================================================================================================================

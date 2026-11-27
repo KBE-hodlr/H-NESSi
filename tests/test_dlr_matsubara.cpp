@@ -541,9 +541,17 @@ TEST(DysonMemory, CountsAllBuffers) {
       double Db = sizeof(double), Zb = sizeof(C);
       double dlrbuf = Zb * 2 * r * es + Db * 2 * r * es;                   // NTauTmp_, NTauTmp2_, DNTauTmp_, DNTauTmp2_
       double g0 = Db * r * es, g0conv = Db * r * r * es;                    // DG0_, DG0ConvMat_
-      double matmul = Zb * 2 * ((nt + 1) / 2) * nao;                        // epsnao_tmp_, epsnao_tmp_2_
+      double matmul = Zb * ((nt + 1) / 2) * nao;                            // epsnao_tmp_ (P1: epsnao_tmp_2_ removed)
       double solver = Zb * (2 * (nt + 1) * es + (k + 1) * k * es + 2 * es);  // Q_, X_, M_, iden_, bound_
+      // P1: LU cache of the step matrices (2 nt slots + 1 scratch: factors es complex, nao int pivots; 2 nt flags) and the
+      // tv_ret_int batch buffers (tv_chunk = 32: nao*32*nao + 32*r*es complex)
+      solver += Zb * ((2.0 * nt + 1) * es + nao * 32 * nao + 32 * r * es) + sizeof(int) * (2.0 * nt + 1) * nao + 2.0 * nt +
+                2 * sizeof(double) + 2 * sizeof(void *);                    // + lu_mu_, lu_h_, lu_sig_, lu_H_
+      int lmax = 0;
+      while ((2 << lmax) <= nt) lmax++;                                    // floor(log2(nt)) (5 for nt = 37, 38)
+      EXPECT_EQ(lmax, 5);
       double tim = Db * (prof ? nt : 0) * 25 + Db * (nt + 1);               // timing + Hermiticity diagnostic (D-11)
+      tim += Db * (prof ? nt : 0) * 4 * lmax + sizeof(int);                 // P1 per-level block timing + tl_lmax_
       // WP6b check state: D-11 deferred slice copy (es complex) + scalars (herm_copy_t_, herm_pend_, herm_pend_rel_,
       // g0_valid_, stamp_G_, stamp_tstp_, stamp_mask_, owner_, dlr_eps_, dlr_lambda_, les00_warned_)
       tim += Zb * es + sizeof(int) + sizeof(bool) + sizeof(double) + sizeof(bool) + sizeof(void *) + sizeof(int) +

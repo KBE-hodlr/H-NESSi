@@ -279,7 +279,7 @@ int main(int argc, char *argv[]){
 
       // step
       double err = dyson_sol.dyson_timestep(tstp, G, mu, Hmf.ptr(0), DeltaPlusSigma, I, h);
-      std::cout << "tstp " << tstp << "  iter " << iter << "  Err = " << err << std::endl;
+      std::cout << "tstp " << tstp << "  iter " << iter << "  Err = " << err << '\n';   // P1: no flush per iteration
       corrector_last_err = err;
 
       if(err < CorrectorMaxErr) { corrector_converged = true; break; }
